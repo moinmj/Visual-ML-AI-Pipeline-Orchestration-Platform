@@ -1,0 +1,158 @@
+import pandas as pd
+import numpy as np
+from typing import Dict, Any, Optional
+from backend.app.recipes.base.recipe import BaseRecipe
+
+try:
+    from prophet import Prophet
+    PROPHET_AVAILABLE = True
+except ImportError:
+    PROPHET_AVAILABLE = False
+
+
+class ProphetForecasterRecipe(BaseRecipe):
+    recipe_id = "prophet_forecaster"
+    name = "Prophet Time-Series Forecaster"
+    version = "1.0.0"
+    category = "forecasting"
+    description = "Meta Prophet additive model for non-linear trends with daily/weekly/yearly seasonality and future prediction bands."
+    input_types = ["dataframe"]
+    output_types = ["forecast", "metrics", "model"]
+
+    def get_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "date_column": {
+                    "type": "string",
+                    "title": "Date Column",
+                    "description": "Timestamp column (ds)."
+                },
+                "target_column": {
+                    "type": "string",
+                    "title": "Target Metric (Y)",
+                    "description": "The time-series value to forecast."
+                },
+                "horizon_periods": {
+                    "type": "integer",
+                    "title": "Forecast Horizon (Steps ahead)",
+                    "default": 14,
+                    "minimum": 1,
+                    "maximum": 365
+                },
+                "frequency": {
+                    "type": "string",
+                    "title": "Data Frequency",
+                    "enum": ["D (Daily)", "W (Weekly)", "M (Monthly)", "H (Hourly)"],
+                    "default": "D (Daily)"
+                },
+                "seasonality_mode": {
+                    "type": "string",
+                    "title": "Seasonality Mode",
+                    "enum": ["additive", "multiplicative"],
+                    "default": "additive"
+                }
+            }
+        }
+
+    def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
+        if not PROPHET_AVAILABLE:
+            raise ValueError("Prophet is not installed in the environment. Please run 'pip install prophet'.")
+
+        df: pd.DataFrame = inputs.get("dataframe")
+        if df is None:
+            if context and isinstance(context, dict) and "dataframe" in context:
+                df = context["dataframe"]
+            else:
+                raise ValueError("ProphetForecaster expects 'dataframe' in inputs.")
+
+        df = df.copy()
+
+        # Identify date column
+        date_col = config.get("date_column") or inputs.get("date_column")
+        if not date_col or date_col not in df.columns:
+            date_cands = [c for c in df.columns if "date" in c.lower() or "time" in c.lower() or "timestamp" in c.lower() or pd.api.types.is_datetime64_any_dtype(df[c])]
+            date_col = date_cands[0] if date_cands else df.columns[0]
+
+        # Identify target column
+        target_col = config.get("target_column") or inputs.get("target_column")
+        if not target_col or target_col not in df.columns:
+            num_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c]) and c != date_col]
+            target_col = num_cols[-1] if num_cols else df.columns[-1]
+
+        horizon = int(config.get("horizon_periods", 14))
+        freq_code = config.get("frequency", "D (Daily)").split()[0]
+        seas_mode = config.get("seasonality_mode", "additive")
+
+        # Format DataFrame for Prophet (ds and y)
+        prophet_df = pd.DataFrame({
+            "ds": pd.to_datetime(df[date_col], errors="coerce"),
+            "y": pd.to_numeric(df[target_col], errors="coerce")
+        }).dropna().sort_values(by="ds").reset_index(drop=True)
+
+        if len(prophet_df) < 5:
+            raise ValueError(f"Prophet requires at least 5 valid time-series observations, found {len(prophet_df)}.")
+
+        # Train Prophet
+        model = Prophet(
+            seasonality_mode=seas_mode,
+            yearly_seasonality="auto",
+            weekly_seasonality="auto",
+            daily_seasonality="auto"
+        )
+        model.fit(prophet_df)
+
+        # Generate Future Dataframe
+        future = model.make_future_dataframe(periods=horizon, freq=freq_code)
+        forecast = model.predict(future)
+
+        # Split historical fitted vs future predictions
+        history_len = len(prophet_df)
+        fitted = forecast.iloc[:history_len]
+        future_forecast = forecast.iloc[history_len:]
+
+        # Calculate in-sample accuracy metrics on history
+        actuals = prophet_df["y"].values
+        fitted_preds = fitted["yhat"].values
+        
+        mae = float(round(np.mean(np.abs(actuals - fitted_preds)), 4))
+        rmse = float(round(np.sqrt(np.mean((actuals - fitted_preds) ** 2)), 4))
+        
+        non_zero_mask = actuals != 0
+        if np.any(non_zero_mask):
+            mape = float(round(np.mean(np.abs((actuals[non_zero_mask] - fitted_preds[non_zero_mask]) / actuals[non_zero_mask])) * 100, 2))
+        else:
+            mape = 0.0
+
+        metrics = {
+            "task_type": "time_series_forecasting",
+            "algorithm": "Meta Prophet",
+            "date_column": date_col,
+            "target_column": target_col,
+            "horizon_periods": horizon,
+            "mae": mae,
+            "rmse": rmse,
+            "mape": mape
+        }
+
+        # Build clean visualization table
+        result_df = pd.DataFrame({
+            "ds": forecast["ds"],
+            "yhat": np.round(forecast["yhat"], 2),
+            "yhat_lower": np.round(forecast["yhat_lower"], 2),
+            "yhat_upper": np.round(forecast["yhat_upper"], 2),
+            "is_future": [0] * history_len + [1] * len(future_forecast)
+        })
+
+        return {
+            "forecast_df": result_df,
+            "dataframe": result_df,
+            "metrics": metrics,
+            "forecasting_summary": metrics,
+            "model": model
+        }
+
+    def to_code(self, config: Dict[str, Any]) -> str:
+        horizon = config.get("horizon_periods", 14)
+        seas = config.get("seasonality_mode", "additive")
+        return f"from prophet import Prophet\n\nmodel = Prophet(seasonality_mode='{seas}')\nmodel.fit(df[['ds', 'y']])\nfuture = model.make_future_dataframe(periods={horizon})\nforecast = model.predict(future)"
