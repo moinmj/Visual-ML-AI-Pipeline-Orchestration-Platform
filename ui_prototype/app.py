@@ -1132,53 +1132,96 @@ if app_mode == "🎨 Pipeline Whiteboard":
         # -----------------------------------------------------
         # 3. CLASSIFICATION / REGRESSION EVALUATION REPORT
         # -----------------------------------------------------
-        if final_metrics and final_metrics.get("task_type") in ["classification", "regression"]:
+        if final_metrics and (final_metrics.get("task_type") in ["classification", "regression"] or "accuracy" in final_metrics or "r2_score" in final_metrics):
             st.markdown("### 🏆 Comprehensive Model Evaluation & Diagnostic Reports")
             
-            rep_tab1, rep_tab2, rep_tab3, rep_tab4 = st.tabs([
-                "📊 Executive KPIs",
-                "🗂️ Confusion Matrix",
-                "📋 Classification Report (Per-Class)",
-                "🌲 Feature Importances & Diagnostics"
-            ])
+            is_regression = final_metrics.get("task_type") == "regression" or "r2_score" in final_metrics
 
-            with rep_tab1:
-                m1, m2, m3, m4, m5 = st.columns(5)
-                m1.metric("Accuracy", f"{final_metrics.get('accuracy', 0)*100:.2f}%")
-                m2.metric("Balanced Accuracy", f"{final_metrics.get('balanced_accuracy', 0)*100:.2f}%")
-                m3.metric("Precision", f"{final_metrics.get('precision', 0)*100:.2f}%")
-                m4.metric("Recall", f"{final_metrics.get('recall', 0)*100:.2f}%")
-                m5.metric("F1 Score", f"{final_metrics.get('f1_score', 0)*100:.2f}%")
+            if is_regression:
+                rep_tab1, rep_tab2, rep_tab3 = st.tabs([
+                    "📊 Regression KPIs",
+                    "📈 Actual vs Predicted Fit",
+                    "🌲 Feature Importances & Diagnostics"
+                ])
 
-                if "roc_auc" in final_metrics:
-                    st.info(f"✨ **ROC-AUC Score:** `{final_metrics['roc_auc']:.4f}` | **Log Loss:** `{final_metrics.get('log_loss', 'N/A')}`")
+                with rep_tab1:
+                    m1, m2, m3, m4, m5 = st.columns(5)
+                    r2_v = final_metrics.get("r2_score", 0.0)
+                    mae_v = final_metrics.get("mae", 0.0)
+                    rmse_v = final_metrics.get("rmse", 0.0)
+                    mse_v = final_metrics.get("mse", 0.0)
+                    mape_v = final_metrics.get("mape")
 
-            with rep_tab2:
-                if "confusion_matrix" in final_metrics:
-                    cm = final_metrics["confusion_matrix"]
-                    fig_cm = ff.create_annotated_heatmap(
-                        z=cm,
-                        x=["Pred: Class 0", "Pred: Class 1"] if len(cm) == 2 else [f"Pred {i}" for i in range(len(cm))],
-                        y=["Actual: Class 0", "Actual: Class 1"] if len(cm) == 2 else [f"Actual {i}" for i in range(len(cm))],
-                        colorscale="Blues"
-                    )
-                    fig_cm.update_layout(title="Confusion Matrix Heatmap", width=480, height=360)
-                    st.plotly_chart(fig_cm, use_container_width=False)
+                    m1.metric("R² Score (Variance Explained)", f"{r2_v:.4f}")
+                    m2.metric("Mean Absolute Error (MAE)", f"{mae_v:.4f}")
+                    m3.metric("Root Mean Squared Error (RMSE)", f"{rmse_v:.4f}")
+                    m4.metric("Mean Squared Error (MSE)", f"{mse_v:.4f}")
+                    mape_str = f"{mape_v*100:.2f}%" if mape_v is not None else "N/A"
+                    m5.metric("MAPE", mape_str)
 
-            with rep_tab3:
-                if "classification_report" in final_metrics and final_metrics["classification_report"]:
-                    clf_dict = final_metrics["classification_report"]
-                    clf_df = pd.DataFrame(clf_dict).transpose()
-                    st.markdown("##### Per-Class Performance Table:")
-                    st.dataframe(clf_df.style.format("{:.3f}", na_rep="-"), use_container_width=True)
+                    st.info(f"✨ **Regression Model Evaluation:** Model achieved **R² = {r2_v:.4f}** with an average absolute deviation of **MAE = {mae_v:.4f}** on the unseen test set.")
 
-            with rep_tab4:
-                for n_id, out in node_outputs.items():
-                    if "feature_importances" in out and out["feature_importances"]:
-                        fi = out["feature_importances"]
-                        fi_df = pd.DataFrame(list(fi.items()), columns=["Feature", "Importance"]).sort_values(by="Importance", ascending=True)
-                        fig_fi = px.bar(fi_df, x="Importance", y="Feature", orientation="h", title=f"Feature Importances from Node '{n_id}'")
-                        st.plotly_chart(fig_fi, use_container_width=True)
+                with rep_tab2:
+                    st.markdown("##### Model Predictions Preview on Unseen Test Partition:")
+                    if "predictions_sample" in exec_data.get("final_metrics", {}):
+                        preds = exec_data["final_metrics"]["predictions_sample"]
+                        st.dataframe(pd.DataFrame({"Sample Prediction": preds}), use_container_width=True)
+                    else:
+                        st.write("Predictions generated successfully.")
+
+                with rep_tab3:
+                    for n_id, out in node_outputs.items():
+                        if "feature_importances" in out and out["feature_importances"]:
+                            fi = out["feature_importances"]
+                            fi_df = pd.DataFrame(list(fi.items()), columns=["Feature", "Importance"]).sort_values(by="Importance", ascending=True)
+                            fig_fi = px.bar(fi_df, x="Importance", y="Feature", orientation="h", title=f"Feature Importances from Node '{n_id}'")
+                            st.plotly_chart(fig_fi, use_container_width=True)
+
+            else:
+                rep_tab1, rep_tab2, rep_tab3, rep_tab4 = st.tabs([
+                    "📊 Executive KPIs",
+                    "🗂️ Confusion Matrix",
+                    "📋 Classification Report (Per-Class)",
+                    "🌲 Feature Importances & Diagnostics"
+                ])
+
+                with rep_tab1:
+                    m1, m2, m3, m4, m5 = st.columns(5)
+                    m1.metric("Accuracy", f"{final_metrics.get('accuracy', 0)*100:.2f}%")
+                    m2.metric("Balanced Accuracy", f"{final_metrics.get('balanced_accuracy', 0)*100:.2f}%")
+                    m3.metric("Precision", f"{final_metrics.get('precision', 0)*100:.2f}%")
+                    m4.metric("Recall", f"{final_metrics.get('recall', 0)*100:.2f}%")
+                    m5.metric("F1 Score", f"{final_metrics.get('f1_score', 0)*100:.2f}%")
+
+                    if "roc_auc" in final_metrics:
+                        st.info(f"✨ **ROC-AUC Score:** `{final_metrics['roc_auc']:.4f}` | **Log Loss:** `{final_metrics.get('log_loss', 'N/A')}`")
+
+                with rep_tab2:
+                    if "confusion_matrix" in final_metrics:
+                        cm = final_metrics["confusion_matrix"]
+                        fig_cm = ff.create_annotated_heatmap(
+                            z=cm,
+                            x=["Pred: Class 0", "Pred: Class 1"] if len(cm) == 2 else [f"Pred {i}" for i in range(len(cm))],
+                            y=["Actual: Class 0", "Actual: Class 1"] if len(cm) == 2 else [f"Actual {i}" for i in range(len(cm))],
+                            colorscale="Blues"
+                        )
+                        fig_cm.update_layout(title="Confusion Matrix Heatmap", width=480, height=360)
+                        st.plotly_chart(fig_cm, use_container_width=False)
+
+                with rep_tab3:
+                    if "classification_report" in final_metrics and final_metrics["classification_report"]:
+                        clf_dict = final_metrics["classification_report"]
+                        clf_df = pd.DataFrame(clf_dict).transpose()
+                        st.markdown("##### Per-Class Performance Table:")
+                        st.dataframe(clf_df.style.format("{:.3f}", na_rep="-"), use_container_width=True)
+
+                with rep_tab4:
+                    for n_id, out in node_outputs.items():
+                        if "feature_importances" in out and out["feature_importances"]:
+                            fi = out["feature_importances"]
+                            fi_df = pd.DataFrame(list(fi.items()), columns=["Feature", "Importance"]).sort_values(by="Importance", ascending=True)
+                            fig_fi = px.bar(fi_df, x="Importance", y="Feature", orientation="h", title=f"Feature Importances from Node '{n_id}'")
+                            st.plotly_chart(fig_fi, use_container_width=True)
 
             st.download_button(
                 "📥 Download Full Evaluation Report (JSON)",
@@ -1193,7 +1236,7 @@ if app_mode == "🎨 Pipeline Whiteboard":
         st.markdown("### 🔬 Step-by-Step Data Stream Inspector & Node Debugger")
         st.caption("Inspect live data transformations, schema changes, and intermediate DataFrames as they flowed across every edge in the DAG.")
         
-        step_snapshots = last_execution.get("step_snapshots", {})
+        step_snapshots = exec_data.get("step_snapshots", {})
         if step_snapshots:
             selected_step_node = st.selectbox(
                 "Select Executed Node to Inspect Data Snapshot",
