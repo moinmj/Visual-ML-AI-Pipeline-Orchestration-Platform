@@ -73,7 +73,15 @@ class CategoricalEncoderRecipe(BaseRecipe):
             return {"dataframe": df}
 
         if method == "one_hot":
-            df = pd.get_dummies(df, columns=target_cols, drop_first=drop_first, dtype=int)
+            low_card_cols = [c for c in target_cols if df[c].nunique() <= 50]
+            high_card_cols = [c for c in target_cols if df[c].nunique() > 50]
+
+            if low_card_cols:
+                df = pd.get_dummies(df, columns=low_card_cols, drop_first=drop_first, dtype=int)
+            if high_card_cols:
+                for col in high_card_cols:
+                    le = LabelEncoder()
+                    df[col] = le.fit_transform(df[col].astype(str))
         elif method == "label":
             for col in target_cols:
                 le = LabelEncoder()

@@ -80,17 +80,8 @@ class LightGBMTrainerRecipe(BaseRecipe):
         if X_train is None or y_train is None:
             raise ValueError("LightGBMTrainer expects 'X_train' and 'y_train' in inputs. Please connect a Train/Test Split node before this trainer.")
 
-        X_train = X_train.copy()
-        if X_test is not None:
-            X_test = X_test.copy()
-
-        # Edge Case 1: Auto-encode non-numeric string / object columns
-        non_numeric = [c for c in X_train.columns if not pd.api.types.is_numeric_dtype(X_train[c])]
-        if non_numeric:
-            X_train = pd.get_dummies(X_train, columns=non_numeric, drop_first=False, dtype=int)
-            if X_test is not None:
-                X_test = pd.get_dummies(X_test, columns=non_numeric, drop_first=False, dtype=int)
-                X_test = X_test.reindex(columns=X_train.columns, fill_value=0)
+        from backend.app.recipes.training.encoder_utils import safe_prepare_training_data
+        X_train, X_test = safe_prepare_training_data(X_train, X_test)
 
         # Edge Case 2: Sanitize column names for LightGBM (replaces [, ], {, }, :, ", spaces)
         X_train = sanitize_lgb_colnames(X_train)

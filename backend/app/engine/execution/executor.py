@@ -19,12 +19,14 @@ class NodeExecutionResult(BaseModel):
     error_message: Optional[str] = None
     output_summary: Dict[str, Any] = Field(default_factory=dict)
 
+    model_config = {"arbitrary_types_allowed": True}
+
 
 class WorkflowExecutionResult(BaseModel):
     execution_id: str
     status: str  # "SUCCESS", "FAILED"
     total_duration_ms: float
-    node_results: List[NodeExecutionResult] = Field(default_factory=list)
+    node_results: List[Any] = Field(default_factory=list)
     final_metrics: Optional[Dict[str, Any]] = None
     anomaly_summary: Optional[Dict[str, Any]] = None
     forecasting_summary: Optional[Dict[str, Any]] = None
