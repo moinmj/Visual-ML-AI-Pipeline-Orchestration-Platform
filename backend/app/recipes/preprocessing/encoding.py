@@ -49,16 +49,20 @@ class CategoricalEncoderRecipe(BaseRecipe):
         target_cols = config.get("columns", [])
         drop_first = config.get("drop_first", False)
 
+        target_col_name = config.get("target_column")
+        if not target_col_name and context and isinstance(context, dict):
+            target_col_name = context.get("target_column")
+
         if not target_cols:
             # Pick non-numeric columns
             non_numeric = [c for c in df.columns if not pd.api.types.is_numeric_dtype(df[c])]
             
-            # Avoid splitting likely target column into one-hot dummies
+            # Avoid splitting target column into one-hot dummies
             feature_cols = []
             for c in non_numeric:
-                is_target_name = c.lower() in ["target", "churn", "survived", "label", "class", "species", "y"]
+                is_target_name = (target_col_name and c == target_col_name) or (c.lower() in ["target", "churn", "survived", "label", "class", "species", "y"])
                 if is_target_name:
-                    # Label encode the target column so it stays a single column
+                    # Label encode the target column so it stays a single 1D column (0, 1, 2...)
                     le = LabelEncoder()
                     df[c] = le.fit_transform(df[c].astype(str))
                 else:

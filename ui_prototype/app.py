@@ -283,18 +283,21 @@ def execute_pipeline():
         initial_df=st.session_state["active_df"]
     )
 
+    st.session_state["last_execution"] = {
+        "status": exec_result.status,
+        "final_metrics": exec_result.final_metrics,
+        "anomaly_summary": exec_result.anomaly_summary,
+        "forecasting_summary": exec_result.forecasting_summary,
+        "governance_summary": exec_result.governance_summary,
+        "execution_logs": exec_result.logs,
+        "node_outputs": exec_result.node_outputs,
+        "step_snapshots": exec_result.step_snapshots
+    }
+
     if exec_result.status == "SUCCESS":
-        st.session_state["last_execution"] = {
-            "final_metrics": exec_result.final_metrics,
-            "anomaly_summary": exec_result.anomaly_summary,
-            "forecasting_summary": exec_result.forecasting_summary,
-            "governance_summary": exec_result.governance_summary,
-            "execution_logs": exec_result.logs,
-            "node_outputs": exec_result.node_outputs
-        }
         st.success("🎉 Pipeline executed cleanly through DAG Engine!")
     else:
-        st.error("### ❌ Pipeline Execution Failed")
+        st.error("### ❌ Pipeline Execution Failed on Node Step")
         for log in exec_result.logs:
             if "❌" in log:
                 st.markdown(f"> {log}")
