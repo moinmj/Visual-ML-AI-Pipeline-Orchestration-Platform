@@ -131,6 +131,10 @@ if "active_dataset_name" not in st.session_state:
 # RECIPE CATEGORY HIERARCHY
 # -------------------------------------------------------------
 RECIPE_CATEGORY_MAP = {
+    "⚡ Triggers & Inbound Events": [
+        {"id": "webhook_trigger", "name": "Webhook Inbound Trigger (HTTP POST)", "icon": "⚡", "default_config": {"webhook_path": "ml_inbound_stream", "auth_header_required": "None (Public)", "payload_format": "JSON Array of Objects"}},
+        {"id": "cron_trigger", "name": "Cron Schedule Trigger (Recurring)", "icon": "⏰", "default_config": {"cron_expression": "0 0 * * *", "interval_preset": "Daily at Midnight", "timezone": "UTC"}}
+    ],
     "📥 Ingestion & Sources": [
         {"id": "csv_loader", "name": "Dataset Ingestion (CSV/Excel/Upload)", "icon": "📄", "default_config": {}}
     ],
@@ -296,13 +300,29 @@ def execute_pipeline():
                 st.markdown(f"> {log}")
 
 
+def create_flow_node(node_id: str, pos: tuple, content: str) -> StreamlitFlowNode:
+    """Helper to create fully interactive, connectable, and draggable React Flow nodes."""
+    return StreamlitFlowNode(
+        id=node_id,
+        pos=pos,
+        data={"content": content},
+        node_type="default",
+        source_position="right",
+        target_position="left",
+        connectable=True,
+        selectable=True,
+        draggable=True,
+        deletable=True
+    )
+
+
 def build_recommended_pipeline(target_col=None, task_type=None):
     """Builds and wires the AI recommended DAG on the whiteboard."""
     df = st.session_state["active_df"]
     rec = AIRecommender.recommend_pipeline(df, target_column=target_col, task_type=task_type)
     
     t_nodes = [
-        StreamlitFlowNode(id="node_csv", pos=(40, 100), data={"content": f"📄 {st.session_state['active_dataset_name'][:15]}"}, node_type="default", source_position="right", target_position="left")
+        create_flow_node("node_csv", (40, 100), f"📄 {st.session_state['active_dataset_name'][:18]}")
     ]
     node_configs = {
         "node_csv": {"recipe_id": "csv_loader", "label": "📄 Dataset Ingestion", "config": {}}
@@ -315,7 +335,7 @@ def build_recommended_pipeline(target_col=None, task_type=None):
     # 1. Preprocessing Nodes
     for i, step in enumerate(rec.get("preprocessing_recommendations", [])):
         step_id = f"node_prep_{i+1}"
-        t_nodes.append(StreamlitFlowNode(id=step_id, pos=(cur_x, 100), data={"content": step["name"]}, node_type="default", source_position="right", target_position="left"))
+        t_nodes.append(create_flow_node(step_id, (cur_x, 100), step["name"]))
         t_edges.append(StreamlitFlowEdge(id=f"e_{prev_id}_{step_id}", source=prev_id, target=step_id, animated=True))
         node_configs[step_id] = {"recipe_id": step["recipe_id"], "label": step["name"], "config": step["config"]}
         prev_id = step_id
@@ -327,7 +347,7 @@ def build_recommended_pipeline(target_col=None, task_type=None):
     # 2. Split or Direct Model
     if task in ["classification", "regression"]:
         split_id = "node_split"
-        t_nodes.append(StreamlitFlowNode(id=split_id, pos=(cur_x, 100), data={"content": "✂️ Train/Test Split"}, node_type="default", source_position="right", target_position="left"))
+        t_nodes.append(create_flow_node(split_id, (cur_x, 100), "✂️ Train/Test Split"))
         t_edges.append(StreamlitFlowEdge(id=f"e_{prev_id}_{split_id}", source=prev_id, target=split_id, animated=True))
         node_configs[split_id] = {"recipe_id": "train_test_split", "label": "✂️ Split", "config": {"target_column": target_col, "test_size": 0.2}}
         prev_id = split_id
@@ -335,13 +355,13 @@ def build_recommended_pipeline(target_col=None, task_type=None):
 
         top_model = rec["model_rankings"][0]
         model_id = "node_model"
-        t_nodes.append(StreamlitFlowNode(id=model_id, pos=(cur_x, 50), data={"content": top_model["name"]}, node_type="default", source_position="right", target_position="left"))
+        t_nodes.append(create_flow_node(model_id, (cur_x, 50), top_model["name"]))
         t_edges.append(StreamlitFlowEdge(id=f"e_{split_id}_{model_id}", source=split_id, target=model_id, animated=True))
         node_configs[model_id] = {"recipe_id": top_model["recipe_id"], "label": top_model["name"], "config": {"task_type": task}}
         cur_x += 240
 
         eval_id = "node_eval"
-        t_nodes.append(StreamlitFlowNode(id=eval_id, pos=(cur_x, 100), data={"content": "🎯 Evaluation Report"}, node_type="default", source_position="right", target_position="left"))
+        t_nodes.append(create_flow_node(eval_id, (cur_x, 100), "🎯 Evaluation Report"))
         t_edges.append(StreamlitFlowEdge(id=f"e_{split_id}_{eval_id}", source=split_id, target=eval_id, animated=True))
         t_edges.append(StreamlitFlowEdge(id=f"e_{model_id}_{eval_id}", source=model_id, target=eval_id, animated=True))
         node_configs[eval_id] = {"recipe_id": "model_evaluator", "label": "🎯 Evaluator", "config": {"report_type": "Comprehensive"}}
@@ -349,14 +369,14 @@ def build_recommended_pipeline(target_col=None, task_type=None):
     elif task == "time_series_forecasting":
         top_model = rec["model_rankings"][0]
         model_id = "node_model"
-        t_nodes.append(StreamlitFlowNode(id=model_id, pos=(cur_x, 100), data={"content": top_model["name"]}, node_type="default", source_position="right", target_position="left"))
+        t_nodes.append(create_flow_node(model_id, (cur_x, 100), top_model["name"]))
         t_edges.append(StreamlitFlowEdge(id=f"e_{prev_id}_{model_id}", source=prev_id, target=model_id, animated=True))
         node_configs[model_id] = {"recipe_id": top_model["recipe_id"], "label": top_model["name"], "config": {"horizon_periods": 30}}
 
     else:
         top_model = rec["model_rankings"][0]
         model_id = "node_model"
-        t_nodes.append(StreamlitFlowNode(id=model_id, pos=(cur_x, 100), data={"content": top_model["name"]}, node_type="default", source_position="right", target_position="left"))
+        t_nodes.append(create_flow_node(model_id, (cur_x, 100), top_model["name"]))
         t_edges.append(StreamlitFlowEdge(id=f"e_{prev_id}_{model_id}", source=prev_id, target=model_id, animated=True))
         node_configs[model_id] = {"recipe_id": top_model["recipe_id"], "label": top_model["name"], "config": {"contamination": 0.05}}
 
@@ -378,13 +398,13 @@ def load_ml_template(force_preset: bool = False):
     target_col = named[0] if named else cols[-1]
 
     t_nodes = [
-        StreamlitFlowNode(id="node_csv", pos=(40, 100), data={"content": f"📄 {st.session_state.get('active_dataset_name', 'Active Data')[:15]}"}, node_type="default", source_position="right", target_position="left"),
-        StreamlitFlowNode(id="node_impute", pos=(280, 100), data={"content": "🧹 Imputer (Median)"}, node_type="default", source_position="right", target_position="left"),
-        StreamlitFlowNode(id="node_scale", pos=(520, 100), data={"content": "⚖️ Feature Scaler"}, node_type="default", source_position="right", target_position="left"),
-        StreamlitFlowNode(id="node_encode", pos=(760, 100), data={"content": "🔤 One-Hot Encoder"}, node_type="default", source_position="right", target_position="left"),
-        StreamlitFlowNode(id="node_split", pos=(1000, 100), data={"content": "✂️ Train/Test Split"}, node_type="default", source_position="right", target_position="left"),
-        StreamlitFlowNode(id="node_xgb", pos=(1240, 50), data={"content": "⚡ XGBoost Model"}, node_type="default", source_position="right", target_position="left"),
-        StreamlitFlowNode(id="node_eval", pos=(1480, 100), data={"content": "🎯 Evaluation Report"}, node_type="default", source_position="right", target_position="left"),
+        create_flow_node("node_csv", (40, 100), f"📄 {st.session_state.get('active_dataset_name', 'Active Data')[:15]}"),
+        create_flow_node("node_impute", (280, 100), "🧹 Imputer (Median)"),
+        create_flow_node("node_scale", (520, 100), "⚖️ Feature Scaler"),
+        create_flow_node("node_encode", (760, 100), "🔤 One-Hot Encoder"),
+        create_flow_node("node_split", (1000, 100), "✂️ Train/Test Split"),
+        create_flow_node("node_xgb", (1240, 50), "⚡ XGBoost Model"),
+        create_flow_node("node_eval", (1480, 100), "🎯 Evaluation Report"),
     ]
     t_edges = [
         StreamlitFlowEdge(id="e1", source="node_csv", target="node_impute", animated=True),
@@ -423,8 +443,8 @@ def load_forecast_template(force_preset: bool = False):
     target_col = num_candidates[-1] if num_candidates else cols[-1]
 
     fc_nodes = [
-        StreamlitFlowNode(id="node_csv", pos=(40, 100), data={"content": f"📄 {st.session_state.get('active_dataset_name', 'Active Data')[:15]}"}, node_type="default", source_position="right", target_position="left"),
-        StreamlitFlowNode(id="node_prophet", pos=(340, 100), data={"content": "🔮 Prophet Forecaster"}, node_type="default", source_position="right", target_position="left"),
+        create_flow_node("node_csv", (40, 100), f"📄 {st.session_state.get('active_dataset_name', 'Active Data')[:15]}"),
+        create_flow_node("node_prophet", (340, 100), "🔮 Prophet Forecaster"),
     ]
     fc_edges = [
         StreamlitFlowEdge(id="fe1", source="node_csv", target="node_prophet", animated=True)
@@ -445,9 +465,9 @@ def load_anomaly_template(force_preset: bool = False):
         st.session_state["active_dataset_name"] = "Credit Transactions (Anomaly Injection)"
 
     anom_nodes = [
-        StreamlitFlowNode(id="node_csv", pos=(40, 100), data={"content": f"📄 {st.session_state.get('active_dataset_name', 'Active Data')[:15]}"}, node_type="default", source_position="right", target_position="left"),
-        StreamlitFlowNode(id="node_guard", pos=(320, 100), data={"content": "🛡️ Statistical Guardrail"}, node_type="default", source_position="right", target_position="left"),
-        StreamlitFlowNode(id="node_iso", pos=(620, 100), data={"content": "🌲 Isolation Forest Detector"}, node_type="default", source_position="right", target_position="left"),
+        create_flow_node("node_csv", (40, 100), f"📄 {st.session_state.get('active_dataset_name', 'Active Data')[:15]}"),
+        create_flow_node("node_guard", (320, 100), "🛡️ Statistical Guardrail"),
+        create_flow_node("node_iso", (620, 100), "🌲 Isolation Forest Detector"),
     ]
     anom_edges = [
         StreamlitFlowEdge(id="ae1", source="node_csv", target="node_guard", animated=True),
@@ -665,13 +685,10 @@ if app_mode == "🎨 Pipeline Whiteboard":
                 node_id = f"{chosen_meta['id']}_{counter}"
                 node_title = f"{chosen_meta['icon']} {chosen_meta['name'].split('(')[0].strip()}"
                 
-                new_node = StreamlitFlowNode(
-                    id=node_id,
+                new_node = create_flow_node(
+                    node_id=node_id,
                     pos=(pos_x, pos_y),
-                    data={"content": f"{node_title}\n[{node_id}]"},
-                    node_type="default",
-                    source_position="right",
-                    target_position="left"
+                    content=f"{node_title}\n[{node_id}]"
                 )
                 
                 st.session_state["flow_state"].nodes.append(new_node)
@@ -712,7 +729,11 @@ if app_mode == "🎨 Pipeline Whiteboard":
             show_minimap=True,
             show_controls=True,
             pan_on_drag=True,
-            allow_zoom=True
+            allow_zoom=True,
+            allow_new_edges=True,
+            animate_new_edges=True,
+            enable_edge_menu=True,
+            get_node_on_click=True
         )
         if flow_result is not None:
             st.session_state["flow_state"] = flow_result
@@ -1155,15 +1176,44 @@ if app_mode == "🎨 Pipeline Whiteboard":
                 mime="application/json"
             )
 
-        with st.expander("📜 Step-by-Step Node Execution Logs & Intermediate Data", expanded=False):
+        # -----------------------------------------------------
+        # 4. STEP-BY-STEP DATA STREAM DEBUGGER (n8n / Boomi Inspector)
+        # -----------------------------------------------------
+        st.markdown("### 🔬 Step-by-Step Data Stream Inspector & Node Debugger")
+        st.caption("Inspect live data transformations, schema changes, and intermediate DataFrames as they flowed across every edge in the DAG.")
+        
+        step_snapshots = last_execution.get("step_snapshots", {})
+        if step_snapshots:
+            selected_step_node = st.selectbox(
+                "Select Executed Node to Inspect Data Snapshot",
+                list(step_snapshots.keys()),
+                format_func=lambda nid: f"Node: {nid} [{step_snapshots[nid]['recipe_name']}] ({step_snapshots[nid]['duration_ms']}ms)"
+            )
+            
+            if selected_step_node and selected_step_node in step_snapshots:
+                snap = step_snapshots[selected_step_node]
+                st.markdown(f"#### 📦 Snapshot: `{snap['node_id']}` ({snap['recipe_name']})")
+                
+                k1, k2, k3, k4 = st.columns(4)
+                k1.metric("Execution Latency", f"{snap['duration_ms']}ms")
+                k1_rows = f"{snap['row_count']:,}" if snap['row_count'] is not None else "N/A"
+                k2.metric("Output Records", k1_rows)
+                k3.metric("Output Features", f"{len(snap['columns'])}")
+                k4.metric("Inputs Received", ", ".join(snap['input_keys']) if snap['input_keys'] else "Root Node")
+
+                if snap["preview_rows"]:
+                    st.markdown("##### 📄 Output DataFrame Snapshot (First 5 Rows):")
+                    st.dataframe(pd.DataFrame(snap["preview_rows"]), use_container_width=True)
+                elif snap["output_keys"]:
+                    st.markdown(f"**Outputs Generated:** `{', '.join(snap['output_keys'])}`")
+
+                if snap["columns"]:
+                    with st.expander("📋 Feature Schema at this Step", expanded=False):
+                        st.write(snap["columns"])
+        
+        with st.expander("📜 Raw Execution Logs & Timing Telemetry", expanded=False):
             for log in execution_logs:
                 st.write(log)
-            for n_id, out in node_outputs.items():
-                st.markdown(f"--- \n**Node Output:** `{n_id}`")
-                for k, v in out.items():
-                    if isinstance(v, pd.DataFrame):
-                        st.write(f"DataFrame `{k}` (Shape: {v.shape}):")
-                        st.dataframe(v.head(2))
 
 
 # -------------------------------------------------------------

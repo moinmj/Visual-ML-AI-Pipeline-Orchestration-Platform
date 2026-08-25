@@ -31,6 +31,7 @@ class WorkflowExecutionResult(BaseModel):
     governance_summary: Optional[Dict[str, Any]] = None
     logs: List[str] = Field(default_factory=list)
     node_outputs: Dict[str, Any] = Field(default_factory=dict)
+    step_snapshots: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -39,7 +40,7 @@ class DAGExecutor:
     """
     Unified In-Memory DAG Execution Engine.
     Executes nodes in topological order, manages context passing,
-    and captures metrics, summaries, and diagnostic artifacts.
+    and captures metrics, summaries, diagnostic artifacts, and step snapshots.
     """
 
     @classmethod
@@ -54,6 +55,7 @@ class DAGExecutor:
         logs: List[str] = []
         node_results: List[NodeExecutionResult] = []
         node_outputs: Dict[str, Dict[str, Any]] = {}
+        step_snapshots: Dict[str, Dict[str, Any]] = {}
         
         final_metrics = None
         anomaly_summary = None
@@ -159,15 +161,38 @@ class DAGExecutor:
                 duration_ms = round((time.time() - node_start) * 1000.0, 2)
                 logs.append(f"✅ Node `{node.id}` [{recipe.name}] ➔ Finished in {duration_ms}ms (SUCCESS)")
 
-                # Create serializable summary
+                # Create serializable summary & Step Snapshot (n8n/Boomi step inspection)
                 summary: Dict[str, Any] = {}
+                snapshot_info: Dict[str, Any] = {
+                    "node_id": node.id,
+                    "recipe_id": node.recipe_id,
+                    "recipe_name": recipe.name,
+                    "duration_ms": duration_ms,
+                    "input_keys": list(node_inputs.keys()),
+                    "output_keys": list(outputs.keys()),
+                    "row_count": None,
+                    "columns": [],
+                    "preview_rows": []
+                }
+
                 for k, v in outputs.items():
-                    if hasattr(v, "shape"):
+                    if isinstance(v, pd.DataFrame):
                         summary[k] = {"shape": list(v.shape), "type": "DataFrame"}
+                        snapshot_info["row_count"] = int(v.shape[0])
+                        snapshot_info["columns"] = list(v.columns)
+                        # Save top 5 rows for step inspection
+                        try:
+                            snapshot_info["preview_rows"] = v.head(5).to_dict(orient="records")
+                        except Exception:
+                            pass
+                    elif hasattr(v, "shape"):
+                        summary[k] = {"shape": list(v.shape), "type": "Array"}
                     elif k in ["metrics", "anomaly_summary", "forecasting_summary", "feature_importances"]:
                         summary[k] = v
                     else:
                         summary[k] = {"type": type(v).__name__}
+
+                step_snapshots[node.id] = snapshot_info
 
                 node_results.append(NodeExecutionResult(
                     node_id=node.id,
@@ -206,5 +231,6 @@ class DAGExecutor:
             forecasting_summary=forecasting_summary,
             governance_summary=governance_summary,
             logs=logs,
-            node_outputs=node_outputs
+            node_outputs=node_outputs,
+            step_snapshots=step_snapshots
         )

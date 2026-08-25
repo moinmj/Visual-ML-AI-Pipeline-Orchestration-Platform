@@ -16,10 +16,14 @@ from backend.app.recipes.forecasting.lag_features import LagFeatureEngineeringRe
 from backend.app.recipes.forecasting.prophet_forecaster import ProphetForecasterRecipe
 from backend.app.recipes.forecasting.arima_forecaster import ARIMAForecasterRecipe
 from backend.app.recipes.governance.mlflow_tracker import MLflowTrackerRecipe
+from backend.app.recipes.triggers.webhook_trigger import WebhookTriggerRecipe
+from backend.app.recipes.triggers.cron_trigger import CronScheduleTriggerRecipe
 
 
 def register_all_recipes():
     recipe_registry.register(CSVLoaderRecipe())
+    recipe_registry.register(WebhookTriggerRecipe())
+    recipe_registry.register(CronScheduleTriggerRecipe())
     recipe_registry.register(MissingValueImputerRecipe())
     recipe_registry.register(FeatureScalerRecipe())
     recipe_registry.register(CategoricalEncoderRecipe())
