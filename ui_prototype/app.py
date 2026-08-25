@@ -637,9 +637,17 @@ if app_mode == "🎨 Pipeline Whiteboard":
     with st.expander("🧠 AI Dataset Intelligence & Customizable Auto-Architect", expanded=False):
         c_t1, c_t2 = st.columns(2)
         with c_t1:
-            custom_target = st.selectbox("🎯 Target / Dependent Feature", df_cols, index=len(df_cols)-1, key="ai_drawer_target")
+            # Safely sync target selection with current dataset columns without double-default warning
+            curr_target = st.session_state.get("ai_target_selected")
+            target_idx = df_cols.index(curr_target) if curr_target in df_cols else len(df_cols) - 1
+            custom_target = st.selectbox("🎯 Target / Dependent Feature", df_cols, index=target_idx, key="ai_target_selectbox")
+            st.session_state["ai_target_selected"] = custom_target
         with c_t2:
-            custom_task = st.selectbox("⚙️ Problem Type Intent", ["Auto-Detect", "classification", "regression", "time_series_forecasting", "anomaly_detection"], index=0, key="ai_drawer_task")
+            task_options = ["Auto-Detect", "classification", "regression", "time_series_forecasting", "anomaly_detection"]
+            curr_task = st.session_state.get("ai_task_selected")
+            task_idx = task_options.index(curr_task) if curr_task in task_options else 0
+            custom_task = st.selectbox("⚙️ Problem Type Intent", task_options, index=task_idx, key="ai_task_selectbox")
+            st.session_state["ai_task_selected"] = custom_task
 
         task_override = None if custom_task == "Auto-Detect" else custom_task
         rec = AIRecommender.recommend_pipeline(active_df, target_column=custom_target, task_type=task_override)
