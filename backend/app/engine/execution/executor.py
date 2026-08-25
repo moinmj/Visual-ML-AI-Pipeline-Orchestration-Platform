@@ -2,6 +2,7 @@ import time
 import traceback
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
+import pandas as pd
 from pydantic import BaseModel, Field
 
 from backend.app.engine.dag.graph import WorkflowGraph, WorkflowNode
@@ -23,15 +24,22 @@ class WorkflowExecutionResult(BaseModel):
     execution_id: str
     status: str  # "SUCCESS", "FAILED"
     total_duration_ms: float
-    node_results: List[NodeExecutionResult]
+    node_results: List[NodeExecutionResult] = Field(default_factory=list)
     final_metrics: Optional[Dict[str, Any]] = None
+    anomaly_summary: Optional[Dict[str, Any]] = None
+    forecasting_summary: Optional[Dict[str, Any]] = None
+    governance_summary: Optional[Dict[str, Any]] = None
     logs: List[str] = Field(default_factory=list)
+    node_outputs: Dict[str, Any] = Field(default_factory=dict)
+
+    model_config = {"arbitrary_types_allowed": True}
 
 
 class DAGExecutor:
     """
-    In-memory DAG execution engine. Passes artifacts between nodes,
-    handles errors, and tracks node-level states.
+    Unified In-Memory DAG Execution Engine.
+    Executes nodes in topological order, manages context passing,
+    and captures metrics, summaries, and diagnostic artifacts.
     """
 
     @classmethod
@@ -39,21 +47,31 @@ class DAGExecutor:
         cls,
         execution_id: str,
         workflow: WorkflowGraph,
-        context: Optional[Any] = None
+        initial_df: Optional[pd.DataFrame] = None,
+        context: Optional[Dict[str, Any]] = None
     ) -> WorkflowExecutionResult:
         start_time = time.time()
         logs: List[str] = []
         node_results: List[NodeExecutionResult] = []
         node_outputs: Dict[str, Dict[str, Any]] = {}
+        
         final_metrics = None
+        anomaly_summary = None
+        forecasting_summary = None
+        governance_summary = None
 
-        logs.append(f"[{datetime.now(timezone.utc).isoformat()}] Starting execution '{execution_id}'")
+        pipeline_context = dict(context or {})
+        if initial_df is not None:
+            pipeline_context["dataframe"] = initial_df.copy()
 
-        # 1. Topological Order
+        logs.append(f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] Starting execution '{execution_id}'")
+
+        # 1. Topological Sorting
         try:
             ordered_nodes = workflow.get_topological_order()
         except Exception as e:
-            logs.append(f"Validation Error: {str(e)}")
+            err_msg = f"DAG Resolution Error: {str(e)}"
+            logs.append(f"❌ {err_msg}")
             return WorkflowExecutionResult(
                 execution_id=execution_id,
                 status="FAILED",
@@ -69,40 +87,84 @@ class DAGExecutor:
 
         overall_status = "SUCCESS"
 
+        # 3. Step-by-Step Node Execution
         for node in ordered_nodes:
             node_start = time.time()
-            logs.append(f"Executing node '{node.id}' [Recipe: {node.recipe_id}]")
-
-            # Collect inputs from all parent nodes
-            node_inputs: Dict[str, Any] = {}
-            for parent_id in parent_map[node.id]:
-                parent_out = node_outputs.get(parent_id, {})
-                node_inputs.update(parent_out)
+            parents = parent_map[node.id]
 
             try:
                 recipe = recipe_registry.get(node.recipe_id)
+            except Exception as e:
+                err_msg = f"Recipe '{node.recipe_id}' not found in registry: {str(e)}"
+                logs.append(f"❌ Node '{node.id}' failed: {err_msg}")
+                overall_status = "FAILED"
+                node_results.append(NodeExecutionResult(
+                    node_id=node.id,
+                    recipe_id=node.recipe_id,
+                    status="FAILED",
+                    duration_ms=0.0,
+                    error_message=err_msg
+                ))
+                break
 
-                # Validate recipe config
-                config_errors = recipe.validate_config(node.config)
-                if config_errors:
-                    raise ValueError(f"Configuration errors: {', '.join(config_errors)}")
+            # Collect inputs from parents
+            node_inputs: Dict[str, Any] = {}
+            if not parents:
+                # If root node, supply initial dataframe only if recipe accepts dataframe
+                if "dataframe" in recipe.input_types or "any" in recipe.input_types or not recipe.input_types:
+                    if initial_df is not None:
+                        node_inputs = {"dataframe": initial_df.copy()}
+                else:
+                    # Model Trainer or Evaluator dropped without parents!
+                    err_msg = (
+                        f"Node '{node.id}' [{recipe.name}] requires inputs {recipe.input_types}, "
+                        f"but has 0 incoming connections. It cannot run as an unparented root node."
+                    )
+                    duration_ms = round((time.time() - node_start) * 1000.0, 2)
+                    logs.append(f"❌ Node '{node.id}' failed: {err_msg}")
+                    node_results.append(NodeExecutionResult(
+                        node_id=node.id,
+                        recipe_id=node.recipe_id,
+                        status="FAILED",
+                        duration_ms=duration_ms,
+                        error_message=err_msg
+                    ))
+                    overall_status = "FAILED"
+                    break
+            else:
+                for parent_id in parents:
+                    parent_out = node_outputs.get(parent_id, {})
+                    node_inputs.update(parent_out)
 
-                # Execute recipe
-                outputs = recipe.execute(inputs=node_inputs, config=node.config, context=context)
+            # Execution
+            try:
+                outputs = recipe.execute(inputs=node_inputs, config=node.config, context=pipeline_context)
                 node_outputs[node.id] = outputs
 
-                duration_ms = round((time.time() - node_start) * 1000.0, 2)
-                logs.append(f"Node '{node.id}' finished in {duration_ms}ms (SUCCESS)")
+                # Propagate standard artifacts to shared context
+                for key in ["X_test", "y_test", "X_train", "y_train", "dataframe", "forecast_df"]:
+                    if key in outputs:
+                        pipeline_context[key] = outputs[key]
 
-                # Create output summary (serializable)
+                # Capture summaries & KPIs
+                if "metrics" in outputs:
+                    final_metrics = outputs["metrics"]
+                if "anomaly_summary" in outputs:
+                    anomaly_summary = outputs["anomaly_summary"]
+                if "forecasting_summary" in outputs:
+                    forecasting_summary = outputs["forecasting_summary"]
+                if "governance_record" in outputs:
+                    governance_summary = outputs["governance_record"]
+
+                duration_ms = round((time.time() - node_start) * 1000.0, 2)
+                logs.append(f"✅ Node `{node.id}` [{recipe.name}] ➔ Finished in {duration_ms}ms (SUCCESS)")
+
+                # Create serializable summary
                 summary: Dict[str, Any] = {}
                 for k, v in outputs.items():
                     if hasattr(v, "shape"):
                         summary[k] = {"shape": list(v.shape), "type": "DataFrame"}
-                    elif k == "metrics":
-                        summary[k] = v
-                        final_metrics = v
-                    elif k == "feature_importances":
+                    elif k in ["metrics", "anomaly_summary", "forecasting_summary", "feature_importances"]:
                         summary[k] = v
                     else:
                         summary[k] = {"type": type(v).__name__}
@@ -117,8 +179,8 @@ class DAGExecutor:
 
             except Exception as e:
                 duration_ms = round((time.time() - node_start) * 1000.0, 2)
-                err_msg = f"{str(e)}"
-                logs.append(f"Node '{node.id}' failed in {duration_ms}ms: {err_msg}")
+                err_msg = str(e)
+                logs.append(f"❌ Node `{node.id}` [{recipe.name}] failed in {duration_ms}ms: {err_msg}")
                 logger.error(f"Execution failed on node {node.id}: {traceback.format_exc()}")
 
                 node_results.append(NodeExecutionResult(
@@ -132,7 +194,7 @@ class DAGExecutor:
                 break
 
         total_duration = round((time.time() - start_time) * 1000.0, 2)
-        logs.append(f"[{datetime.now(timezone.utc).isoformat()}] Execution finished with status '{overall_status}' in {total_duration}ms")
+        logs.append(f"🏁 Execution finished with status '{overall_status}' in {total_duration}ms")
 
         return WorkflowExecutionResult(
             execution_id=execution_id,
@@ -140,5 +202,9 @@ class DAGExecutor:
             total_duration_ms=total_duration,
             node_results=node_results,
             final_metrics=final_metrics,
-            logs=logs
+            anomaly_summary=anomaly_summary,
+            forecasting_summary=forecasting_summary,
+            governance_summary=governance_summary,
+            logs=logs,
+            node_outputs=node_outputs
         )

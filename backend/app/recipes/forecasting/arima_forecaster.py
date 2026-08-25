@@ -80,15 +80,32 @@ class ARIMAForecasterRecipe(BaseRecipe):
 
         df = df.copy()
 
-        # Identify date column
+        # Identify date column or resolve valid datetime series
         date_col = config.get("date_column") or inputs.get("date_column")
-        if not date_col or date_col not in df.columns:
-            date_cands = [c for c in df.columns if "date" in c.lower() or "time" in c.lower() or "timestamp" in c.lower() or pd.api.types.is_datetime64_any_dtype(df[c])]
-            date_col = date_cands[0] if date_cands else df.columns[0]
+        valid_ds = None
+
+        if date_col and date_col in df.columns:
+            converted = pd.to_datetime(df[date_col], errors="coerce")
+            if converted.notna().sum() >= 5:
+                valid_ds = converted
+
+        if valid_ds is None:
+            # Search for any valid datetime column across dataframe
+            for col in df.columns:
+                converted = pd.to_datetime(df[col], errors="coerce")
+                if converted.notna().sum() >= 5:
+                    valid_ds = converted
+                    date_col = col
+                    break
+
+        if valid_ds is None:
+            # Fall back to synthetic sequential daily timeline
+            date_col = "ds_synthetic"
+            valid_ds = pd.date_range(end=pd.Timestamp.today().normalize(), periods=len(df), freq="D")
 
         # Identify target column
         target_col = config.get("target_column") or inputs.get("target_column")
-        if not target_col or target_col not in df.columns:
+        if not target_col or target_col not in df.columns or target_col == date_col:
             num_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c]) and c != date_col]
             target_col = num_cols[-1] if num_cols else df.columns[-1]
 
@@ -98,7 +115,7 @@ class ARIMAForecasterRecipe(BaseRecipe):
         horizon = int(config.get("horizon_periods", 14))
 
         ts_df = pd.DataFrame({
-            "ds": pd.to_datetime(df[date_col], errors="coerce"),
+            "ds": valid_ds,
             "y": pd.to_numeric(df[target_col], errors="coerce")
         }).dropna().sort_values(by="ds").reset_index(drop=True)
 

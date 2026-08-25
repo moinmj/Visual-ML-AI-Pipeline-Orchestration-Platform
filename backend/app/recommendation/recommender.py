@@ -1,51 +1,74 @@
 import pandas as pd
-from typing import Dict, Any, List
+import numpy as np
+from typing import Dict, Any, List, Optional
 from backend.app.profiling.profiler import DataProfiler
 
 
 class AIRecommender:
     """
-    Analyzes dataset profile characteristics to detect problem types
+    Analyzes dataset profile characteristics and user intent to detect problem types
     and rank optimal preprocessing recipes and ML models (Section 8 of spec).
     """
 
     @classmethod
-    def recommend_pipeline(cls, df: pd.DataFrame) -> Dict[str, Any]:
+    def recommend_pipeline(
+        cls,
+        df: pd.DataFrame,
+        target_column: Optional[str] = None,
+        task_type: Optional[str] = None
+    ) -> Dict[str, Any]:
         profile = DataProfiler.profile_dataframe(df)
         columns = profile.get("columns", {})
         row_count = profile.get("row_count", 0)
         missing_cells = profile.get("total_missing_cells", 0)
 
-        # 1. Detect Problem Paradigm
         date_cols = [c for c, m in columns.items() if m.get("inferred_type") == "datetime"]
         cat_cols = [c for c, m in columns.items() if m.get("inferred_type") == "categorical"]
         num_cols = [c for c, m in columns.items() if m.get("inferred_type") == "numeric"]
 
-        task_type = "classification"
-        explanation = "Detected tabular classification based on discrete target features."
-        suggested_target = None
-
-        if date_cols and len(num_cols) >= 1:
-            task_type = "time_series_forecasting"
-            suggested_target = num_cols[-1]
-            explanation = f"Detected chronological time-series with date column `{date_cols[0]}` and numeric metric `{suggested_target}`."
+        # 1. Determine Target Column
+        if target_column and target_column in df.columns:
+            selected_target = target_column
         else:
-            # Check last column
-            last_col = list(columns.keys())[-1]
-            last_meta = columns[last_col]
-            suggested_target = last_col
+            # Pick logical target (non-date, prefer last column or columns named target/churn/sales/price)
+            candidates = [c for c in df.columns if c not in date_cols]
+            named_candidates = [c for c in candidates if any(k in c.lower() for k in ["target", "churn", "survived", "label", "price", "sales", "revenue"])]
+            selected_target = named_candidates[0] if named_candidates else (candidates[-1] if candidates else list(df.columns)[-1])
 
-            if last_meta.get("unique_count", 0) <= 15:
-                task_type = "classification"
-                explanation = f"Detected classification with discrete target column `{last_col}` ({last_meta.get('unique_count')} classes)."
-            elif last_meta.get("inferred_type") == "numeric":
-                task_type = "regression"
-                explanation = f"Detected continuous regression with numerical target `{last_col}`."
+        # 2. Determine / Infer Task Type
+        if task_type in ["classification", "regression", "time_series_forecasting", "anomaly_detection"]:
+            detected_task = task_type
+            explanation = f"User specified problem task as **{task_type.replace('_', ' ').title()}** on target `{selected_target}`."
+        else:
+            if date_cols and len(num_cols) >= 1 and (selected_target in num_cols):
+                detected_task = "time_series_forecasting"
+                explanation = f"Detected chronological time-series with timestamp `{date_cols[0]}` and numeric metric `{selected_target}`."
             else:
-                task_type = "anomaly_detection"
-                explanation = "Unlabeled or continuous feature space suitable for unsupervised anomaly isolation."
+                target_meta = columns.get(selected_target, {})
+                inferred = target_meta.get("inferred_type")
+                nunique = target_meta.get("unique_count", df[selected_target].nunique() if selected_target in df.columns else 0)
+                series = df[selected_target].dropna() if selected_target in df.columns else pd.Series()
 
-        # 2. Recommended Preprocessing Chain
+                if inferred in ["categorical", "text", "boolean"] or nunique == 2:
+                    detected_task = "classification"
+                    explanation = f"Detected discrete classification on `{selected_target}` ({nunique} unique classes)."
+                elif inferred == "numeric":
+                    # Check if integer classification vs continuous regression
+                    is_float_continuous = any(series % 1 != 0) if not series.empty and pd.api.types.is_numeric_dtype(series) else False
+                    if is_float_continuous or nunique > 20:
+                        detected_task = "regression"
+                        explanation = f"Detected continuous numerical regression on target `{selected_target}`."
+                    elif nunique <= 10 and nunique < (row_count * 0.1):
+                        detected_task = "classification"
+                        explanation = f"Detected multi-class classification on discrete target `{selected_target}` ({nunique} distinct categories)."
+                    else:
+                        detected_task = "regression"
+                        explanation = f"Detected numeric regression on target `{selected_target}`."
+                else:
+                    detected_task = "anomaly_detection"
+                    explanation = "Unlabeled or high-dimensional continuous feature space suitable for anomaly detection."
+
+        # 3. Recommended Preprocessing Chain
         cleaning_steps = []
         if missing_cells > 0:
             cleaning_steps.append({
@@ -55,15 +78,19 @@ class AIRecommender:
                 "reason": f"Dataset contains {missing_cells} missing cells requiring imputation."
             })
 
-        if cat_cols:
+        # Exclude target from encoding/scaling lists
+        feature_cats = [c for c in cat_cols if c != selected_target]
+        feature_nums = [c for c in num_cols if c != selected_target]
+
+        if feature_cats:
             cleaning_steps.append({
                 "recipe_id": "categorical_encoder",
                 "name": "🔤 Categorical One-Hot Encoder",
                 "config": {"method": "one_hot"},
-                "reason": f"Found {len(cat_cols)} categorical columns ({', '.join(cat_cols[:3])}) requiring numerical encoding."
+                "reason": f"Found {len(feature_cats)} categorical features ({', '.join(feature_cats[:3])}) requiring numerical encoding."
             })
 
-        if num_cols:
+        if feature_nums:
             cleaning_steps.append({
                 "recipe_id": "feature_scaler",
                 "name": "⚖️ Feature Scaler",
@@ -71,27 +98,27 @@ class AIRecommender:
                 "reason": "Standardizing variance across numerical features for model stability."
             })
 
-        # 3. Recommended Algorithm Rankings
+        # 4. Recommended Algorithm Rankings
         recommended_models = []
-        if task_type in ["classification", "regression"]:
+        if detected_task in ["classification", "regression"]:
             recommended_models.append({
                 "recipe_id": "xgboost_trainer",
-                "name": "⚡ XGBoost",
+                "name": f"⚡ XGBoost {detected_task.title()}",
                 "score": 9.8,
                 "tier": "Tier-1 Gold Standard",
                 "reason": "Highest accuracy and regularized gradient boosting for tabular datasets."
             })
             recommended_models.append({
                 "recipe_id": "lightgbm_trainer",
-                "name": "🚀 LightGBM",
+                "name": f"🚀 LightGBM {detected_task.title()}",
                 "score": 9.5,
                 "tier": "Tier-1 High Speed",
                 "reason": "Optimal for ultra-fast training with histogram-based leaf growth."
             })
-            if cat_cols:
+            if feature_cats:
                 recommended_models.append({
                     "recipe_id": "catboost_trainer",
-                    "name": "🐱 CatBoost",
+                    "name": f"🐱 CatBoost {detected_task.title()}",
                     "score": 9.4,
                     "tier": "Tier-1 Categorical",
                     "reason": "Native handling of high-cardinality categorical features without one-hot expansion."
@@ -102,10 +129,10 @@ class AIRecommender:
                     "name": "🌲 Random Forest",
                     "score": 8.5,
                     "tier": "Tier-1 Ensemble",
-                    "reason": "Robust out-of-the-box non-linear bagging baseline."
+                    "reason": "Robust non-linear bagging baseline."
                 })
 
-        elif task_type == "time_series_forecasting":
+        elif detected_task == "time_series_forecasting":
             recommended_models.append({
                 "recipe_id": "prophet_forecaster",
                 "name": "🔮 Meta Prophet",
@@ -138,9 +165,9 @@ class AIRecommender:
             })
 
         return {
-            "task_type": task_type,
+            "task_type": detected_task,
             "explanation": explanation,
-            "target_column": suggested_target,
+            "target_column": selected_target,
             "profile_summary": {
                 "rows": row_count,
                 "columns": len(columns),

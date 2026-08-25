@@ -89,7 +89,23 @@ class XGBoostTrainerRecipe(BaseRecipe):
         lr = float(config.get("learning_rate", 0.1))
         random_state = int(config.get("random_state", 42))
 
-        if task_type == "classification":
+        # Check if y_train is continuous float for classification
+        is_continuous = False
+        if pd.api.types.is_float_dtype(y_train) and y_train.nunique() > 20:
+            is_continuous = True
+
+        if task_type == "classification" and not is_continuous:
+            # Encode target labels to 0..N-1
+            from sklearn.preprocessing import LabelEncoder
+            le = LabelEncoder()
+            y_train = pd.Series(le.fit_transform(y_train), index=y_train.index if hasattr(y_train, 'index') else None)
+            if y_test is not None:
+                # Handle unseen labels gracefully
+                try:
+                    y_test = pd.Series(le.transform(y_test), index=y_test.index if hasattr(y_test, 'index') else None)
+                except Exception:
+                    pass
+
             model = xgb.XGBClassifier(
                 n_estimators=n_estimators,
                 max_depth=max_depth,
@@ -98,6 +114,7 @@ class XGBoostTrainerRecipe(BaseRecipe):
                 eval_metric="logloss"
             )
         else:
+            task_type = "regression"
             model = xgb.XGBRegressor(
                 n_estimators=n_estimators,
                 max_depth=max_depth,

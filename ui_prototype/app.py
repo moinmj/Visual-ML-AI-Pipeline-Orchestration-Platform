@@ -7,15 +7,23 @@ import plotly.graph_objects as go
 import json
 
 from streamlit_flow import streamlit_flow
+import importlib
 from streamlit_flow.elements import StreamlitFlowNode, StreamlitFlowEdge
 from streamlit_flow.state import StreamlitFlowState
+
+import backend.app.recommendation.recommender as recommender_mod
+importlib.reload(recommender_mod)
+from backend.app.recommendation.recommender import AIRecommender
+
+import backend.app.engine.execution.executor as executor_mod
+importlib.reload(executor_mod)
+from backend.app.engine.execution.executor import DAGExecutor
 
 from backend.app.profiling.profiler import DataProfiler
 from backend.app.recipes.base.registry import recipe_registry
 from backend.app.recipes import register_all_recipes
 register_all_recipes()
 
-from backend.app.recommendation.recommender import AIRecommender
 from backend.app.engine.dag.graph import WorkflowGraph, WorkflowNode, WorkflowEdge
 
 st.set_page_config(
@@ -168,6 +176,34 @@ if "flow_state" not in st.session_state:
 if "node_configs" not in st.session_state:
     st.session_state["node_configs"] = {}
 
+
+def parse_uploaded_dataset(up_file):
+    """Unified file reader supporting CSV, Excel, and nested JSON with schema validation."""
+    if up_file is None:
+        return None, None
+    try:
+        if up_file.name.endswith(".csv"):
+            df = pd.read_csv(up_file)
+        elif up_file.name.endswith((".xlsx", ".xls")):
+            df = pd.read_excel(up_file)
+        elif up_file.name.endswith(".json"):
+            import json
+            raw_json = json.load(up_file)
+            if isinstance(raw_json, list):
+                df = pd.json_normalize(raw_json)
+            else:
+                df = pd.json_normalize([raw_json])
+        else:
+            df = pd.read_csv(up_file)
+        
+        if df is None or df.empty:
+            st.error("Uploaded file contains zero valid data rows.")
+            return None, None
+        return df, up_file.name
+    except Exception as e:
+        st.error(f"Error parsing uploaded file '{up_file.name}': {str(e)}")
+        return None, None
+
 # -------------------------------------------------------------
 # SIDEBAR NAVIGATION
 # -------------------------------------------------------------
@@ -178,8 +214,24 @@ app_mode = st.sidebar.radio(
 )
 
 # -------------------------------------------------------------
-# HELPER: RUN PIPELINE WITH PRE-FLIGHT DIAGNOSTICS
+# HELPER: SANITIZE NODE CONFIGS & EXECUTE VIA DAG EXECUTOR
 # -------------------------------------------------------------
+def sanitize_node_configs_for_active_dataset():
+    """Sanitizes node parameters when active dataset columns change."""
+    df = st.session_state.get("active_df")
+    if df is None:
+        return
+    cols = list(df.columns)
+    for n_id, cfg_data in st.session_state.get("node_configs", {}).items():
+        cfg = cfg_data.get("config", {})
+        if "target_column" in cfg and cfg["target_column"] not in cols:
+            cfg["target_column"] = cols[-1]
+            st.info(f"ℹ️ Auto-aligned target column for `{n_id}` to `{cols[-1]}`.")
+        if "date_column" in cfg and cfg["date_column"] not in cols:
+            date_candidates = [c for c in cols if "date" in c.lower() or "time" in c.lower()]
+            cfg["date_column"] = date_candidates[0] if date_candidates else cols[0]
+
+
 def execute_pipeline():
     canvas_nodes = list(st.session_state["flow_state"].nodes)
     canvas_edges = list(st.session_state["flow_state"].edges)
@@ -187,6 +239,8 @@ def execute_pipeline():
     if not canvas_nodes:
         st.warning("⚠️ The canvas is empty. Please add nodes or load a template first.")
         return
+
+    sanitize_node_configs_for_active_dataset()
 
     backend_nodes = []
     for n in canvas_nodes:
@@ -219,87 +273,33 @@ def execute_pipeline():
             st.markdown(f"> {err}")
         return
 
-    try:
-        ordered_nodes = workflow_graph.get_topological_order()
-    except Exception as e:
-        st.error(f"❌ Topology Resolution Failed: {str(e)}")
-        return
+    exec_result = DAGExecutor.execute_workflow(
+        execution_id=f"exec_{int(pd.Timestamp.now().timestamp())}",
+        workflow=workflow_graph,
+        initial_df=st.session_state["active_df"]
+    )
 
-    parent_map = {n.id: [] for n in workflow_graph.nodes}
-    for edge in workflow_graph.edges:
-        parent_map[edge.target].append(edge.source)
-
-    node_outputs = {}
-    initial_df = st.session_state["active_df"]
-    pipeline_context = {"dataframe": initial_df.copy()}
-    execution_logs = []
-    final_metrics = None
-    anomaly_summary = None
-    forecasting_summary = None
-    governance_summary = None
-    execution_success = True
-
-    for node in ordered_nodes:
-        parents = parent_map[node.id]
-        node_inputs = {}
-        
-        if not parents:
-            node_inputs = {"dataframe": initial_df.copy()}
-        else:
-            for p in parents:
-                node_inputs.update(node_outputs.get(p, {}))
-
-        recipe = recipe_registry.get(node.recipe_id)
-        try:
-            out = recipe.execute(inputs=node_inputs, config=node.config, context=pipeline_context)
-            node_outputs[node.id] = out
-            
-            if "X_test" in out:
-                pipeline_context["X_test"] = out["X_test"]
-            if "y_test" in out:
-                pipeline_context["y_test"] = out["y_test"]
-            if "X_train" in out:
-                pipeline_context["X_train"] = out["X_train"]
-            if "y_train" in out:
-                pipeline_context["y_train"] = out["y_train"]
-            if "dataframe" in out:
-                pipeline_context["dataframe"] = out["dataframe"]
-            if "forecast_df" in out:
-                pipeline_context["forecast_df"] = out["forecast_df"]
-
-            execution_logs.append(f"✅ **Node `{node.id}`** [{recipe.name}] ➔ Completed successfully.")
-            
-            if "metrics" in out:
-                final_metrics = out["metrics"]
-            if "anomaly_summary" in out:
-                anomaly_summary = out["anomaly_summary"]
-            if "forecasting_summary" in out:
-                forecasting_summary = out["forecasting_summary"]
-            if "governance_record" in out:
-                governance_summary = out["governance_record"]
-
-        except Exception as e:
-            st.error(f"❌ **Node `{node.id}` [{recipe.name}] failed during runtime:** {str(e)}")
-            st.info(f"💡 Expected inputs: `{recipe.input_types}` | Supplied from parent nodes: `{list(node_inputs.keys())}`")
-            execution_success = False
-            break
-
-    if execution_success:
+    if exec_result.status == "SUCCESS":
         st.session_state["last_execution"] = {
-            "final_metrics": final_metrics,
-            "anomaly_summary": anomaly_summary,
-            "forecasting_summary": forecasting_summary,
-            "governance_summary": governance_summary,
-            "execution_logs": execution_logs,
-            "node_outputs": node_outputs
+            "final_metrics": exec_result.final_metrics,
+            "anomaly_summary": exec_result.anomaly_summary,
+            "forecasting_summary": exec_result.forecasting_summary,
+            "governance_summary": exec_result.governance_summary,
+            "execution_logs": exec_result.logs,
+            "node_outputs": exec_result.node_outputs
         }
         st.success("🎉 Pipeline executed cleanly through DAG Engine!")
+    else:
+        st.error("### ❌ Pipeline Execution Failed")
+        for log in exec_result.logs:
+            if "❌" in log:
+                st.markdown(f"> {log}")
 
 
-def build_recommended_pipeline():
+def build_recommended_pipeline(target_col=None, task_type=None):
     """Builds and wires the AI recommended DAG on the whiteboard."""
     df = st.session_state["active_df"]
-    rec = AIRecommender.recommend_pipeline(df)
+    rec = AIRecommender.recommend_pipeline(df, target_column=target_col, task_type=task_type)
     
     t_nodes = [
         StreamlitFlowNode(id="node_csv", pos=(40, 100), data={"content": f"📄 {st.session_state['active_dataset_name'][:15]}"}, node_type="default", source_position="right", target_position="left")
@@ -366,6 +366,103 @@ def build_recommended_pipeline():
     execute_pipeline()
 
 
+def load_ml_template(force_preset: bool = False):
+    """Applies ML classification/regression template to current active data or sample preset."""
+    if force_preset or "active_df" not in st.session_state or st.session_state["active_df"] is None:
+        st.session_state["active_df"] = get_preset_dataset("Customer Churn (Classification)")
+        st.session_state["active_dataset_name"] = "Customer Churn (Classification)"
+
+    df = st.session_state["active_df"]
+    cols = list(df.columns)
+    named = [c for c in cols if any(k in c.lower() for k in ["target", "churn", "survived", "label", "class", "y", "status"])]
+    target_col = named[0] if named else cols[-1]
+
+    t_nodes = [
+        StreamlitFlowNode(id="node_csv", pos=(40, 100), data={"content": f"📄 {st.session_state.get('active_dataset_name', 'Active Data')[:15]}"}, node_type="default", source_position="right", target_position="left"),
+        StreamlitFlowNode(id="node_impute", pos=(280, 100), data={"content": "🧹 Imputer (Median)"}, node_type="default", source_position="right", target_position="left"),
+        StreamlitFlowNode(id="node_scale", pos=(520, 100), data={"content": "⚖️ Feature Scaler"}, node_type="default", source_position="right", target_position="left"),
+        StreamlitFlowNode(id="node_encode", pos=(760, 100), data={"content": "🔤 One-Hot Encoder"}, node_type="default", source_position="right", target_position="left"),
+        StreamlitFlowNode(id="node_split", pos=(1000, 100), data={"content": "✂️ Train/Test Split"}, node_type="default", source_position="right", target_position="left"),
+        StreamlitFlowNode(id="node_xgb", pos=(1240, 50), data={"content": "⚡ XGBoost Model"}, node_type="default", source_position="right", target_position="left"),
+        StreamlitFlowNode(id="node_eval", pos=(1480, 100), data={"content": "🎯 Evaluation Report"}, node_type="default", source_position="right", target_position="left"),
+    ]
+    t_edges = [
+        StreamlitFlowEdge(id="e1", source="node_csv", target="node_impute", animated=True),
+        StreamlitFlowEdge(id="e2", source="node_impute", target="node_scale", animated=True),
+        StreamlitFlowEdge(id="e3", source="node_scale", target="node_encode", animated=True),
+        StreamlitFlowEdge(id="e4", source="node_encode", target="node_split", animated=True),
+        StreamlitFlowEdge(id="e5", source="node_split", target="node_xgb", animated=True),
+        StreamlitFlowEdge(id="e6", source="node_split", target="node_eval", animated=True),
+        StreamlitFlowEdge(id="e7", source="node_xgb", target="node_eval", animated=True),
+    ]
+    st.session_state["flow_state"] = StreamlitFlowState(nodes=t_nodes, edges=t_edges)
+    st.session_state["node_configs"] = {
+        "node_csv": {"recipe_id": "csv_loader", "label": "📄 Dataset Ingestion", "config": {}},
+        "node_impute": {"recipe_id": "missing_value_imputer", "label": "🧹 Imputer", "config": {"strategy": "median"}},
+        "node_scale": {"recipe_id": "feature_scaler", "label": "⚖️ Scaler", "config": {"method": "standard"}},
+        "node_encode": {"recipe_id": "categorical_encoder", "label": "🔤 Encoder", "config": {"method": "one_hot"}},
+        "node_split": {"recipe_id": "train_test_split", "label": "✂️ Split", "config": {"target_column": target_col, "test_size": 0.2}},
+        "node_xgb": {"recipe_id": "xgboost_trainer", "label": "⚡ XGBoost", "config": {"task_type": "classification", "n_estimators": 100}},
+        "node_eval": {"recipe_id": "model_evaluator", "label": "🎯 Evaluator", "config": {"report_type": "Comprehensive (All Metrics + Confusion Matrix)"}},
+    }
+    st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
+    execute_pipeline()
+
+
+def load_forecast_template(force_preset: bool = False):
+    """Applies Forecasting template to current active data or sample preset."""
+    if force_preset or "active_df" not in st.session_state or st.session_state["active_df"] is None:
+        st.session_state["active_df"] = get_preset_dataset("Daily Retail Sales (Time-Series)")
+        st.session_state["active_dataset_name"] = "Daily Retail Sales (Time-Series)"
+
+    df = st.session_state["active_df"]
+    cols = list(df.columns)
+    date_candidates = [c for c in cols if any(k in c.lower() for k in ["date", "time", "timestamp", "day", "ds"])]
+    date_col = date_candidates[0] if date_candidates else cols[0]
+    num_candidates = [c for c in cols if pd.api.types.is_numeric_dtype(df[c]) and c != date_col]
+    target_col = num_candidates[-1] if num_candidates else cols[-1]
+
+    fc_nodes = [
+        StreamlitFlowNode(id="node_csv", pos=(40, 100), data={"content": f"📄 {st.session_state.get('active_dataset_name', 'Active Data')[:15]}"}, node_type="default", source_position="right", target_position="left"),
+        StreamlitFlowNode(id="node_prophet", pos=(340, 100), data={"content": "🔮 Prophet Forecaster"}, node_type="default", source_position="right", target_position="left"),
+    ]
+    fc_edges = [
+        StreamlitFlowEdge(id="fe1", source="node_csv", target="node_prophet", animated=True)
+    ]
+    st.session_state["flow_state"] = StreamlitFlowState(nodes=fc_nodes, edges=fc_edges)
+    st.session_state["node_configs"] = {
+        "node_csv": {"recipe_id": "csv_loader", "label": "📄 Dataset Ingestion", "config": {}},
+        "node_prophet": {"recipe_id": "prophet_forecaster", "label": "🔮 Prophet Forecaster", "config": {"date_column": date_col, "target_column": target_col, "horizon_periods": 30, "seasonality_mode": "additive"}},
+    }
+    st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
+    execute_pipeline()
+
+
+def load_anomaly_template(force_preset: bool = False):
+    """Applies Anomaly detection template to current active data or sample preset."""
+    if force_preset or "active_df" not in st.session_state or st.session_state["active_df"] is None:
+        st.session_state["active_df"] = get_preset_dataset("Credit Transactions (Anomaly Injection)")
+        st.session_state["active_dataset_name"] = "Credit Transactions (Anomaly Injection)"
+
+    anom_nodes = [
+        StreamlitFlowNode(id="node_csv", pos=(40, 100), data={"content": f"📄 {st.session_state.get('active_dataset_name', 'Active Data')[:15]}"}, node_type="default", source_position="right", target_position="left"),
+        StreamlitFlowNode(id="node_guard", pos=(320, 100), data={"content": "🛡️ Statistical Guardrail"}, node_type="default", source_position="right", target_position="left"),
+        StreamlitFlowNode(id="node_iso", pos=(620, 100), data={"content": "🌲 Isolation Forest Detector"}, node_type="default", source_position="right", target_position="left"),
+    ]
+    anom_edges = [
+        StreamlitFlowEdge(id="ae1", source="node_csv", target="node_guard", animated=True),
+        StreamlitFlowEdge(id="ae2", source="node_guard", target="node_iso", animated=True),
+    ]
+    st.session_state["flow_state"] = StreamlitFlowState(nodes=anom_nodes, edges=anom_edges)
+    st.session_state["node_configs"] = {
+        "node_csv": {"recipe_id": "csv_loader", "label": "📄 Dataset Ingestion", "config": {}},
+        "node_guard": {"recipe_id": "statistical_guardrail", "label": "🛡️ Statistical Guardrail", "config": {"method": "z_score", "threshold": 3.0, "action": "flag"}},
+        "node_iso": {"recipe_id": "isolation_forest", "label": "🌲 Isolation Forest Detector", "config": {"contamination": 0.05, "n_estimators": 100}},
+    }
+    st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
+    execute_pipeline()
+
+
 # -------------------------------------------------------------
 # TAB 1: VISUAL PIPELINE WHITEBOARD
 # -------------------------------------------------------------
@@ -380,128 +477,163 @@ if app_mode == "🎨 Pipeline Whiteboard":
 
     with bar_col2:
         if st.button("🧠 AI Recommend", type="secondary", use_container_width=True):
-            build_recommended_pipeline()
-            st.rerun()
+            if len(st.session_state["flow_state"].nodes) > 0:
+                st.session_state["pending_action"] = "ai_recommend"
+            else:
+                build_recommended_pipeline()
+                st.rerun()
 
     with bar_col3:
         if st.button("⚡ ML Template", use_container_width=True):
-            st.session_state["active_df"] = get_preset_dataset("Customer Churn (Classification)")
-            st.session_state["active_dataset_name"] = "Customer Churn (Classification)"
-            cols = list(st.session_state["active_df"].columns)
-            target_col = cols[-1]
-            
-            t_nodes = [
-                StreamlitFlowNode(id="node_csv", pos=(40, 100), data={"content": "📄 CSV Ingestion"}, node_type="default", source_position="right", target_position="left"),
-                StreamlitFlowNode(id="node_impute", pos=(280, 100), data={"content": "🧹 Imputer (Median)"}, node_type="default", source_position="right", target_position="left"),
-                StreamlitFlowNode(id="node_scale", pos=(520, 100), data={"content": "⚖️ Feature Scaler"}, node_type="default", source_position="right", target_position="left"),
-                StreamlitFlowNode(id="node_encode", pos=(760, 100), data={"content": "🔤 One-Hot Encoder"}, node_type="default", source_position="right", target_position="left"),
-                StreamlitFlowNode(id="node_split", pos=(1000, 100), data={"content": "✂️ Train/Test Split"}, node_type="default", source_position="right", target_position="left"),
-                StreamlitFlowNode(id="node_xgb", pos=(1240, 50), data={"content": "⚡ XGBoost Model"}, node_type="default", source_position="right", target_position="left"),
-                StreamlitFlowNode(id="node_eval", pos=(1480, 100), data={"content": "🎯 Evaluation Report"}, node_type="default", source_position="right", target_position="left"),
-            ]
-            t_edges = [
-                StreamlitFlowEdge(id="e1", source="node_csv", target="node_impute", animated=True),
-                StreamlitFlowEdge(id="e2", source="node_impute", target="node_scale", animated=True),
-                StreamlitFlowEdge(id="e3", source="node_scale", target="node_encode", animated=True),
-                StreamlitFlowEdge(id="e4", source="node_encode", target="node_split", animated=True),
-                StreamlitFlowEdge(id="e5", source="node_split", target="node_xgb", animated=True),
-                StreamlitFlowEdge(id="e6", source="node_split", target="node_eval", animated=True),
-                StreamlitFlowEdge(id="e7", source="node_xgb", target="node_eval", animated=True),
-            ]
-            st.session_state["flow_state"] = StreamlitFlowState(nodes=t_nodes, edges=t_edges)
-            st.session_state["node_configs"] = {
-                "node_csv": {"recipe_id": "csv_loader", "label": "📄 CSV Ingestion", "config": {}},
-                "node_impute": {"recipe_id": "missing_value_imputer", "label": "🧹 Imputer", "config": {"strategy": "median"}},
-                "node_scale": {"recipe_id": "feature_scaler", "label": "⚖️ Scaler", "config": {"method": "standard"}},
-                "node_encode": {"recipe_id": "categorical_encoder", "label": "🔤 Encoder", "config": {"method": "one_hot"}},
-                "node_split": {"recipe_id": "train_test_split", "label": "✂️ Split", "config": {"target_column": target_col, "test_size": 0.2}},
-                "node_xgb": {"recipe_id": "xgboost_trainer", "label": "⚡ XGBoost", "config": {"task_type": "classification", "n_estimators": 100}},
-                "node_eval": {"recipe_id": "model_evaluator", "label": "🎯 Evaluator", "config": {"report_type": "Comprehensive (All Metrics + Confusion Matrix)"}},
-            }
-            st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
-            execute_pipeline()
-            st.rerun()
+            if len(st.session_state["flow_state"].nodes) > 0:
+                st.session_state["pending_action"] = "ml_template"
+            else:
+                load_ml_template()
+                st.rerun()
 
     with bar_col4:
         if st.button("🔮 Forecast", use_container_width=True):
-            st.session_state["active_df"] = get_preset_dataset("Daily Retail Sales (Time-Series)")
-            st.session_state["active_dataset_name"] = "Daily Retail Sales (Time-Series)"
-
-            fc_nodes = [
-                StreamlitFlowNode(id="node_csv", pos=(40, 100), data={"content": "📄 Retail Sales Stream"}, node_type="default", source_position="right", target_position="left"),
-                StreamlitFlowNode(id="node_prophet", pos=(340, 100), data={"content": "🔮 Prophet Forecaster"}, node_type="default", source_position="right", target_position="left"),
-            ]
-            fc_edges = [
-                StreamlitFlowEdge(id="fe1", source="node_csv", target="node_prophet", animated=True)
-            ]
-            st.session_state["flow_state"] = StreamlitFlowState(nodes=fc_nodes, edges=fc_edges)
-            st.session_state["node_configs"] = {
-                "node_csv": {"recipe_id": "csv_loader", "label": "📄 CSV Ingestion", "config": {}},
-                "node_prophet": {"recipe_id": "prophet_forecaster", "label": "🔮 Prophet Forecaster", "config": {"date_column": "Date", "target_column": "Sales", "horizon_periods": 30, "seasonality_mode": "additive"}},
-            }
-            st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
-            execute_pipeline()
-            st.rerun()
+            if len(st.session_state["flow_state"].nodes) > 0:
+                st.session_state["pending_action"] = "forecast_template"
+            else:
+                load_forecast_template()
+                st.rerun()
 
     with bar_col5:
         if st.button("🚨 Anomaly", use_container_width=True):
-            st.session_state["active_df"] = get_preset_dataset("Credit Transactions (Anomaly Injection)")
-            st.session_state["active_dataset_name"] = "Credit Transactions (Anomaly Injection)"
-            
-            anom_nodes = [
-                StreamlitFlowNode(id="node_csv", pos=(40, 100), data={"content": "📄 Transaction Ingestion"}, node_type="default", source_position="right", target_position="left"),
-                StreamlitFlowNode(id="node_guard", pos=(320, 100), data={"content": "🛡️ Statistical Guardrail"}, node_type="default", source_position="right", target_position="left"),
-                StreamlitFlowNode(id="node_iso", pos=(620, 100), data={"content": "🌲 Isolation Forest Detector"}, node_type="default", source_position="right", target_position="left"),
-            ]
-            anom_edges = [
-                StreamlitFlowEdge(id="ae1", source="node_csv", target="node_guard", animated=True),
-                StreamlitFlowEdge(id="ae2", source="node_guard", target="node_iso", animated=True),
-            ]
-            st.session_state["flow_state"] = StreamlitFlowState(nodes=anom_nodes, edges=anom_edges)
-            st.session_state["node_configs"] = {
-                "node_csv": {"recipe_id": "csv_loader", "label": "📄 CSV Ingestion", "config": {}},
-                "node_guard": {"recipe_id": "statistical_guardrail", "label": "🛡️ Statistical Guardrail", "config": {"method": "z_score", "threshold": 3.0, "action": "flag"}},
-                "node_iso": {"recipe_id": "isolation_forest", "label": "🌲 Isolation Forest Detector", "config": {"contamination": 0.05, "n_estimators": 100}},
-            }
-            st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
-            execute_pipeline()
-            st.rerun()
+            if len(st.session_state["flow_state"].nodes) > 0:
+                st.session_state["pending_action"] = "anomaly_template"
+            else:
+                load_anomaly_template()
+                st.rerun()
 
     with bar_col6:
         if st.button("🔗 Auto-Wire", use_container_width=True):
             curr_nodes = st.session_state["flow_state"].nodes
-            if len(curr_nodes) >= 2:
+            if len(curr_nodes) < 2:
+                st.warning("⚠️ Auto-Wire requires at least 2 nodes on the canvas. Add components first.")
+            else:
+                # 1. Sort nodes spatially from left to right (X-coordinate, then Y-coordinate)
+                def get_pos(n):
+                    if isinstance(n.pos, (list, tuple)) and len(n.pos) >= 2:
+                        return (float(n.pos[0]), float(n.pos[1]))
+                    elif hasattr(n.pos, 'x') and hasattr(n.pos, 'y'):
+                        return (float(n.pos.x), float(n.pos.y))
+                    elif isinstance(n.pos, dict):
+                        return (float(n.pos.get('x', 0)), float(n.pos.get('y', 0)))
+                    return (0.0, 0.0)
+
+                sorted_nodes = sorted(curr_nodes, key=get_pos)
+                
+                # 2. Build clean sequential left-to-right DAG connections
                 new_edges = []
-                for i in range(len(curr_nodes) - 1):
-                    new_edges.append(StreamlitFlowEdge(id=f"auto_{curr_nodes[i].id}_{curr_nodes[i+1].id}", source=curr_nodes[i].id, target=curr_nodes[i+1].id, animated=True))
+                for i in range(len(sorted_nodes) - 1):
+                    src = sorted_nodes[i].id
+                    tgt = sorted_nodes[i+1].id
+                    new_edges.append(StreamlitFlowEdge(
+                        id=f"auto_{src}_{tgt}",
+                        source=src,
+                        target=tgt,
+                        animated=True
+                    ))
+
                 st.session_state["flow_state"].edges = new_edges
                 st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
-                st.success(f"Connected {len(new_edges)} nodes in sequence!")
+                st.success(f"🔗 Sequentially wired {len(sorted_nodes)} nodes along visual left-to-right path!")
                 st.rerun()
 
     with bar_col7:
         if st.button("🧹 Clear", use_container_width=True):
-            st.session_state["flow_state"] = StreamlitFlowState(nodes=[], edges=[])
-            st.session_state["node_configs"] = {}
-            st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
-            if "last_execution" in st.session_state:
-                del st.session_state["last_execution"]
-            st.rerun()
+            if len(st.session_state["flow_state"].nodes) > 0:
+                st.session_state["pending_action"] = "clear_canvas"
+            else:
+                st.info("ℹ️ Whiteboard is already empty.")
+
+    # Overwrite & Clear Confirmation Prompt
+    if "pending_action" in st.session_state and st.session_state["pending_action"]:
+        action = st.session_state["pending_action"]
+        if action == "clear_canvas":
+            st.error(f"🗑️ **Wipe Whiteboard Confirmation:** The whiteboard currently contains {len(st.session_state['flow_state'].nodes)} active nodes and pipeline execution states. Are you sure you want to clear everything?")
+            c_yes, c_no, _ = st.columns([2, 2, 6])
+            with c_yes:
+                if st.button("🗑️ Yes, Wipe Whiteboard", type="primary", key="btn_confirm_wipe", use_container_width=True):
+                    st.session_state["pending_action"] = None
+                    st.session_state["flow_state"] = StreamlitFlowState(nodes=[], edges=[])
+                    st.session_state["node_configs"] = {}
+                    st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
+                    if "last_execution" in st.session_state:
+                        del st.session_state["last_execution"]
+                    st.success("Whiteboard cleared.")
+                    st.rerun()
+            with c_no:
+                if st.button("❌ Cancel", key="btn_cancel_wipe", use_container_width=True):
+                    st.session_state["pending_action"] = None
+                    st.rerun()
+        else:
+            action_name = action.replace("_", " ").title()
+            st.warning(f"⚠️ **Overwrite Confirmation:** The canvas currently has {len(st.session_state['flow_state'].nodes)} active nodes. Applying **{action_name}** will replace your current whiteboard.")
+            
+            c_opt1, c_opt2, c_opt3, _ = st.columns([2.5, 2.5, 1.5, 3])
+            with c_opt1:
+                if st.button("✅ Apply to My Current Data", type="primary", key="btn_apply_curr_data", use_container_width=True):
+                    st.session_state["pending_action"] = None
+                    if action == "ai_recommend":
+                        build_recommended_pipeline()
+                    elif action == "ml_template":
+                        load_ml_template(force_preset=False)
+                    elif action == "forecast_template":
+                        load_forecast_template(force_preset=False)
+                    elif action == "anomaly_template":
+                        load_anomaly_template(force_preset=False)
+                    st.rerun()
+
+            with c_opt2:
+                if st.button("📦 Load Sample Preset Dataset", key="btn_apply_sample_data", use_container_width=True):
+                    st.session_state["pending_action"] = None
+                    if action == "ai_recommend":
+                        build_recommended_pipeline()
+                    elif action == "ml_template":
+                        load_ml_template(force_preset=True)
+                    elif action == "forecast_template":
+                        load_forecast_template(force_preset=True)
+                    elif action == "anomaly_template":
+                        load_anomaly_template(force_preset=True)
+                    st.rerun()
+
+            with c_opt3:
+                if st.button("❌ Cancel", key="btn_cancel_template", use_container_width=True):
+                    st.session_state["pending_action"] = None
+                    st.rerun()
 
     # ---------------------------------------------------------
     # AI DATASET ADVISOR & PRE-FLIGHT INSIGHTS (Section 8 of Spec)
     # ---------------------------------------------------------
-    rec = AIRecommender.recommend_pipeline(st.session_state["active_df"])
-    with st.expander(f"🧠 AI Dataset Intelligence: Detected {rec['task_type'].replace('_', ' ').title()} Problem", expanded=False):
+    active_df = st.session_state["active_df"]
+    df_cols = list(active_df.columns)
+    
+    with st.expander("🧠 AI Dataset Intelligence & Customizable Auto-Architect", expanded=False):
+        c_t1, c_t2 = st.columns(2)
+        with c_t1:
+            custom_target = st.selectbox("🎯 Target / Dependent Feature", df_cols, index=len(df_cols)-1, key="ai_drawer_target")
+        with c_t2:
+            custom_task = st.selectbox("⚙️ Problem Type Intent", ["Auto-Detect", "classification", "regression", "time_series_forecasting", "anomaly_detection"], index=0, key="ai_drawer_task")
+
+        task_override = None if custom_task == "Auto-Detect" else custom_task
+        rec = AIRecommender.recommend_pipeline(active_df, target_column=custom_target, task_type=task_override)
+
         c_ai1, c_ai2 = st.columns([3, 2])
         with c_ai1:
             st.markdown(f"**Diagnosis:** {rec['explanation']}")
             st.caption(f"Active Data: **{st.session_state['active_dataset_name']}** ({rec['profile_summary']['rows']} rows, {rec['profile_summary']['missing_cells']} missing values)")
-            if st.button("⚡ Apply AI Recommended Pipeline Directly to Canvas", key="btn_apply_ai_expander"):
-                build_recommended_pipeline()
-                st.rerun()
+            if st.button(f"⚡ Build & Run {rec['task_type'].replace('_', ' ').title()} Pipeline", key="btn_apply_ai_expander"):
+                if len(st.session_state["flow_state"].nodes) > 0:
+                    st.session_state["pending_action"] = "ai_recommend"
+                    st.rerun()
+                else:
+                    build_recommended_pipeline(target_col=custom_target, task_type=task_override)
+                    st.rerun()
         with c_ai2:
-            st.markdown("**Top Model Recommendation:**")
+            st.markdown("**Top Recommended Algorithm:**")
             for m in rec["model_rankings"][:2]:
                 st.write(f"• **{m['name']}** ({m['tier']}) ➔ *{m['reason'][:80]}...*")
 
@@ -523,11 +655,14 @@ if app_mode == "🎨 Pipeline Whiteboard":
         with col_add:
             st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
             if st.button("➕ Drop Node Onto Board", type="primary", use_container_width=True):
+                # Unique collision-free node counter
+                st.session_state["node_counter"] = st.session_state.get("node_counter", 0) + 1
+                counter = st.session_state["node_counter"]
                 count = len(st.session_state["flow_state"].nodes)
                 pos_x = 80 + (count % 3) * 260
                 pos_y = 60 + (count // 3) * 140
                 
-                node_id = f"{chosen_meta['id']}_{count + 1}"
+                node_id = f"{chosen_meta['id']}_{counter}"
                 node_title = f"{chosen_meta['icon']} {chosen_meta['name'].split('(')[0].strip()}"
                 
                 new_node = StreamlitFlowNode(
@@ -579,7 +714,7 @@ if app_mode == "🎨 Pipeline Whiteboard":
             pan_on_drag=True,
             allow_zoom=True
         )
-        if flow_result and flow_result.nodes:
+        if flow_result is not None:
             st.session_state["flow_state"] = flow_result
 
         # FOOLPROOF 1-CLICK NODE CONNECTOR
@@ -599,16 +734,27 @@ if app_mode == "🎨 Pipeline Whiteboard":
                     st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
                     if st.button("🔗 Connect Line", use_container_width=True):
                         if src_id == tgt_id:
-                            st.error("Cannot connect a node to itself.")
+                            st.error("❌ Cannot connect a node to itself.")
                         else:
                             edge_id = f"edge_{src_id}_{tgt_id}"
                             existing_ids = [e.id for e in st.session_state["flow_state"].edges]
-                            if edge_id not in existing_ids:
-                                new_edge = StreamlitFlowEdge(id=edge_id, source=src_id, target=tgt_id, animated=True)
-                                st.session_state["flow_state"].edges.append(new_edge)
-                                st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
-                                st.success(f"Connected `{src_id}` ➔ `{tgt_id}`!")
-                                st.rerun()
+                            if edge_id in existing_ids:
+                                st.warning(f"⚠️ Connection `{src_id}` ➔ `{tgt_id}` already exists.")
+                            else:
+                                # Pre-flight Cycle Detection before wiring
+                                cand_nodes = [WorkflowNode(id=n.id, recipe_id=st.session_state["node_configs"].get(n.id, {}).get("recipe_id", "missing_value_imputer"), config={}) for n in current_nodes]
+                                cand_edges = [WorkflowEdge(source=e.source, target=e.target) for e in st.session_state["flow_state"].edges]
+                                cand_edges.append(WorkflowEdge(source=src_id, target=tgt_id))
+                                cand_graph = WorkflowGraph(nodes=cand_nodes, edges=cand_edges)
+                                try:
+                                    cand_graph.get_topological_order()
+                                    new_edge = StreamlitFlowEdge(id=edge_id, source=src_id, target=tgt_id, animated=True)
+                                    st.session_state["flow_state"].edges.append(new_edge)
+                                    st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
+                                    st.success(f"Connected `{src_id}` ➔ `{tgt_id}`!")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"❌ Circular Loop Blocked: Connecting `{src_id}` ➔ `{tgt_id}` creates a cycle in the pipeline.")
 
             # Active Edges Table
             if st.session_state["flow_state"].edges:
@@ -632,7 +778,20 @@ if app_mode == "🎨 Pipeline Whiteboard":
             recipe_obj = recipe_registry.get(node_cfg["recipe_id"])
             
             st.markdown(f"**Recipe:** `{recipe_obj.name}`")
-            st.markdown(f"**Category:** <span class='badge'>{recipe_obj.category}</span>", unsafe_allow_html=True)
+            # Node Canvas Label (Editable in Real-Time)
+            curr_label = ""
+            for n in st.session_state["flow_state"].nodes:
+                if n.id == selected_node_id:
+                    curr_label = n.data.get("content", n.id)
+                    break
+
+            new_label = st.text_input("🏷️ Whiteboard Node Title", value=curr_label, key=f"lbl_{selected_node_id}")
+            if new_label and new_label != curr_label:
+                for n in st.session_state["flow_state"].nodes:
+                    if n.id == selected_node_id:
+                        n.data = {"content": new_label}
+                st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
+                st.rerun()
 
             # Node View Toggle: Parameters vs Code View (Section 9 of Spec)
             view_mode = st.radio("Node View", ["⚙️ Parameters Form", "</> Generated Code"], horizontal=True, key=f"vmode_{selected_node_id}")
@@ -656,23 +815,28 @@ if app_mode == "🎨 Pipeline Whiteboard":
                         if st.button("Apply Preset to Ingestion Node"):
                             st.session_state["active_df"] = get_preset_dataset(preset_name)
                             st.session_state["active_dataset_name"] = preset_name
-                            st.success(f"Loaded '{preset_name}'!")
+                            for n in st.session_state["flow_state"].nodes:
+                                if n.id == selected_node_id:
+                                    n.data = {"content": f"📄 {preset_name[:18]}"}
+                            sanitize_node_configs_for_active_dataset()
+                            st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
+                            st.success(f"Loaded and synced '{preset_name}' to whiteboard!")
                             st.rerun()
 
                     elif data_source_mode == "Upload New File":
-                        up_file = st.file_uploader("Upload CSV / Excel", type=["csv", "xlsx", "json"], key=f"up_{selected_node_id}")
+                        up_file = st.file_uploader("Upload CSV / Excel / JSON", type=["csv", "xlsx", "json"], key=f"up_{selected_node_id}")
                         if up_file is not None:
-                            try:
-                                if up_file.name.endswith(".csv"):
-                                    st.session_state["active_df"] = pd.read_csv(up_file)
-                                elif up_file.name.endswith((".xlsx", ".xls")):
-                                    st.session_state["active_df"] = pd.read_excel(up_file)
-                                elif up_file.name.endswith(".json"):
-                                    st.session_state["active_df"] = pd.read_json(up_file)
-                                st.session_state["active_dataset_name"] = up_file.name
-                                st.success(f"Loaded '{up_file.name}'!")
-                            except Exception as e:
-                                st.error(f"Error reading file: {e}")
+                            parsed_df, file_name = parse_uploaded_dataset(up_file)
+                            if parsed_df is not None:
+                                st.session_state["active_df"] = parsed_df
+                                st.session_state["active_dataset_name"] = file_name
+                                for n in st.session_state["flow_state"].nodes:
+                                    if n.id == selected_node_id:
+                                        n.data = {"content": f"📄 {file_name[:18]}"}
+                                sanitize_node_configs_for_active_dataset()
+                                st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
+                                st.success(f"Loaded and synced '{file_name}' to whiteboard!")
+                                st.rerun()
 
                     st.caption(f"Active Data: **{st.session_state['active_dataset_name']}** ({len(st.session_state['active_df'])} rows)")
 
@@ -699,22 +863,25 @@ if app_mode == "🎨 Pipeline Whiteboard":
                         val = st.selectbox(title, cols, index=idx, key=f"p_{selected_node_id}_{prop_name}")
                         updated_params[prop_name] = val
                     elif prop_meta.get("type") == "integer":
-                        val = st.number_input(title, min_value=prop_meta.get("minimum", 0), max_value=prop_meta.get("maximum", 2000), value=int(current_val or 10), key=f"p_{selected_node_id}_{prop_name}")
+                        default_int = int(prop_meta.get("default", 0))
+                        init_int = int(current_val if current_val is not None else default_int)
+                        val = st.number_input(title, min_value=prop_meta.get("minimum", 0), max_value=prop_meta.get("maximum", 2000), value=init_int, key=f"p_{selected_node_id}_{prop_name}")
                         updated_params[prop_name] = val
                     elif prop_meta.get("type") == "number":
                         min_v = float(prop_meta.get("minimum", 0.0))
                         max_v = float(prop_meta.get("maximum", 1.0))
-                        cur_v = float(current_val if current_val is not None else 0.05)
+                        default_num = float(prop_meta.get("default", min_v))
+                        cur_v = float(current_val if current_val is not None else default_num)
                         cur_v = max(min_v, min(max_v, cur_v))
                         val = st.slider(title, min_value=min_v, max_value=max_v, value=cur_v, key=f"p_{selected_node_id}_{prop_name}")
                         updated_params[prop_name] = val
                     elif prop_meta.get("type") == "string":
-                        val = st.text_input(title, value=str(current_val or ""), key=f"p_{selected_node_id}_{prop_name}")
+                        val = st.text_input(title, value=str(current_val if current_val is not None else ""), key=f"p_{selected_node_id}_{prop_name}")
                         updated_params[prop_name] = val
 
                 st.session_state["node_configs"][selected_node_id]["config"] = updated_params
 
-            if st.button("🗑️ Delete Node", key="btn_del_selected"):
+            if st.button("🗑️ Delete Node", key=f"btn_del_{selected_node_id}"):
                 st.session_state["flow_state"].nodes = [n for n in st.session_state["flow_state"].nodes if n.id != selected_node_id]
                 st.session_state["flow_state"].edges = [e for e in st.session_state["flow_state"].edges if e.source != selected_node_id and e.target != selected_node_id]
                 if selected_node_id in st.session_state["node_configs"]:
@@ -866,17 +1033,17 @@ if app_mode == "🎨 Pipeline Whiteboard":
 
                 with anom_tab1:
                     num_cols = [c for c in anomaly_df.columns if pd.api.types.is_numeric_dtype(anomaly_df[c]) and c not in ["is_anomaly", "is_outlier", "anomaly_score"]]
+                    color_col = "is_anomaly" if "is_anomaly" in anomaly_df.columns else "is_outlier"
+                    plot_df = anomaly_df.copy()
+                    if color_col in plot_df.columns:
+                        plot_df[color_col] = plot_df[color_col].astype(str)
+
                     if len(num_cols) >= 2:
                         sc_col1, sc_col2 = st.columns(2)
                         with sc_col1:
                             x_col = st.selectbox("X-Axis Feature", num_cols, index=0)
                         with sc_col2:
                             y_col = st.selectbox("Y-Axis Feature", num_cols, index=1 if len(num_cols) > 1 else 0)
-
-                        color_col = "is_anomaly" if "is_anomaly" in anomaly_df.columns else "is_outlier"
-                        plot_df = anomaly_df.copy()
-                        if color_col in plot_df.columns:
-                            plot_df[color_col] = plot_df[color_col].astype(str)
 
                         fig_scatter = px.scatter(
                             plot_df,
@@ -888,6 +1055,18 @@ if app_mode == "🎨 Pipeline Whiteboard":
                             title=f"Outlier Scatter Plot: {x_col} vs {y_col} (Red = Anomaly)"
                         )
                         st.plotly_chart(fig_scatter, use_container_width=True)
+                    elif len(num_cols) == 1:
+                        feat = num_cols[0]
+                        fig_1d = px.strip(
+                            plot_df,
+                            x=feat,
+                            color=color_col if color_col in plot_df.columns else None,
+                            color_discrete_map={"0": "#3B82F6", "1": "#EF4444"},
+                            title=f"1D Anomaly Distribution: {feat} (Red = Anomaly)"
+                        )
+                        st.plotly_chart(fig_1d, use_container_width=True)
+                    else:
+                        st.info("ℹ️ No numeric columns available for outlier distribution plotting.")
 
                 with anom_tab2:
                     if "anomaly_score" in anomaly_df.columns:
@@ -998,17 +1177,12 @@ elif app_mode == "📊 Dataset Studio & Profiler":
     with col1:
         uploaded_file = st.file_uploader("Upload CSV, Excel or JSON dataset", type=["csv", "xlsx", "json"])
         if uploaded_file is not None:
-            try:
-                if uploaded_file.name.endswith(".csv"):
-                    st.session_state["active_df"] = pd.read_csv(uploaded_file)
-                elif uploaded_file.name.endswith((".xlsx", ".xls")):
-                    st.session_state["active_df"] = pd.read_excel(uploaded_file)
-                elif uploaded_file.name.endswith(".json"):
-                    st.session_state["active_df"] = pd.read_json(uploaded_file)
-                st.session_state["active_dataset_name"] = uploaded_file.name
-                st.success(f"Loaded '{uploaded_file.name}' successfully!")
-            except Exception as e:
-                st.error(f"Error reading file: {e}")
+            parsed_df, file_name = parse_uploaded_dataset(uploaded_file)
+            if parsed_df is not None:
+                st.session_state["active_df"] = parsed_df
+                st.session_state["active_dataset_name"] = file_name
+                sanitize_node_configs_for_active_dataset()
+                st.success(f"Loaded '{file_name}' successfully!")
 
     with col2:
         preset = st.selectbox("Choose Preset Sample", ["Customer Churn (Classification)", "Daily Retail Sales (Time-Series)", "Credit Transactions (Anomaly Injection)", "Titanic Survival", "Iris Flower"])
