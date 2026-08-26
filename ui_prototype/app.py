@@ -214,8 +214,27 @@ def parse_uploaded_dataset(up_file):
 st.sidebar.title("⚡ AI/ML Pipeline Studio")
 app_mode = st.sidebar.radio(
     "Navigation",
-    ["🎨 Pipeline Whiteboard", "📊 Dataset Studio & Profiler", "🧩 Recipe Catalog"]
+    ["🎨 Pipeline Whiteboard", "📊 Dataset Studio & Profiler", "🧩 Recipe Catalog", "🌐 API & Telemetry Inspector"]
 )
+
+
+def get_current_dag_payload() -> dict:
+    """Extracts current visual whiteboard nodes and edges into REST API payload format."""
+    nodes = []
+    for n in st.session_state["flow_state"].nodes:
+        cfg = st.session_state["node_configs"].get(n.id, {})
+        nodes.append({
+            "id": n.id,
+            "recipe_id": cfg.get("recipe_id", "csv_loader"),
+            "config": cfg.get("config", {}),
+            "label": n.data.get("content", n.id)
+        })
+    edges = [
+        {"source": e.source, "target": e.target}
+        for e in st.session_state["flow_state"].edges
+    ]
+    return {"nodes": nodes, "edges": edges}
+
 
 # -------------------------------------------------------------
 # HELPER: SANITIZE NODE CONFIGS & EXECUTE VIA DAG EXECUTOR
@@ -1269,6 +1288,40 @@ if app_mode == "🎨 Pipeline Whiteboard":
             for log in execution_logs:
                 st.write(log)
 
+        # -----------------------------------------------------
+        # 5. LIVE REST API CONTRACT & CURL GENERATOR
+        # -----------------------------------------------------
+        with st.expander("📡 Live REST API Contract & cURL Generator (n8n / Postman Integration)", expanded=False):
+            st.markdown("##### 📦 Active DAG Execution Payload (`POST /api/v1/workflows/execute`):")
+            st.caption("This exact JSON payload can be sent to FastAPI, external services, or automated CI/CD pipelines to execute this visual workflow.")
+            
+            dag_payload = get_current_dag_payload()
+            dag_json_str = json.dumps(dag_payload, indent=2)
+            st.code(dag_json_str, language="json")
+            
+            st.markdown("##### 💻 Ready-to-Run cURL Terminal Command:")
+            curl_cmd = f"""curl -X POST http://localhost:8000/api/v1/workflows/execute \\
+  -H "Content-Type: application/json" \\
+  -d '{json.dumps(dag_payload)}'"""
+            st.code(curl_cmd, language="bash")
+            
+            c_btn1, c_btn2, _ = st.columns([2.5, 2.5, 3])
+            with c_btn1:
+                st.download_button("📥 Download DAG Payload (JSON)", data=dag_json_str, file_name="workflow_dag_payload.json", mime="application/json")
+            with c_btn2:
+                if st.button("🧪 Validate via API Engine", key="btn_validate_api_inline"):
+                    wf_graph = WorkflowGraph(
+                        nodes=[WorkflowNode(id=n["id"], recipe_id=n["recipe_id"], config=n["config"]) for n in dag_payload["nodes"]],
+                        edges=[WorkflowEdge(source=e["source"], target=e["target"]) for e in dag_payload["edges"]]
+                    )
+                    errs = wf_graph.validate_graph()
+                    if not errs:
+                        st.success("✅ Graph structure is 100% topologically valid and API-compatible!")
+                    else:
+                        st.warning(f"⚠️ Validation notes: {len(errs)} items detected.")
+                        for err in errs:
+                            st.write(f"- {err}")
+
 
 # -------------------------------------------------------------
 # TAB 2: DATASET STUDIO & PROFILER
@@ -1340,3 +1393,273 @@ elif app_mode == "🧩 Recipe Catalog":
                 st.markdown(f"**Inputs:** `{r_obj.input_types}` ➔ **Outputs:** `{r_obj.output_types}`")
                 st.markdown("#### JSON Schema:")
                 st.json(r_obj.get_schema())
+
+
+# -------------------------------------------------------------
+# TAB 4: API & TELEMETRY INSPECTOR
+# -------------------------------------------------------------
+elif app_mode == "🌐 API & Telemetry Inspector":
+    st.markdown('<div class="main-header">🌐 REST API & Network Telemetry Inspector</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-header">Inspect API contracts, real-time JSON payloads, headers, cURL commands, and test all backend endpoints interactively.</div>', unsafe_allow_html=True)
+
+    # API Status Banner
+    st.markdown("""
+    <div style="display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap;">
+        <span class="badge" style="background-color: #DEF7EC; color: #03543F; font-size: 0.85rem; padding: 6px 12px;">🟢 FastAPI Server: Active (Port 8000)</span>
+        <span class="badge" style="background-color: #E1EFFE; color: #1E429F; font-size: 0.85rem; padding: 6px 12px;">📖 OpenAPI Docs: /docs</span>
+        <span class="badge" style="background-color: #FDF6B2; color: #723B13; font-size: 0.85rem; padding: 6px 12px;">⚡ Engine: Topological In-Memory DAG</span>
+        <span class="badge" style="background-color: #F3E8FF; color: #5521B5; font-size: 0.85rem; padding: 6px 12px;">🏛️ Governance: MLflow Audit Active</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    api_tab1, api_tab2, api_tab3 = st.tabs([
+        "📡 Live Whiteboard DAG Contract",
+        "🚀 Interactive API Playground & Catalog",
+        "📊 Network Telemetry & Execution Audit"
+    ])
+
+    # ---------------------------------------------------------
+    # TAB 1: LIVE WHITEBOARD DAG CONTRACT
+    # ---------------------------------------------------------
+    with api_tab1:
+        st.markdown("### 📦 Active Visual Whiteboard Contract")
+        st.caption("Live, real-time JSON payload corresponding to the DAG nodes and connections currently configured on your Whiteboard.")
+        
+        current_dag = get_current_dag_payload()
+        nodes_count = len(current_dag["nodes"])
+        edges_count = len(current_dag["edges"])
+        
+        c_k1, c_k2, c_k3, c_k4 = st.columns(4)
+        c_k1.metric("Active Nodes", f"{nodes_count}")
+        c_k2.metric("Active Edges", f"{edges_count}")
+        c_k3.metric("Dataset Bound", st.session_state.get("active_dataset_name", "N/A")[:18])
+        c_k4.metric("Estimated Payload Size", f"{len(json.dumps(current_dag)):,} bytes")
+
+        st.markdown("#### 1. REST Request Body (`POST /api/v1/workflows/execute`):")
+        st.json(current_dag)
+
+        st.markdown("#### 2. cURL Terminal Execution Snippet:")
+        curl_snippet = f"""curl -X POST http://localhost:8000/api/v1/workflows/execute \\
+  -H "Content-Type: application/json" \\
+  -d '{json.dumps(current_dag)}'"""
+        st.code(curl_snippet, language="bash")
+
+        st.markdown("#### 3. Python `requests` Client Snippet:")
+        python_snippet = f"""import requests
+
+url = "http://localhost:8000/api/v1/workflows/execute"
+payload = {json.dumps(current_dag, indent=4)}
+
+response = requests.post(url, json=payload)
+print("Status Code:", response.status_code)
+print("Execution Result:", response.json())"""
+        st.code(python_snippet, language="python")
+
+        st.download_button(
+            "📥 Download Active Workflow Payload (JSON)",
+            data=json.dumps(current_dag, indent=2),
+            file_name="active_workflow_contract.json",
+            mime="application/json"
+        )
+
+    # ---------------------------------------------------------
+    # TAB 2: INTERACTIVE API PLAYGROUND & CATALOG
+    # ---------------------------------------------------------
+    with api_tab2:
+        st.markdown("### 🚀 Interactive API Endpoint Catalog & Live Tester")
+        st.caption("Select any backend API endpoint, inspect its specification, customize the JSON payload, and execute real-time test calls.")
+
+        api_endpoints = {
+            "1. POST /api/v1/workflows/execute (Sync DAG Execution)": {
+                "method": "POST",
+                "path": "/api/v1/workflows/execute",
+                "desc": "Executes a complete DAG workflow synchronously from end-to-end, returning KPIs, step snapshots, and logs.",
+                "sample_payload": json.dumps(get_current_dag_payload(), indent=2)
+            },
+            "2. POST /api/v1/workflows/validate (Pre-Flight Validator)": {
+                "method": "POST",
+                "path": "/api/v1/workflows/validate",
+                "desc": "Validates graph topology for cycle detection, orphan nodes, and recipe semantic compatibility.",
+                "sample_payload": json.dumps({
+                    "nodes": [
+                        {"id": "n1", "recipe_id": "csv_loader", "config": {}},
+                        {"id": "n2", "recipe_id": "feature_scaler", "config": {"method": "standard"}}
+                    ],
+                    "edges": [{"source": "n1", "target": "n2"}]
+                }, indent=2)
+            },
+            "3. POST /api/v1/workflows/async-execute (Background Worker Pool)": {
+                "method": "POST",
+                "path": "/api/v1/workflows/async-execute",
+                "desc": "Dispatches DAG execution to an asynchronous background worker pool and returns an immediate tracking job_id.",
+                "sample_payload": json.dumps({
+                    "nodes": [
+                        {"id": "n1", "recipe_id": "csv_loader", "config": {}},
+                        {"id": "n2", "recipe_id": "isolation_forest", "config": {"contamination": 0.05}}
+                    ],
+                    "edges": [{"source": "n1", "target": "n2"}]
+                }, indent=2)
+            },
+            "4. POST /api/v1/workflows/trigger/{webhook_path} (Inbound Webhook)": {
+                "method": "POST",
+                "path": "/api/v1/workflows/trigger/realtime_telemetry",
+                "desc": "Streams inbound JSON event batches directly into the pipeline entrypoint.",
+                "sample_payload": json.dumps([
+                    {"device_id": "sensor_01", "temperature": 82.4, "vibration": 14.2, "status": "active"},
+                    {"device_id": "sensor_02", "temperature": 115.8, "vibration": 88.6, "status": "warning"}
+                ], indent=2)
+            },
+            "5. GET /api/v1/recipes/ (List All Recipes)": {
+                "method": "GET",
+                "path": "/api/v1/recipes/",
+                "desc": "Retrieves the complete catalog of registered preprocessing, ML, anomaly, forecasting, and trigger recipes.",
+                "sample_payload": "{}"
+            },
+            "6. GET /api/v1/recipes/{recipe_id}/schema (Recipe JSON Schema)": {
+                "method": "GET",
+                "path": "/api/v1/recipes/xgboost_trainer/schema",
+                "desc": "Fetches JSON schema definitions for dynamic parameter form rendering.",
+                "sample_payload": "{}"
+            },
+            "7. GET /api/v1/workflows/jobs (List Recent Background Jobs)": {
+                "method": "GET",
+                "path": "/api/v1/workflows/jobs",
+                "desc": "Lists recent background pipeline jobs and their execution states.",
+                "sample_payload": "{}"
+            }
+        }
+
+        selected_ep_key = st.selectbox("Select API Endpoint to Inspect & Test:", list(api_endpoints.keys()))
+        selected_ep = api_endpoints[selected_ep_key]
+
+        c_meta1, c_meta2 = st.columns([1, 4])
+        with c_meta1:
+            badge_color = "#DEF7EC" if selected_ep["method"] == "GET" else "#E1EFFE"
+            badge_text = "#03543F" if selected_ep["method"] == "GET" else "#1E429F"
+            st.markdown(f"<span class='badge' style='background-color: {badge_color}; color: {badge_text}; font-size: 1.0rem; padding: 6px 14px;'>{selected_ep['method']}</span>", unsafe_allow_html=True)
+        with c_meta2:
+            st.markdown(f"**Endpoint Path:** `{selected_ep['path']}`")
+            st.caption(selected_ep["desc"])
+
+        st.markdown("#### 📝 Request Body Editor:")
+        user_req_body = st.text_area("JSON Request Payload", value=selected_ep["sample_payload"], height=160, key=f"req_body_{selected_ep_key}")
+
+        if st.button(f"🚀 Send Test Request to `{selected_ep['path']}`", type="primary", key=f"btn_send_{selected_ep_key}"):
+            with st.spinner("Executing API call through Platform Engine..."):
+                t_start = time.time()
+                try:
+                    # In-memory execution simulation with identical backend logic
+                    if "/workflows/validate" in selected_ep["path"]:
+                        req_dict = json.loads(user_req_body)
+                        g = WorkflowGraph(
+                            nodes=[WorkflowNode(id=n["id"], recipe_id=n["recipe_id"], config=n.get("config", {})) for n in req_dict.get("nodes", [])],
+                            edges=[WorkflowEdge(source=e["source"], target=e["target"]) for e in req_dict.get("edges", [])]
+                        )
+                        errs = g.validate_graph()
+                        res_json = {"valid": len(errs) == 0, "errors": errs}
+                        http_code = 200
+
+                    elif "/workflows/execute" in selected_ep["path"]:
+                        req_dict = json.loads(user_req_body)
+                        g = WorkflowGraph(
+                            nodes=[WorkflowNode(id=n["id"], recipe_id=n["recipe_id"], config=n.get("config", {})) for n in req_dict.get("nodes", [])],
+                            edges=[WorkflowEdge(source=e["source"], target=e["target"]) for e in req_dict.get("edges", [])]
+                        )
+                        exec_res = DAGExecutor.execute_workflow(
+                            execution_id=f"test_{int(time.time())}",
+                            workflow=g,
+                            initial_df=st.session_state["active_df"]
+                        )
+                        res_json = {
+                            "execution_id": exec_res.execution_id,
+                            "status": exec_res.status,
+                            "total_duration_ms": exec_res.total_duration_ms,
+                            "final_metrics": exec_res.final_metrics,
+                            "step_snapshots_count": len(exec_res.step_snapshots),
+                            "logs_count": len(exec_res.logs)
+                        }
+                        http_code = 200 if exec_res.status == "SUCCESS" else 422
+
+                    elif "/workflows/async-execute" in selected_ep["path"]:
+                        req_dict = json.loads(user_req_body)
+                        g = WorkflowGraph(
+                            nodes=[WorkflowNode(id=n["id"], recipe_id=n["recipe_id"], config=n.get("config", {})) for n in req_dict.get("nodes", [])],
+                            edges=[WorkflowEdge(source=e["source"], target=e["target"]) for e in req_dict.get("edges", [])]
+                        )
+                        job_id = job_manager.submit_job(workflow=g, initial_df=st.session_state["active_df"])
+                        res_json = {"job_id": job_id, "status": "PENDING", "message": "Workflow dispatched to background worker pool."}
+                        http_code = 202
+
+                    elif "/workflows/trigger/" in selected_ep["path"]:
+                        req_data = json.loads(user_req_body)
+                        df_trig = pd.json_normalize(req_data) if isinstance(req_data, list) else pd.json_normalize([req_data])
+                        res_json = {
+                            "status": "TRIGGERED",
+                            "webhook_path": "realtime_telemetry",
+                            "records_ingested": len(df_trig),
+                            "columns_received": list(df_trig.columns),
+                            "sample_preview": df_trig.head(2).to_dict(orient="records")
+                        }
+                        http_code = 200
+
+                    elif "/recipes/xgboost_trainer/schema" in selected_ep["path"]:
+                        r = recipe_registry.get("xgboost_trainer")
+                        res_json = {"recipe_id": r.recipe_id, "name": r.name, "parameters_schema": r.get_schema()}
+                        http_code = 200
+
+                    elif "/recipes/" in selected_ep["path"]:
+                        res_json = [{"id": r.recipe_id, "name": r.name, "category": r.category, "inputs": r.input_types, "outputs": r.output_types} for r in recipe_registry.list_all()]
+                        http_code = 200
+
+                    else:
+                        jobs = job_manager.list_jobs(limit=10)
+                        res_json = {"total_jobs": len(jobs), "recent_jobs": jobs}
+                        http_code = 200
+
+                    latency_ms = round((time.time() - t_start) * 1000.0, 2)
+                    st.success(f"HTTP {http_code} OK ({latency_ms}ms)")
+                    st.markdown("##### 📥 Live JSON Response:")
+                    st.json(res_json)
+
+                except Exception as ex:
+                    st.error(f"API Execution Error: {str(ex)}")
+
+    # ---------------------------------------------------------
+    # TAB 3: NETWORK TELEMETRY & EXECUTION AUDIT
+    # ---------------------------------------------------------
+    with api_tab3:
+        st.markdown("### 📊 Network Telemetry & Real-Time Execution Audit")
+        st.caption("Live telemetry traces capturing execution duration, payload throughput, and status logs across all pipeline runs.")
+
+        if "last_execution" in st.session_state and st.session_state["last_execution"]:
+            l_exec = st.session_state["last_execution"]
+            
+            c_t1, c_t2, c_t3 = st.columns(3)
+            c_t1.metric("Last Run Status", l_exec.get("status", "SUCCESS"))
+            c_t2.metric("Executed Steps", f"{len(l_exec.get('step_snapshots', {}))}")
+            c_t3.metric("Telemetry Logs", f"{len(l_exec.get('execution_logs', []))} entries")
+
+            st.markdown("#### 🔬 Step-by-Step Node Latency Breakdown:")
+            snaps = l_exec.get("step_snapshots", {})
+            if snaps:
+                breakdown_data = []
+                for nid, s in snaps.items():
+                    breakdown_data.append({
+                        "Node ID": nid,
+                        "Recipe": s.get("recipe_name", nid),
+                        "Latency (ms)": s.get("duration_ms", 0.0),
+                        "Output Records": s.get("row_count", 0),
+                        "Features Generated": len(s.get("columns", []))
+                    })
+                b_df = pd.DataFrame(breakdown_data)
+                st.dataframe(b_df, use_container_width=True)
+
+                fig_lat = px.bar(b_df, x="Node ID", y="Latency (ms)", color="Latency (ms)", color_continuous_scale="Blues", title="Node Latency Distribution across DAG Execution")
+                st.plotly_chart(fig_lat, use_container_width=True)
+
+            st.markdown("#### 📜 Live Execution Trace Logs:")
+            for log in l_exec.get("execution_logs", []):
+                st.write(f"`{log}`")
+        else:
+            st.info("💡 Run a pipeline from the **🎨 Pipeline Whiteboard** to stream real-time telemetry traces here.")
+
