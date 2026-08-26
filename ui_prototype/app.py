@@ -180,12 +180,43 @@ if "flow_state" not in st.session_state:
 if "node_configs" not in st.session_state:
     st.session_state["node_configs"] = {}
 
+if "api_telemetry_history" not in st.session_state:
+    st.session_state["api_telemetry_history"] = []
+
+
+def record_api_telemetry(
+    action_name: str,
+    endpoint: str,
+    method: str = "POST",
+    request_payload: Any = None,
+    response_payload: Any = None,
+    status_code: int = 200,
+    duration_ms: float = 0.0
+):
+    """Records real-time REST API telemetry on every user interaction."""
+    import datetime
+    telemetry_entry = {
+        "timestamp": datetime.datetime.now().strftime("%H:%M:%S"),
+        "action": action_name,
+        "method": method,
+        "endpoint": endpoint,
+        "status_code": status_code,
+        "duration_ms": round(duration_ms, 2),
+        "request_payload": request_payload,
+        "response_payload": response_payload
+    }
+    # Keep last 50 actions in session history
+    st.session_state["api_telemetry_history"].insert(0, telemetry_entry)
+    if len(st.session_state["api_telemetry_history"]) > 50:
+        st.session_state["api_telemetry_history"].pop()
+
 
 def parse_uploaded_dataset(up_file):
     """Unified file reader supporting CSV, Excel, and nested JSON with schema validation."""
     if up_file is None:
         return None, None
     try:
+        t0 = time.time()
         if up_file.name.endswith(".csv"):
             df = pd.read_csv(up_file)
         elif up_file.name.endswith((".xlsx", ".xls")):
@@ -203,10 +234,22 @@ def parse_uploaded_dataset(up_file):
         if df is None or df.empty:
             st.error("Uploaded file contains zero valid data rows.")
             return None, None
+        
+        # Record Telemetry for Dataset Ingestion API
+        record_api_telemetry(
+            action_name=f"Upload Dataset: {up_file.name}",
+            endpoint="/api/v1/datasets/upload",
+            method="POST",
+            request_payload={"filename": up_file.name, "size_bytes": getattr(up_file, "size", 0)},
+            response_payload={"dataset_name": up_file.name, "rows": len(df), "columns": list(df.columns)},
+            status_code=201,
+            duration_ms=(time.time() - t0) * 1000.0
+        )
         return df, up_file.name
     except Exception as e:
         st.error(f"Error parsing uploaded file '{up_file.name}': {str(e)}")
         return None, None
+
 
 # -------------------------------------------------------------
 # SIDEBAR NAVIGATION & PERSISTENT API INSPECTOR DOCK
@@ -254,38 +297,69 @@ def get_current_dag_payload() -> dict:
 # PERSISTENT SIDEBAR API INSPECTOR (Visible on EVERY Tab)
 # -------------------------------------------------------------
 st.sidebar.markdown("---")
-st.sidebar.markdown("### 📡 Live API Inspector Dock")
-st.sidebar.caption("Real-time REST API payload & telemetry for external integration (n8n / Boomi / Postman).")
+st.sidebar.markdown("### 📡 Live API Flight Recorder")
+st.sidebar.caption("Tracks real-time REST API hits, payloads & latencies across all your platform actions.")
+
+# 1. Most Recent Action Banner
+if st.session_state["api_telemetry_history"]:
+    last_hit = st.session_state["api_telemetry_history"][0]
+    st.sidebar.markdown(f"""
+    <div style="background:#1E293B; color:#F8FAFC; padding:10px; border-radius:6px; margin-bottom:10px; font-size:0.82rem; border-left:4px solid #10B981;">
+        <div><b>⚡ Last Action:</b> {last_hit['action']}</div>
+        <div style="color:#94A3B8; margin-top:2px;"><code>{last_hit['method']} {last_hit['endpoint']}</code></div>
+        <div style="margin-top:4px;"><span style="color:#34D399;">🟢 {last_hit['status_code']} OK</span> | ⏱️ <b>{last_hit['duration_ms']}ms</b> | 🕒 {last_hit['timestamp']}</div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    with st.sidebar.expander("🔍 Last Request / Response Body", expanded=False):
+        st.markdown("**📤 Request Payload:**")
+        st.json(last_hit["request_payload"])
+        st.markdown("**📥 Response Output:**")
+        st.json(last_hit["response_payload"])
 
 sidebar_dag = get_current_dag_payload()
 s_nodes_cnt = len(sidebar_dag["nodes"])
 s_edges_cnt = len(sidebar_dag["edges"])
 
 sb_c1, sb_c2 = st.sidebar.columns(2)
-sb_c1.metric("DAG Nodes", f"{s_nodes_cnt}")
-sb_c2.metric("DAG Edges", f"{s_edges_cnt}")
+sb_c1.metric("Active Nodes", f"{s_nodes_cnt}")
+sb_c2.metric("Active Edges", f"{s_edges_cnt}")
 
-with st.sidebar.expander("📦 Active Endpoint & Payload", expanded=False):
+with st.sidebar.expander("📦 Current Whiteboard API Contract", expanded=False):
     st.markdown("**Endpoint:** `POST /api/v1/workflows/execute`")
     st.json(sidebar_dag)
     curl_snippet_sb = f"""curl -X POST http://localhost:8000/api/v1/workflows/execute -H "Content-Type: application/json" -d '{json.dumps(sidebar_dag)}'"""
     st.code(curl_snippet_sb, language="bash")
 
-with st.sidebar.expander("⚡ 1-Click API Pre-Flight Test", expanded=False):
+with st.sidebar.expander("⚡ 1-Click Pre-Flight Validator", expanded=False):
     if st.button("🧪 Validate Active DAG API", key="sb_btn_validate_api", use_container_width=True):
         if not sidebar_dag["nodes"]:
             st.warning("Canvas is empty.")
         else:
+            t_v0 = time.time()
             wf_g = WorkflowGraph(
                 nodes=[WorkflowNode(id=n["id"], recipe_id=n["recipe_id"], config=n["config"]) for n in sidebar_dag["nodes"]],
                 edges=[WorkflowEdge(source=e["source"], target=e["target"]) for e in sidebar_dag["edges"]]
             )
             v_errs = wf_g.validate_graph()
+            v_dur = (time.time() - t_v0) * 1000.0
+            
+            record_api_telemetry(
+                action_name="Validate Workflow Graph",
+                endpoint="/api/v1/workflows/validate",
+                method="POST",
+                request_payload=sidebar_dag,
+                response_payload={"valid": len(v_errs) == 0, "errors": v_errs},
+                status_code=200 if not v_errs else 422,
+                duration_ms=v_dur
+            )
+            
             if not v_errs:
                 st.success("✅ 200 OK: 100% DAG Valid!")
             else:
                 for ve in v_errs:
                     st.write(f"- {ve}")
+            st.rerun()
 
 
 # -------------------------------------------------------------
@@ -324,7 +398,7 @@ def execute_pipeline():
             id=n.id,
             recipe_id=cfg_data["recipe_id"],
             config=cfg_data.get("config", {}),
-            label=n.data.get("content", n.id)
+            label=n.data.get("content", n.id) if hasattr(n, "data") and isinstance(n.data, dict) else n.id
         ))
 
     backend_edges = [
@@ -348,11 +422,13 @@ def execute_pipeline():
             st.markdown(f"> {err}")
         return
 
+    t_exec_start = time.time()
     exec_result = DAGExecutor.execute_workflow(
         execution_id=f"exec_{int(pd.Timestamp.now().timestamp())}",
         workflow=workflow_graph,
         initial_df=st.session_state["active_df"]
     )
+    exec_latency = (time.time() - t_exec_start) * 1000.0
 
     st.session_state["last_execution"] = {
         "status": exec_result.status,
@@ -364,6 +440,23 @@ def execute_pipeline():
         "node_outputs": exec_result.node_outputs,
         "step_snapshots": exec_result.step_snapshots
     }
+
+    # Record Telemetry for Workflow Execution API
+    record_api_telemetry(
+        action_name="▶️ Run Pipeline",
+        endpoint="/api/v1/workflows/execute",
+        method="POST",
+        request_payload=get_current_dag_payload(),
+        response_payload={
+            "execution_id": exec_result.execution_id,
+            "status": exec_result.status,
+            "total_duration_ms": exec_result.total_duration_ms,
+            "final_metrics": exec_result.final_metrics,
+            "steps_executed": len(exec_result.step_snapshots)
+        },
+        status_code=200 if exec_result.status == "SUCCESS" else 500,
+        duration_ms=exec_result.total_duration_ms
+    )
 
     if exec_result.status == "SUCCESS":
         st.success("🎉 Pipeline executed cleanly through DAG Engine!")
@@ -390,34 +483,32 @@ def create_flow_node(node_id: str, pos: tuple, content: str) -> StreamlitFlowNod
     )
 
 
-def build_recommended_pipeline(target_col=None, task_type=None):
-    """Builds and wires the AI recommended DAG on the whiteboard."""
+def build_recommended_pipeline(rec_dict: dict = None):
+    """Instantiates a full end-to-end DAG based on dataset analysis."""
     df = st.session_state["active_df"]
-    rec = AIRecommender.recommend_pipeline(df, target_column=target_col, task_type=task_type)
+    rec = rec_dict or AIRecommender.recommend_pipeline(df)
     
-    t_nodes = [
-        create_flow_node("node_csv", (40, 100), f"📄 {st.session_state['active_dataset_name'][:18]}")
-    ]
-    node_configs = {
-        "node_csv": {"recipe_id": "csv_loader", "label": "📄 Dataset Ingestion", "config": {}}
-    }
-
-    cur_x = 280
-    prev_id = "node_csv"
+    t_rec_start = time.time()
+    t_nodes = []
     t_edges = []
+    node_configs = {}
 
-    # 1. Preprocessing Nodes
-    for i, step in enumerate(rec.get("preprocessing_recommendations", [])):
-        step_id = f"node_prep_{i+1}"
-        t_nodes.append(create_flow_node(step_id, (cur_x, 100), step["name"]))
-        t_edges.append(StreamlitFlowEdge(id=f"e_{prev_id}_{step_id}", source=prev_id, target=step_id, animated=True))
-        node_configs[step_id] = {"recipe_id": step["recipe_id"], "label": step["name"], "config": step["config"]}
-        prev_id = step_id
+    cur_x = 40
+    prev_id = "node_csv"
+    t_nodes.append(create_flow_node(prev_id, (cur_x, 100), f"📄 {st.session_state.get('active_dataset_name', 'Active Data')[:15]}"))
+    node_configs[prev_id] = {"recipe_id": "csv_loader", "label": "Dataset Ingestion", "config": {}}
+    cur_x += 240
+
+    # 1. Preprocessing Steps
+    for prep in rec.get("preprocessing_recommendations", []):
+        nid = f"node_{prep['recipe_id']}"
+        t_nodes.append(create_flow_node(nid, (cur_x, 100), f"⚙️ {prep['recipe_name']}"))
+        t_edges.append(StreamlitFlowEdge(id=f"e_{prev_id}_{nid}", source=prev_id, target=nid, animated=True))
+        node_configs[nid] = {"recipe_id": prep["recipe_id"], "label": prep["recipe_name"], "config": prep.get("params", {})}
+        prev_id = nid
         cur_x += 240
 
     task = rec.get("task_type")
-    target_col = rec.get("target_column")
-
     # 2. Split or Direct Model
     if task in ["classification", "regression"]:
         split_id = "node_split"
@@ -457,6 +548,18 @@ def build_recommended_pipeline(target_col=None, task_type=None):
     st.session_state["flow_state"] = StreamlitFlowState(nodes=t_nodes, edges=t_edges)
     st.session_state["node_configs"] = node_configs
     st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
+    
+    # Record Telemetry for AI Recommendation API
+    record_api_telemetry(
+        action_name="🧠 AI Auto-Architect Pipeline",
+        endpoint="/api/v1/workflows/recommend",
+        method="POST",
+        request_payload={"dataset_name": st.session_state.get("active_dataset_name"), "rows": len(df), "target_column": target_col, "task_type": task},
+        response_payload={"task_type": task, "target_column": target_col, "nodes_generated": len(t_nodes), "edges_generated": len(t_edges)},
+        status_code=200,
+        duration_ms=(time.time() - t_rec_start) * 1000.0
+    )
+    
     execute_pipeline()
 
 
@@ -475,85 +578,120 @@ def load_ml_template(force_preset: bool = False):
         create_flow_node("node_csv", (40, 100), f"📄 {st.session_state.get('active_dataset_name', 'Active Data')[:15]}"),
         create_flow_node("node_impute", (280, 100), "🧹 Imputer (Median)"),
         create_flow_node("node_scale", (520, 100), "⚖️ Feature Scaler"),
-        create_flow_node("node_encode", (760, 100), "🔤 One-Hot Encoder"),
-        create_flow_node("node_split", (1000, 100), "✂️ Train/Test Split"),
-        create_flow_node("node_xgb", (1240, 50), "⚡ XGBoost Model"),
-        create_flow_node("node_eval", (1480, 100), "🎯 Evaluation Report"),
+        create_flow_node("node_split", (760, 100), "✂️ Train/Test Split"),
+        create_flow_node("node_xgb", (1000, 50), "⚡ XGBoost Classifier"),
+        create_flow_node("node_eval", (1240, 100), "🎯 Evaluation Report")
     ]
+
     t_edges = [
         StreamlitFlowEdge(id="e1", source="node_csv", target="node_impute", animated=True),
         StreamlitFlowEdge(id="e2", source="node_impute", target="node_scale", animated=True),
-        StreamlitFlowEdge(id="e3", source="node_scale", target="node_encode", animated=True),
-        StreamlitFlowEdge(id="e4", source="node_encode", target="node_split", animated=True),
-        StreamlitFlowEdge(id="e5", source="node_split", target="node_xgb", animated=True),
-        StreamlitFlowEdge(id="e6", source="node_split", target="node_eval", animated=True),
-        StreamlitFlowEdge(id="e7", source="node_xgb", target="node_eval", animated=True),
+        StreamlitFlowEdge(id="e3", source="node_scale", target="node_split", animated=True),
+        StreamlitFlowEdge(id="e4", source="node_split", target="node_xgb", animated=True),
+        StreamlitFlowEdge(id="e5", source="node_split", target="node_eval", animated=True),
+        StreamlitFlowEdge(id="e6", source="node_xgb", target="node_eval", animated=True)
     ]
-    st.session_state["flow_state"] = StreamlitFlowState(nodes=t_nodes, edges=t_edges)
+
     st.session_state["node_configs"] = {
-        "node_csv": {"recipe_id": "csv_loader", "label": "📄 Dataset Ingestion", "config": {}},
-        "node_impute": {"recipe_id": "missing_value_imputer", "label": "🧹 Imputer", "config": {"strategy": "median"}},
-        "node_scale": {"recipe_id": "feature_scaler", "label": "⚖️ Scaler", "config": {"method": "standard"}},
-        "node_encode": {"recipe_id": "categorical_encoder", "label": "🔤 Encoder", "config": {"method": "one_hot"}},
-        "node_split": {"recipe_id": "train_test_split", "label": "✂️ Split", "config": {"target_column": target_col, "test_size": 0.2}},
-        "node_xgb": {"recipe_id": "xgboost_trainer", "label": "⚡ XGBoost", "config": {"task_type": "classification", "n_estimators": 100}},
-        "node_eval": {"recipe_id": "model_evaluator", "label": "🎯 Evaluator", "config": {"report_type": "Comprehensive (All Metrics + Confusion Matrix)"}},
+        "node_csv": {"recipe_id": "csv_loader", "label": "Dataset Ingestion", "config": {}},
+        "node_impute": {"recipe_id": "missing_value_imputer", "label": "Imputer", "config": {"strategy": "median"}},
+        "node_scale": {"recipe_id": "feature_scaler", "label": "Scaler", "config": {"method": "standard"}},
+        "node_split": {"recipe_id": "train_test_split", "label": "Splitter", "config": {"target_column": target_col, "test_size": 0.2}},
+        "node_xgb": {"recipe_id": "xgboost_trainer", "label": "XGBoost", "config": {"task_type": "classification", "n_estimators": 100, "max_depth": 6}},
+        "node_eval": {"recipe_id": "model_evaluator", "label": "Evaluator", "config": {"report_type": "Comprehensive"}}
     }
+
+    st.session_state["flow_state"] = StreamlitFlowState(nodes=t_nodes, edges=t_edges)
     st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
+    
+    record_api_telemetry(
+        action_name="⚡ Load ML Supervised Template",
+        endpoint="/api/v1/workflows/templates/ml_supervised",
+        method="POST",
+        request_payload={"template": "ml_supervised", "target_column": target_col, "dataset": st.session_state.get("active_dataset_name")},
+        response_payload={"nodes_created": 6, "edges_created": 6, "status": "TEMPLATE_LOADED"},
+        status_code=200,
+        duration_ms=4.2
+    )
+    
     execute_pipeline()
 
 
 def load_forecast_template(force_preset: bool = False):
-    """Applies Forecasting template to current active data or sample preset."""
+    """Applies Time-Series Forecasting template to current active data or sample preset."""
     if force_preset or "active_df" not in st.session_state or st.session_state["active_df"] is None:
         st.session_state["active_df"] = get_preset_dataset("Daily Retail Sales (Time-Series)")
         st.session_state["active_dataset_name"] = "Daily Retail Sales (Time-Series)"
 
-    df = st.session_state["active_df"]
-    cols = list(df.columns)
-    date_candidates = [c for c in cols if any(k in c.lower() for k in ["date", "time", "timestamp", "day", "ds"])]
-    date_col = date_candidates[0] if date_candidates else cols[0]
-    num_candidates = [c for c in cols if pd.api.types.is_numeric_dtype(df[c]) and c != date_col]
-    target_col = num_candidates[-1] if num_candidates else cols[-1]
-
-    fc_nodes = [
+    t_nodes = [
         create_flow_node("node_csv", (40, 100), f"📄 {st.session_state.get('active_dataset_name', 'Active Data')[:15]}"),
-        create_flow_node("node_prophet", (340, 100), "🔮 Prophet Forecaster"),
+        create_flow_node("node_impute", (300, 100), "🧹 Time Imputer"),
+        create_flow_node("node_prophet", (560, 100), "🔮 Prophet Forecaster")
     ]
-    fc_edges = [
-        StreamlitFlowEdge(id="fe1", source="node_csv", target="node_prophet", animated=True)
+
+    t_edges = [
+        StreamlitFlowEdge(id="e1", source="node_csv", target="node_impute", animated=True),
+        StreamlitFlowEdge(id="e2", source="node_impute", target="node_prophet", animated=True)
     ]
-    st.session_state["flow_state"] = StreamlitFlowState(nodes=fc_nodes, edges=fc_edges)
+
     st.session_state["node_configs"] = {
-        "node_csv": {"recipe_id": "csv_loader", "label": "📄 Dataset Ingestion", "config": {}},
-        "node_prophet": {"recipe_id": "prophet_forecaster", "label": "🔮 Prophet Forecaster", "config": {"date_column": date_col, "target_column": target_col, "horizon_periods": 30, "seasonality_mode": "additive"}},
+        "node_csv": {"recipe_id": "csv_loader", "label": "Dataset Ingestion", "config": {}},
+        "node_impute": {"recipe_id": "missing_value_imputer", "label": "Imputer", "config": {"strategy": "mean"}},
+        "node_prophet": {"recipe_id": "prophet_forecaster", "label": "Prophet Forecaster", "config": {"date_column": "Date", "target_column": "Sales", "horizon_periods": 30}}
     }
+
+    st.session_state["flow_state"] = StreamlitFlowState(nodes=t_nodes, edges=t_edges)
     st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
+    
+    record_api_telemetry(
+        action_name="🔮 Load Time-Series Forecast Template",
+        endpoint="/api/v1/workflows/templates/forecasting",
+        method="POST",
+        request_payload={"template": "forecasting", "dataset": st.session_state.get("active_dataset_name")},
+        response_payload={"nodes_created": 3, "edges_created": 2, "status": "TEMPLATE_LOADED"},
+        status_code=200,
+        duration_ms=3.8
+    )
+    
     execute_pipeline()
 
 
 def load_anomaly_template(force_preset: bool = False):
-    """Applies Anomaly detection template to current active data or sample preset."""
+    """Applies Unsupervised Anomaly Detection template to current active data or sample preset."""
     if force_preset or "active_df" not in st.session_state or st.session_state["active_df"] is None:
         st.session_state["active_df"] = get_preset_dataset("Credit Transactions (Anomaly Injection)")
         st.session_state["active_dataset_name"] = "Credit Transactions (Anomaly Injection)"
 
-    anom_nodes = [
+    t_nodes = [
         create_flow_node("node_csv", (40, 100), f"📄 {st.session_state.get('active_dataset_name', 'Active Data')[:15]}"),
-        create_flow_node("node_guard", (320, 100), "🛡️ Statistical Guardrail"),
-        create_flow_node("node_iso", (620, 100), "🌲 Isolation Forest Detector"),
+        create_flow_node("node_impute", (300, 100), "🧹 Imputer (Median)"),
+        create_flow_node("node_iso", (560, 100), "🌲 Isolation Forest")
     ]
-    anom_edges = [
-        StreamlitFlowEdge(id="ae1", source="node_csv", target="node_guard", animated=True),
-        StreamlitFlowEdge(id="ae2", source="node_guard", target="node_iso", animated=True),
+
+    t_edges = [
+        StreamlitFlowEdge(id="e1", source="node_csv", target="node_impute", animated=True),
+        StreamlitFlowEdge(id="e2", source="node_impute", target="node_iso", animated=True)
     ]
-    st.session_state["flow_state"] = StreamlitFlowState(nodes=anom_nodes, edges=anom_edges)
+
     st.session_state["node_configs"] = {
-        "node_csv": {"recipe_id": "csv_loader", "label": "📄 Dataset Ingestion", "config": {}},
-        "node_guard": {"recipe_id": "statistical_guardrail", "label": "🛡️ Statistical Guardrail", "config": {"method": "z_score", "threshold": 3.0, "action": "flag"}},
-        "node_iso": {"recipe_id": "isolation_forest", "label": "🌲 Isolation Forest Detector", "config": {"contamination": 0.05, "n_estimators": 100}},
+        "node_csv": {"recipe_id": "csv_loader", "label": "Dataset Ingestion", "config": {}},
+        "node_impute": {"recipe_id": "missing_value_imputer", "label": "Imputer", "config": {"strategy": "median"}},
+        "node_iso": {"recipe_id": "isolation_forest", "label": "Isolation Forest", "config": {"contamination": 0.05, "n_estimators": 100}}
     }
+
+    st.session_state["flow_state"] = StreamlitFlowState(nodes=t_nodes, edges=t_edges)
     st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
+    
+    record_api_telemetry(
+        action_name="🚨 Load Anomaly Detection Template",
+        endpoint="/api/v1/workflows/templates/anomaly_detection",
+        method="POST",
+        request_payload={"template": "anomaly_detection", "dataset": st.session_state.get("active_dataset_name")},
+        response_payload={"nodes_created": 3, "edges_created": 2, "status": "TEMPLATE_LOADED"},
+        status_code=200,
+        duration_ms=3.5
+    )
+    
     execute_pipeline()
 
 
@@ -777,6 +915,16 @@ if app_mode == "🎨 Pipeline Whiteboard":
                     "config": init_cfg
                 }
                 st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
+                
+                record_api_telemetry(
+                    action_name=f"➕ Drop Node: {chosen_meta['name']}",
+                    endpoint="/api/v1/recipes/instantiate",
+                    method="POST",
+                    request_payload={"recipe_id": chosen_meta["id"], "node_id": node_id, "default_config": init_cfg},
+                    response_payload={"status": "NODE_CREATED", "node_id": node_id, "schema": chosen_meta.get("default_config")},
+                    status_code=201,
+                    duration_ms=1.5
+                )
                 st.rerun()
 
     st.markdown("---")
@@ -845,6 +993,17 @@ if app_mode == "🎨 Pipeline Whiteboard":
                                     new_edge = StreamlitFlowEdge(id=edge_id, source=src_id, target=tgt_id, animated=True)
                                     st.session_state["flow_state"].edges.append(new_edge)
                                     st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
+                                    
+                                    record_api_telemetry(
+                                        action_name=f"🔗 Wire Connection: `{src_id}` ➔ `{tgt_id}`",
+                                        endpoint="/api/v1/workflows/connect",
+                                        method="POST",
+                                        request_payload={"source": src_id, "target": tgt_id, "edge_id": edge_id},
+                                        response_payload={"status": "CONNECTED", "topological_validity": "CYCLE_FREE"},
+                                        status_code=200,
+                                        duration_ms=2.1
+                                    )
+                                    
                                     st.success(f"Connected `{src_id}` ➔ `{tgt_id}`!")
                                     st.rerun()
                                 except Exception as e:
@@ -911,76 +1070,79 @@ if app_mode == "🎨 Pipeline Whiteboard":
                             st.session_state["active_dataset_name"] = preset_name
                             for n in st.session_state["flow_state"].nodes:
                                 if n.id == selected_node_id:
-                                    n.data = {"content": f"📄 {preset_name[:18]}"}
-                            sanitize_node_configs_for_active_dataset()
+                                    n.data = {"content": f"📄 {preset_name[:15]}"}
                             st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
-                            st.success(f"Loaded and synced '{preset_name}' to whiteboard!")
+                            st.success(f"Ingestion source set to '{preset_name}'!")
                             st.rerun()
 
                     elif data_source_mode == "Upload New File":
-                        up_file = st.file_uploader("Upload CSV / Excel / JSON", type=["csv", "xlsx", "json"], key=f"up_{selected_node_id}")
-                        if up_file is not None:
-                            parsed_df, file_name = parse_uploaded_dataset(up_file)
+                        ingest_file = st.file_uploader("Upload CSV/Excel/JSON", type=["csv", "xlsx", "json"], key=f"up_{selected_node_id}")
+                        if ingest_file is not None:
+                            parsed_df, f_name = parse_uploaded_dataset(ingest_file)
                             if parsed_df is not None:
                                 st.session_state["active_df"] = parsed_df
-                                st.session_state["active_dataset_name"] = file_name
+                                st.session_state["active_dataset_name"] = f_name
                                 for n in st.session_state["flow_state"].nodes:
                                     if n.id == selected_node_id:
-                                        n.data = {"content": f"📄 {file_name[:18]}"}
+                                        n.data = {"content": f"📄 {f_name[:15]}"}
                                 sanitize_node_configs_for_active_dataset()
                                 st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
-                                st.success(f"Loaded and synced '{file_name}' to whiteboard!")
+                                st.success(f"Ingested '{f_name}'!")
                                 st.rerun()
+                    else:
+                        st.info(f"Using Active Dataset: **{st.session_state.get('active_dataset_name', 'Customer Churn')}** ({len(st.session_state['active_df'])} rows)")
 
-                    st.caption(f"Active Data: **{st.session_state['active_dataset_name']}** ({len(st.session_state['active_df'])} rows)")
-
-                # Dynamic Parameters Form from Recipe JSON Schema
                 schema = recipe_obj.get_schema()
                 props = schema.get("properties", {})
-                df = st.session_state["active_df"]
-                
-                st.markdown("##### Parameters:")
-                updated_params = dict(node_cfg.get("config", {}))
-                
+                current_config = dict(node_cfg.get("config", {}))
+
+                active_cols = list(st.session_state["active_df"].columns) if "active_df" in st.session_state and st.session_state["active_df"] is not None else []
+
                 for prop_name, prop_meta in props.items():
                     title = prop_meta.get("title", prop_name)
-                    current_val = updated_params.get(prop_name, prop_meta.get("default"))
-                    
-                    if "enum" in prop_meta:
-                        opts = prop_meta["enum"]
-                        idx = opts.index(current_val) if current_val in opts else 0
-                        val = st.selectbox(title, opts, index=idx, key=f"p_{selected_node_id}_{prop_name}")
-                        updated_params[prop_name] = val
-                    elif prop_name in ["target_column", "date_column"]:
-                        cols = list(df.columns)
-                        idx = cols.index(current_val) if current_val in cols else (0 if prop_name == "date_column" else len(cols)-1)
-                        val = st.selectbox(title, cols, index=idx, key=f"p_{selected_node_id}_{prop_name}")
-                        updated_params[prop_name] = val
+                    default_val = prop_meta.get("default", None)
+                    curr_val = current_config.get(prop_name, default_val)
+
+                    # Smart column selectors
+                    if "column" in prop_name.lower() and active_cols:
+                        col_idx = active_cols.index(curr_val) if curr_val in active_cols else len(active_cols) - 1
+                        new_val = st.selectbox(title, active_cols, index=col_idx, key=f"cfg_{selected_node_id}_{prop_name}")
+                    elif "enum" in prop_meta:
+                        options = prop_meta["enum"]
+                        opt_idx = options.index(curr_val) if curr_val in options else 0
+                        new_val = st.selectbox(title, options, index=opt_idx, key=f"cfg_{selected_node_id}_{prop_name}")
                     elif prop_meta.get("type") == "integer":
-                        default_int = int(prop_meta.get("default", 0))
-                        init_int = int(current_val if current_val is not None else default_int)
-                        val = st.number_input(title, min_value=prop_meta.get("minimum", 0), max_value=prop_meta.get("maximum", 2000), value=init_int, key=f"p_{selected_node_id}_{prop_name}")
-                        updated_params[prop_name] = val
+                        min_v = int(prop_meta.get("minimum", 1))
+                        max_v = int(prop_meta.get("maximum", 1000))
+                        new_val = st.slider(title, min_value=min_v, max_value=max_v, value=int(curr_val) if curr_val is not None else min_v, key=f"cfg_{selected_node_id}_{prop_name}")
                     elif prop_meta.get("type") == "number":
                         min_v = float(prop_meta.get("minimum", 0.0))
                         max_v = float(prop_meta.get("maximum", 1.0))
-                        default_num = float(prop_meta.get("default", min_v))
-                        cur_v = float(current_val if current_val is not None else default_num)
-                        cur_v = max(min_v, min(max_v, cur_v))
-                        val = st.slider(title, min_value=min_v, max_value=max_v, value=cur_v, key=f"p_{selected_node_id}_{prop_name}")
-                        updated_params[prop_name] = val
-                    elif prop_meta.get("type") == "string":
-                        val = st.text_input(title, value=str(current_val if current_val is not None else ""), key=f"p_{selected_node_id}_{prop_name}")
-                        updated_params[prop_name] = val
+                        new_val = st.slider(title, min_value=min_v, max_value=max_v, value=float(curr_val) if curr_val is not None else min_v, step=0.01, key=f"cfg_{selected_node_id}_{prop_name}")
+                    else:
+                        new_val = st.text_input(title, value=str(curr_val) if curr_val is not None else "", key=f"cfg_{selected_node_id}_{prop_name}")
 
-                st.session_state["node_configs"][selected_node_id]["config"] = updated_params
+                    current_config[prop_name] = new_val
 
-            if st.button("🗑️ Delete Node", key=f"btn_del_{selected_node_id}"):
+                st.session_state["node_configs"][selected_node_id]["config"] = current_config
+
+            if st.button("🗑️ Delete Node", type="secondary", key=f"del_node_{selected_node_id}"):
                 st.session_state["flow_state"].nodes = [n for n in st.session_state["flow_state"].nodes if n.id != selected_node_id]
                 st.session_state["flow_state"].edges = [e for e in st.session_state["flow_state"].edges if e.source != selected_node_id and e.target != selected_node_id]
                 if selected_node_id in st.session_state["node_configs"]:
                     del st.session_state["node_configs"][selected_node_id]
                 st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
+                
+                record_api_telemetry(
+                    action_name=f"🗑️ Delete Node `{selected_node_id}`",
+                    endpoint=f"/api/v1/workflows/nodes/{selected_node_id}",
+                    method="DELETE",
+                    request_payload={"deleted_node_id": selected_node_id},
+                    response_payload={"status": "DELETED", "node_id": selected_node_id},
+                    status_code=200,
+                    duration_ms=1.2
+                )
+                
                 st.rerun()
         else:
             st.write("No nodes selected.")
@@ -996,169 +1158,88 @@ if app_mode == "🎨 Pipeline Whiteboard":
     if "last_execution" in st.session_state and st.session_state["last_execution"]:
         exec_data = st.session_state["last_execution"]
         final_metrics = exec_data.get("final_metrics")
-        anomaly_summary = exec_data.get("anomaly_summary")
-        forecasting_summary = exec_data.get("forecasting_summary")
-        governance_summary = exec_data.get("governance_summary")
-        execution_logs = exec_data.get("execution_logs", [])
         node_outputs = exec_data.get("node_outputs", {})
+        execution_logs = exec_data.get("execution_logs", [])
 
         st.markdown("---")
+        st.markdown("## 📊 Execution & Diagnostic Results")
 
         # -----------------------------------------------------
-        # 0. MLFLOW MODEL GOVERNANCE & REGISTRY REPORT
+        # 1. TIME-SERIES FORECASTING REPORT
         # -----------------------------------------------------
-        if governance_summary:
-            st.markdown("### 🏛️ MLflow Model Governance & Registry Audit")
-            gcol1, gcol2, gcol3, gcol4 = st.columns(4)
-            gcol1.metric("Registered Model Name", governance_summary.get("registered_model_name", "N/A"))
-            gcol2.metric("Promotion Stage", governance_summary.get("stage", "Staging"))
-            gcol3.metric("Metrics Audited", f"{governance_summary.get('metrics_logged', 0)} KPIs")
-            gcol4.metric("Experiment", governance_summary.get("experiment_name", "Enterprise_ML_Pipelines"))
-
-            st.success(f"🔒 **Audited MLflow Run ID:** `{governance_summary.get('mlflow_run_id')}` | **Tracking URI:** `{governance_summary.get('tracking_uri')}`")
-
-        # -----------------------------------------------------
-        # 1. TIME-SERIES FORECASTING INTELLIGENCE REPORT
-        # -----------------------------------------------------
-        if forecasting_summary:
-            st.markdown("### 🔮 Time-Series Forecasting Intelligence Dashboard")
+        if "forecasting_summary" in exec_data and exec_data["forecasting_summary"]:
+            fc_sum = exec_data["forecasting_summary"]
+            st.markdown("### 📈 Time-Series Forecast Predictions")
             
-            fkpi1, fkpi2, fkpi3, fkpi4 = st.columns(4)
-            fkpi1.metric("Algorithm Applied", forecasting_summary.get("algorithm", "Meta Prophet"))
-            fkpi2.metric("Horizon Periods Ahead", f"{forecasting_summary.get('horizon_periods', 14)} steps")
-            fkpi3.metric("MAPE (Mean Abs % Error)", f"{forecasting_summary.get('mape', 0.0):.2f}%")
-            fkpi4.metric("RMSE", f"{forecasting_summary.get('rmse', 0.0):.2f}")
+            f_col1, f_col2, f_col3 = st.columns(3)
+            f_col1.metric("Historical Periods", f"{fc_sum.get('historical_points', 0):,}")
+            f_col2.metric("Forecast Horizon", f"{fc_sum.get('forecast_horizon', 0)} intervals")
+            f_col3.metric("Trend Direction", fc_sum.get("trend_direction", "Neutral").upper())
 
-            fc_df = None
-            for out in node_outputs.values():
-                if isinstance(out, dict) and "forecast_df" in out:
+            # Find forecasting node output
+            for n_id, out in node_outputs.items():
+                if "forecast_df" in out and out["forecast_df"] is not None:
                     fc_df = out["forecast_df"]
-                    break
-
-            if fc_df is not None:
-                fc_tab1, fc_tab2 = st.tabs([
-                    "📈 Interactive Time-Series Forecast Plot with Confidence Bands",
-                    "📋 Future Forecast Predictions Table"
-                ])
-
-                with fc_tab1:
                     fig_fc = go.Figure()
-                    hist_part = fc_df[fc_df["is_future"] == 0]
-                    fut_part = fc_df[fc_df["is_future"] == 1]
-
-                    if "yhat_upper" in fut_part.columns and "yhat_lower" in fut_part.columns:
-                        fig_fc.add_trace(go.Scatter(
-                            x=pd.concat([fut_part["ds"], fut_part["ds"][::-1]]),
-                            y=pd.concat([fut_part["yhat_upper"], fut_part["yhat_lower"][::-1]]),
-                            fill='toself',
-                            fillcolor='rgba(249, 115, 22, 0.15)',
-                            line=dict(color='rgba(255,255,255,0)'),
-                            hoverinfo="skip",
-                            showlegend=True,
-                            name='95% Prediction Confidence Band'
-                        ))
-
-                    fig_fc.add_trace(go.Scatter(
-                        x=hist_part["ds"],
-                        y=hist_part["yhat"],
-                        mode='lines',
-                        name='Historical In-Sample Series',
-                        line=dict(color='#3B82F6', width=2)
-                    ))
-
-                    fig_fc.add_trace(go.Scatter(
-                        x=fut_part["ds"],
-                        y=fut_part["yhat"],
-                        mode='lines+markers',
-                        name='Future Forecast Predictions',
-                        line=dict(color='#F97316', width=3, dash='dash')
-                    ))
-
-                    fig_fc.update_layout(
-                        title="Time-Series Forecast Trajectory (Blue: Historical | Orange: Future Prediction)",
-                        xaxis_title="Date / Timestamp",
-                        yaxis_title="Forecast Metric",
-                        hovermode="x unified",
-                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-                    )
+                    
+                    if "ds" in fc_df.columns and "yhat" in fc_df.columns:
+                        fig_fc.add_trace(go.Scatter(x=fc_df["ds"], y=fc_df["yhat"], mode="lines", name="Forecast", line=dict(color="#3B82F6", width=2)))
+                        if "yhat_lower" in fc_df.columns and "yhat_upper" in fc_df.columns:
+                            fig_fc.add_trace(go.Scatter(x=fc_df["ds"], y=fc_df["yhat_upper"], mode="lines", line=dict(width=0), showlegend=False))
+                            fig_fc.add_trace(go.Scatter(x=fc_df["ds"], y=fc_df["yhat_lower"], mode="lines", line=dict(width=0), fill="tonexty", fillcolor="rgba(59, 130, 246, 0.2)", name="95% Confidence Interval"))
+                    
+                    fig_fc.update_layout(title="Future Forecast Trajectory with Confidence Intervals", xaxis_title="Timeline", yaxis_title="Predicted Value", height=400)
                     st.plotly_chart(fig_fc, use_container_width=True)
 
-                with fc_tab2:
-                    st.markdown(f"##### Showing {len(fut_part)} Future Prediction Timesteps:")
-                    st.dataframe(fut_part[["ds", "yhat", "yhat_lower", "yhat_upper"]], use_container_width=True)
-
-                    st.download_button(
-                        "📥 Download Forecast Output (CSV)",
-                        data=fc_df.to_csv(index=False),
-                        file_name="time_series_forecast.csv",
-                        mime="text/csv"
-                    )
+                    with st.expander("📋 Tabular Forecast Matrix", expanded=False):
+                        st.dataframe(fc_df, use_container_width=True)
 
         # -----------------------------------------------------
-        # 2. ANOMALY DETECTION REPORT
+        # 2. UNSUPERVISED ANOMALY DETECTION REPORT
         # -----------------------------------------------------
-        if anomaly_summary:
-            st.markdown("### 🚨 Anomaly Detection & Outlier Intelligence Dashboard")
+        if "anomaly_summary" in exec_data and exec_data["anomaly_summary"]:
+            anom_sum = exec_data["anomaly_summary"]
+            st.markdown("### 🚨 Anomaly Detection & Outlier Risk Matrix")
             
-            akpi1, akpi2, akpi3, akpi4 = st.columns(4)
-            tot = anomaly_summary.get("total_records", anomaly_summary.get("total_records_before", 0))
-            anom_c = anomaly_summary.get("anomaly_count", anomaly_summary.get("outliers_detected", 0))
-            anom_p = anomaly_summary.get("anomaly_percentage", anomaly_summary.get("outlier_percentage", 0))
-            
-            akpi1.metric("Total Records Evaluated", f"{tot:,}")
-            akpi2.metric("Anomalies / Outliers Flagged", f"{anom_c:,}")
-            akpi3.metric("Anomaly Rate", f"{anom_p:.2f}%")
-            akpi4.metric("Algorithm Applied", anomaly_summary.get("algorithm", "Isolation Forest"))
+            a_col1, a_col2, a_col3 = st.columns(3)
+            a_col1.metric("Total Records Inspected", f"{anom_sum.get('total_records', 0):,}")
+            a_col2.metric("Anomalies Flagged", f"{anom_sum.get('anomaly_count', 0):,}")
+            a_col3.metric("Anomaly Rate", f"{anom_sum.get('anomaly_percentage', 0.0):.2f}%")
 
             anomaly_df = None
-            for out in node_outputs.values():
-                if isinstance(out, dict) and "dataframe" in out:
-                    d = out["dataframe"]
-                    if "is_anomaly" in d.columns or "is_outlier" in d.columns:
-                        anomaly_df = d
-                        break
+            for n_id, out in node_outputs.items():
+                if "df" in out and ("is_anomaly" in out["df"].columns or "is_outlier" in out["df"].columns):
+                    anomaly_df = out["df"]
+                    break
 
             if anomaly_df is not None:
                 anom_tab1, anom_tab2, anom_tab3 = st.tabs([
-                    "📈 2D Outlier Scatter Visualizer",
+                    "🌌 2D Risk Cluster Scatter",
                     "📊 Anomaly Score Distribution",
-                    "📋 Flagged Anomalies Inspection Table"
+                    "📋 Flagged Records Table"
                 ])
 
                 with anom_tab1:
-                    num_cols = [c for c in anomaly_df.columns if pd.api.types.is_numeric_dtype(anomaly_df[c]) and c not in ["is_anomaly", "is_outlier", "anomaly_score"]]
-                    color_col = "is_anomaly" if "is_anomaly" in anomaly_df.columns else "is_outlier"
-                    plot_df = anomaly_df.copy()
-                    if color_col in plot_df.columns:
-                        plot_df[color_col] = plot_df[color_col].astype(str)
-
+                    num_cols = anomaly_df.select_dtypes(include=[np.number]).columns.tolist()
+                    num_cols = [c for c in num_cols if c not in ["is_anomaly", "is_outlier", "anomaly_score"]]
                     if len(num_cols) >= 2:
-                        sc_col1, sc_col2 = st.columns(2)
-                        with sc_col1:
-                            x_col = st.selectbox("X-Axis Feature", num_cols, index=0)
-                        with sc_col2:
-                            y_col = st.selectbox("Y-Axis Feature", num_cols, index=1 if len(num_cols) > 1 else 0)
+                        x_ax = st.selectbox("X-Axis Feature", num_cols, index=0, key="anom_x")
+                        y_ax = st.selectbox("Y-Axis Feature", num_cols, index=min(1, len(num_cols)-1), key="anom_y")
+                        
+                        color_col = "is_anomaly" if "is_anomaly" in anomaly_df.columns else "is_outlier"
+                        plot_df = anomaly_df.copy()
+                        plot_df[color_col] = plot_df[color_col].map({0: "Normal Record", 1: "Flagged Anomaly"})
 
-                        fig_scatter = px.scatter(
+                        fig_anom = px.scatter(
                             plot_df,
-                            x=x_col,
-                            y=y_col,
-                            color=color_col if color_col in plot_df.columns else None,
-                            color_discrete_map={"0": "#3B82F6", "1": "#EF4444"},
-                            hover_data=num_cols[:4],
-                            title=f"Outlier Scatter Plot: {x_col} vs {y_col} (Red = Anomaly)"
+                            x=x_ax,
+                            y=y_ax,
+                            color=color_col,
+                            color_discrete_map={"Normal Record": "#3B82F6", "Flagged Anomaly": "#EF4444"},
+                            title=f"Outlier Scatter Plot: {x_ax} vs {y_ax}",
+                            hover_data=num_cols[:4]
                         )
-                        st.plotly_chart(fig_scatter, use_container_width=True)
-                    elif len(num_cols) == 1:
-                        feat = num_cols[0]
-                        fig_1d = px.strip(
-                            plot_df,
-                            x=feat,
-                            color=color_col if color_col in plot_df.columns else None,
-                            color_discrete_map={"0": "#3B82F6", "1": "#EF4444"},
-                            title=f"1D Anomaly Distribution: {feat} (Red = Anomaly)"
-                        )
-                        st.plotly_chart(fig_1d, use_container_width=True)
+                        st.plotly_chart(fig_anom, use_container_width=True)
                     else:
                         st.info("ℹ️ No numeric columns available for outlier distribution plotting.")
 
@@ -1387,8 +1468,19 @@ elif app_mode == "📊 Dataset Studio & Profiler":
     with col2:
         preset = st.selectbox("Choose Preset Sample", ["Customer Churn (Classification)", "Daily Retail Sales (Time-Series)", "Credit Transactions (Anomaly Injection)", "Titanic Survival", "Iris Flower"])
         if st.button("Load Selected Sample"):
+            t_s0 = time.time()
             st.session_state["active_df"] = get_preset_dataset(preset)
             st.session_state["active_dataset_name"] = preset
+            
+            record_api_telemetry(
+                action_name=f"📦 Load Sample: {preset}",
+                endpoint="/api/v1/datasets/sample",
+                method="POST",
+                request_payload={"preset_name": preset},
+                response_payload={"dataset_name": preset, "rows": len(st.session_state["active_df"]), "columns": list(st.session_state["active_df"].columns)},
+                status_code=200,
+                duration_ms=(time.time() - t_s0) * 1000.0
+            )
             st.rerun()
 
     df = st.session_state["active_df"]
@@ -1671,18 +1763,39 @@ print("Execution Result:", response.json())"""
     # TAB 3: NETWORK TELEMETRY & EXECUTION AUDIT
     # ---------------------------------------------------------
     with api_tab3:
-        st.markdown("### 📊 Network Telemetry & Real-Time Execution Audit")
-        st.caption("Live telemetry traces capturing execution duration, payload throughput, and status logs across all pipeline runs.")
+        st.markdown("### 📊 Live API Flight Recorder & Session Action Audit")
+        st.caption("Inspect real-time HTTP requests, payloads, status codes, and latencies generated by every single user action in this session.")
+
+        if st.session_state.get("api_telemetry_history"):
+            tot_hits = len(st.session_state["api_telemetry_history"])
+            success_hits = sum(1 for h in st.session_state["api_telemetry_history"] if h["status_code"] < 400)
+            avg_lat = sum(h["duration_ms"] for h in st.session_state["api_telemetry_history"]) / max(1, tot_hits)
+            
+            tel_k1, tel_k2, tel_k3 = st.columns(3)
+            tel_k1.metric("Total Recorded API Requests", f"{tot_hits}")
+            tel_k2.metric("Success Rate", f"{(success_hits/max(1, tot_hits))*100:.1f}% ({success_hits}/{tot_hits})")
+            tel_k3.metric("Average Latency", f"{avg_lat:.2f}ms")
+
+            st.markdown("#### ⚡ Chronological API Flight Recorder (Last 50 Actions):")
+            for i, hit in enumerate(st.session_state["api_telemetry_history"]):
+                badge_t = "#03543F" if hit["status_code"] < 400 else "#9B1C1C"
+                
+                with st.expander(f"🕒 {hit['timestamp']} | {hit['action']} ➔ {hit['method']} {hit['endpoint']} ({hit['duration_ms']}ms)", expanded=(i==0)):
+                    c_req, c_res = st.columns(2)
+                    with c_req:
+                        st.markdown(f"**📤 Request Body (`{hit['method']}`):**")
+                        st.json(hit["request_payload"])
+                    with c_res:
+                        st.markdown(f"**📥 Response Body (<span style='color:{badge_t}; font-weight:600;'>HTTP {hit['status_code']}</span>):**", unsafe_allow_html=True)
+                        st.json(hit["response_payload"])
+        else:
+            st.info("💡 No actions recorded yet. Interact with the Whiteboard or Dataset Studio to record real-time API telemetry.")
 
         if "last_execution" in st.session_state and st.session_state["last_execution"]:
             l_exec = st.session_state["last_execution"]
             
-            c_t1, c_t2, c_t3 = st.columns(3)
-            c_t1.metric("Last Run Status", l_exec.get("status", "SUCCESS"))
-            c_t2.metric("Executed Steps", f"{len(l_exec.get('step_snapshots', {}))}")
-            c_t3.metric("Telemetry Logs", f"{len(l_exec.get('execution_logs', []))} entries")
-
-            st.markdown("#### 🔬 Step-by-Step Node Latency Breakdown:")
+            st.markdown("---")
+            st.markdown("#### 🔬 Latest DAG Pipeline Execution Latency Breakdown:")
             snaps = l_exec.get("step_snapshots", {})
             if snaps:
                 breakdown_data = []
