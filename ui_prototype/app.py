@@ -209,13 +209,27 @@ def parse_uploaded_dataset(up_file):
         return None, None
 
 # -------------------------------------------------------------
-# SIDEBAR NAVIGATION
+# SIDEBAR NAVIGATION & PERSISTENT API INSPECTOR DOCK
 # -------------------------------------------------------------
 st.sidebar.title("⚡ AI/ML Pipeline Studio")
 app_mode = st.sidebar.radio(
     "Navigation",
     ["🎨 Pipeline Whiteboard", "📊 Dataset Studio & Profiler", "🧩 Recipe Catalog", "🌐 API & Telemetry Inspector"]
 )
+
+
+def get_node_position(n) -> tuple:
+    """Safely extracts (x, y) coordinates from any StreamlitFlowNode representation."""
+    pos_val = getattr(n, "position", None)
+    if pos_val is None:
+        pos_val = getattr(n, "pos", (0, 0))
+    if isinstance(pos_val, (list, tuple)) and len(pos_val) >= 2:
+        return (float(pos_val[0]), float(pos_val[1]))
+    elif isinstance(pos_val, dict):
+        return (float(pos_val.get("x", 0)), float(pos_val.get("y", 0)))
+    elif hasattr(pos_val, "x") and hasattr(pos_val, "y"):
+        return (float(pos_val.x), float(pos_val.y))
+    return (0.0, 0.0)
 
 
 def get_current_dag_payload() -> dict:
@@ -227,13 +241,51 @@ def get_current_dag_payload() -> dict:
             "id": n.id,
             "recipe_id": cfg.get("recipe_id", "csv_loader"),
             "config": cfg.get("config", {}),
-            "label": n.data.get("content", n.id)
+            "label": n.data.get("content", n.id) if hasattr(n, "data") and isinstance(n.data, dict) else n.id
         })
     edges = [
         {"source": e.source, "target": e.target}
         for e in st.session_state["flow_state"].edges
     ]
     return {"nodes": nodes, "edges": edges}
+
+
+# -------------------------------------------------------------
+# PERSISTENT SIDEBAR API INSPECTOR (Visible on EVERY Tab)
+# -------------------------------------------------------------
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 📡 Live API Inspector Dock")
+st.sidebar.caption("Real-time REST API payload & telemetry for external integration (n8n / Boomi / Postman).")
+
+sidebar_dag = get_current_dag_payload()
+s_nodes_cnt = len(sidebar_dag["nodes"])
+s_edges_cnt = len(sidebar_dag["edges"])
+
+sb_c1, sb_c2 = st.sidebar.columns(2)
+sb_c1.metric("DAG Nodes", f"{s_nodes_cnt}")
+sb_c2.metric("DAG Edges", f"{s_edges_cnt}")
+
+with st.sidebar.expander("📦 Active Endpoint & Payload", expanded=False):
+    st.markdown("**Endpoint:** `POST /api/v1/workflows/execute`")
+    st.json(sidebar_dag)
+    curl_snippet_sb = f"""curl -X POST http://localhost:8000/api/v1/workflows/execute -H "Content-Type: application/json" -d '{json.dumps(sidebar_dag)}'"""
+    st.code(curl_snippet_sb, language="bash")
+
+with st.sidebar.expander("⚡ 1-Click API Pre-Flight Test", expanded=False):
+    if st.button("🧪 Validate Active DAG API", key="sb_btn_validate_api", use_container_width=True):
+        if not sidebar_dag["nodes"]:
+            st.warning("Canvas is empty.")
+        else:
+            wf_g = WorkflowGraph(
+                nodes=[WorkflowNode(id=n["id"], recipe_id=n["recipe_id"], config=n["config"]) for n in sidebar_dag["nodes"]],
+                edges=[WorkflowEdge(source=e["source"], target=e["target"]) for e in sidebar_dag["edges"]]
+            )
+            v_errs = wf_g.validate_graph()
+            if not v_errs:
+                st.success("✅ 200 OK: 100% DAG Valid!")
+            else:
+                for ve in v_errs:
+                    st.write(f"- {ve}")
 
 
 # -------------------------------------------------------------
@@ -556,16 +608,7 @@ if app_mode == "🎨 Pipeline Whiteboard":
                 st.warning("⚠️ Auto-Wire requires at least 2 nodes on the canvas. Add components first.")
             else:
                 # 1. Sort nodes spatially from left to right (X-coordinate, then Y-coordinate)
-                def get_pos(n):
-                    if isinstance(n.pos, (list, tuple)) and len(n.pos) >= 2:
-                        return (float(n.pos[0]), float(n.pos[1]))
-                    elif hasattr(n.pos, 'x') and hasattr(n.pos, 'y'):
-                        return (float(n.pos.x), float(n.pos.y))
-                    elif isinstance(n.pos, dict):
-                        return (float(n.pos.get('x', 0)), float(n.pos.get('y', 0)))
-                    return (0.0, 0.0)
-
-                sorted_nodes = sorted(curr_nodes, key=get_pos)
+                sorted_nodes = sorted(curr_nodes, key=get_node_position)
                 
                 # 2. Build clean sequential left-to-right DAG connections
                 new_edges = []
