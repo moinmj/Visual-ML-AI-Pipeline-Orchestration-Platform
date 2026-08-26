@@ -263,6 +263,19 @@ app_mode = st.sidebar.radio(
     ["🎨 Pipeline Whiteboard", "📊 Dataset Studio & Profiler", "🧩 Recipe Catalog", "🌐 API & Telemetry Inspector"]
 )
 
+# Track Tab Navigation GET APIs
+if st.session_state.get("_prev_app_mode") != app_mode:
+    st.session_state["_prev_app_mode"] = app_mode
+    if app_mode == "🎨 Pipeline Whiteboard":
+        record_api_telemetry("View Pipeline Whiteboard Canvas", "/api/v1/workflows/canvas", "GET", {"view": "whiteboard_canvas"}, {"nodes_count": len(st.session_state.get("flow_state", StreamlitFlowState(nodes=[], edges=[])).nodes)}, 200, 0.8)
+    elif app_mode == "📊 Dataset Studio & Profiler":
+        record_api_telemetry("View Dataset Profile & Preview", f"/api/v1/datasets/{st.session_state.get('active_dataset_name', 'churn')}/profile", "GET", {"dataset_name": st.session_state.get("active_dataset_name")}, {"rows": len(st.session_state.get("active_df", [])), "columns": list(st.session_state.get("active_df", pd.DataFrame()).columns)}, 200, 1.2)
+    elif app_mode == "🧩 Recipe Catalog":
+        record_api_telemetry("Fetch All Recipe Components", "/api/v1/recipes/", "GET", {}, {"total_recipes": len(recipe_registry.list_all())}, 200, 0.9)
+    elif app_mode == "🌐 API & Telemetry Inspector":
+        record_api_telemetry("Fetch API Telemetry Stream", "/api/v1/telemetry", "GET", {}, {"events_count": len(st.session_state.get("api_telemetry_history", []))}, 200, 0.4)
+
+
 
 def get_node_position(n) -> tuple:
     """Safely extracts (x, y) coordinates from any StreamlitFlowNode representation."""
@@ -875,16 +888,42 @@ if app_mode == "🎨 Pipeline Whiteboard":
     # STEP 1: COMPONENT PALETTE (Top Toolbar)
     # ---------------------------------------------------------
     with st.expander("📦 Step 1: Add New Component to Whiteboard", expanded=True):
+        st.caption("🌐 **Active API:** `GET /api/v1/recipes?category=...` ➔ `GET /api/v1/recipes/{recipe_id}/schema`")
         col_cat, col_recipe, col_add = st.columns([2, 3, 2])
         
         with col_cat:
-            selected_cat = st.selectbox("Category", list(RECIPE_CATEGORY_MAP.keys()), index=0)
+            selected_cat = st.selectbox("Category", list(RECIPE_CATEGORY_MAP.keys()), index=0, key="step1_cat_select")
+            cat_slug = selected_cat.split(" ")[-1].lower()
+            if st.session_state.get("_prev_cat_select") != selected_cat:
+                st.session_state["_prev_cat_select"] = selected_cat
+                record_api_telemetry(
+                    action_name=f"Browse Category: {selected_cat}",
+                    endpoint=f"/api/v1/recipes?category={cat_slug}",
+                    method="GET",
+                    request_payload={"query_param": {"category": cat_slug}},
+                    response_payload={"recipes_count": len(RECIPE_CATEGORY_MAP[selected_cat]), "recipes": [r['id'] for r in RECIPE_CATEGORY_MAP[selected_cat]]},
+                    status_code=200,
+                    duration_ms=1.1
+                )
 
         with col_recipe:
             available = RECIPE_CATEGORY_MAP[selected_cat]
             recipe_map = {r["name"]: r for r in available}
-            chosen_name = st.selectbox("Subcategory / Recipe", list(recipe_map.keys()))
+            chosen_name = st.selectbox("Subcategory / Recipe", list(recipe_map.keys()), key="step1_recipe_select")
             chosen_meta = recipe_map[chosen_name]
+            
+            if st.session_state.get("_prev_recipe_select") != chosen_meta["id"]:
+                st.session_state["_prev_recipe_select"] = chosen_meta["id"]
+                r_obj_temp = recipe_registry.get(chosen_meta["id"])
+                record_api_telemetry(
+                    action_name=f"Fetch Recipe Schema: {chosen_meta['name']}",
+                    endpoint=f"/api/v1/recipes/{chosen_meta['id']}/schema",
+                    method="GET",
+                    request_payload={"path_param": {"recipe_id": chosen_meta["id"]}},
+                    response_payload={"recipe_id": chosen_meta["id"], "name": chosen_meta["name"], "parameters_schema": r_obj_temp.get_schema() if r_obj_temp else {}},
+                    status_code=200,
+                    duration_ms=0.9
+                )
 
         with col_add:
             st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
@@ -1028,12 +1067,25 @@ if app_mode == "🎨 Pipeline Whiteboard":
         
         current_node_ids = [n.id for n in st.session_state["flow_state"].nodes]
         if current_node_ids:
-            selected_node_id = st.selectbox("Select Node", current_node_ids)
+            selected_node_id = st.selectbox("Select Node", current_node_ids, key="step3_node_select_box")
             
             node_cfg = st.session_state["node_configs"].get(selected_node_id, {"recipe_id": "missing_value_imputer", "config": {}})
             recipe_obj = recipe_registry.get(node_cfg["recipe_id"])
             
+            if st.session_state.get("_prev_selected_node_id") != selected_node_id:
+                st.session_state["_prev_selected_node_id"] = selected_node_id
+                record_api_telemetry(
+                    action_name=f"Inspect Node Schema: `{selected_node_id}`",
+                    endpoint=f"/api/v1/recipes/{recipe_obj.recipe_id}/schema",
+                    method="GET",
+                    request_payload={"path_param": {"recipe_id": recipe_obj.recipe_id}, "node_id": selected_node_id},
+                    response_payload={"recipe_id": recipe_obj.recipe_id, "name": recipe_obj.name, "parameters_schema": recipe_obj.get_schema()},
+                    status_code=200,
+                    duration_ms=1.1
+                )
+            
             st.markdown(f"**Recipe:** `{recipe_obj.name}`")
+            st.caption(f"🌐 `GET /api/v1/recipes/{recipe_obj.recipe_id}/schema`")
             # Node Canvas Label (Editable in Real-Time)
             curr_label = ""
             for n in st.session_state["flow_state"].nodes:
