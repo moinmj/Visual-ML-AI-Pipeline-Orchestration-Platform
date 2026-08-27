@@ -1,7 +1,6 @@
 import pandas as pd
 from typing import Dict, Any, Optional
 from backend.app.recipes.base.recipe import BaseRecipe
-from backend.app.infrastructure.storage.storage_manager import storage_manager
 
 
 class CSVLoaderRecipe(BaseRecipe):
@@ -40,10 +39,18 @@ class CSVLoaderRecipe(BaseRecipe):
         dataset_id = config.get("dataset_id")
         
         if storage_path:
-            df = storage_manager.read_dataframe(storage_path)
+            try:
+                from backend.app.infrastructure.storage.storage_manager import storage_manager
+                df = storage_manager.read_dataframe(storage_path)
+            except Exception:
+                df = pd.read_csv(storage_path)
         elif dataset_id and context and hasattr(context, "get_dataset_path"):
             path = context.get_dataset_path(dataset_id)
-            df = storage_manager.read_dataframe(path)
+            try:
+                from backend.app.infrastructure.storage.storage_manager import storage_manager
+                df = storage_manager.read_dataframe(path)
+            except Exception:
+                df = pd.read_csv(path)
         elif context and isinstance(context, dict) and "dataframe" in context:
             df = context["dataframe"]
         else:
