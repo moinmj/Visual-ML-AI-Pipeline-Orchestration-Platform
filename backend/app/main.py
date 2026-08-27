@@ -7,6 +7,9 @@ from backend.app.core.config import settings
 from backend.app.core.logging import setup_logging, logger
 from backend.app.core.exceptions import PlatformException
 from backend.app.infrastructure.database.session import init_db
+from backend.app.recipes import register_all_recipes
+
+register_all_recipes()
 
 # Import routers
 from backend.app.datasets.router import router as datasets_router

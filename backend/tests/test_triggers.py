@@ -2,9 +2,11 @@ import pytest
 import pandas as pd
 from backend.app.recipes.triggers.webhook_trigger import WebhookTriggerRecipe
 from backend.app.recipes.triggers.cron_trigger import CronScheduleTriggerRecipe
+from backend.app.recipes.base.registry import recipe_registry
 
 
 def test_webhook_trigger_recipe():
+    assert recipe_registry.get("webhook_trigger").recipe_id == "webhook_trigger"
     recipe = WebhookTriggerRecipe()
     assert recipe.recipe_id == "webhook_trigger"
     assert recipe.category == "triggers"

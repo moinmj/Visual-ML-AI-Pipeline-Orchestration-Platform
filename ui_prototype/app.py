@@ -5,9 +5,15 @@ import plotly.express as px
 import plotly.figure_factory as ff
 import plotly.graph_objects as go
 import json
-import time
 import datetime
+import time
 from typing import Any, Dict, List, Optional, Union
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from streamlit_flow import streamlit_flow
 import importlib
@@ -21,6 +27,7 @@ from backend.app.recommendation.recommender import AIRecommender
 import backend.app.engine.execution.executor as executor_mod
 importlib.reload(executor_mod)
 from backend.app.engine.execution.executor import DAGExecutor
+from backend.app.engine.execution.job_manager import job_manager
 
 from backend.app.profiling.profiler import DataProfiler
 from backend.app.recipes.base.registry import recipe_registry
@@ -499,10 +506,23 @@ def create_flow_node(node_id: str, pos: tuple, content: str) -> StreamlitFlowNod
     )
 
 
-def build_recommended_pipeline(rec_dict: dict = None):
+def build_recommended_pipeline(
+    rec_dict: Optional[dict] = None,
+    target_col: Optional[str] = None,
+    task_type: Optional[str] = None
+):
     """Instantiates a full end-to-end DAG based on dataset analysis."""
     df = st.session_state["active_df"]
-    rec = rec_dict or AIRecommender.recommend_pipeline(df)
+    rec = rec_dict or AIRecommender.recommend_pipeline(
+        df,
+        target_column=target_col,
+        task_type=task_type
+    )
+    resolved_target_col = (
+        rec.get("target_column")
+        or target_col
+        or (list(df.columns)[-1] if len(df.columns) else None)
+    )
     
     t_rec_start = time.time()
     t_nodes = []
@@ -518,9 +538,10 @@ def build_recommended_pipeline(rec_dict: dict = None):
     # 1. Preprocessing Steps
     for prep in rec.get("preprocessing_recommendations", []):
         nid = f"node_{prep['recipe_id']}"
-        t_nodes.append(create_flow_node(nid, (cur_x, 100), f"⚙️ {prep['recipe_name']}"))
+        prep_name = prep.get("name", prep["recipe_id"])
+        t_nodes.append(create_flow_node(nid, (cur_x, 100), f"⚙️ {prep_name}"))
         t_edges.append(StreamlitFlowEdge(id=f"e_{prev_id}_{nid}", source=prev_id, target=nid, animated=True))
-        node_configs[nid] = {"recipe_id": prep["recipe_id"], "label": prep["recipe_name"], "config": prep.get("params", {})}
+        node_configs[nid] = {"recipe_id": prep["recipe_id"], "label": prep_name, "config": prep.get("config", {})}
         prev_id = nid
         cur_x += 240
 
@@ -530,7 +551,7 @@ def build_recommended_pipeline(rec_dict: dict = None):
         split_id = "node_split"
         t_nodes.append(create_flow_node(split_id, (cur_x, 100), "✂️ Train/Test Split"))
         t_edges.append(StreamlitFlowEdge(id=f"e_{prev_id}_{split_id}", source=prev_id, target=split_id, animated=True))
-        node_configs[split_id] = {"recipe_id": "train_test_split", "label": "✂️ Split", "config": {"target_column": target_col, "test_size": 0.2}}
+        node_configs[split_id] = {"recipe_id": "train_test_split", "label": "✂️ Split", "config": {"target_column": resolved_target_col, "test_size": 0.2}}
         prev_id = split_id
         cur_x += 240
 
@@ -570,8 +591,8 @@ def build_recommended_pipeline(rec_dict: dict = None):
         action_name="🧠 AI Auto-Architect Pipeline",
         endpoint="/api/v1/workflows/recommend",
         method="POST",
-        request_payload={"dataset_name": st.session_state.get("active_dataset_name"), "rows": len(df), "target_column": target_col, "task_type": task},
-        response_payload={"task_type": task, "target_column": target_col, "nodes_generated": len(t_nodes), "edges_generated": len(t_edges)},
+        request_payload={"dataset_name": st.session_state.get("active_dataset_name"), "rows": len(df), "target_column": resolved_target_col, "task_type": task},
+        response_payload={"task_type": task, "target_column": resolved_target_col, "nodes_generated": len(t_nodes), "edges_generated": len(t_edges)},
         status_code=200,
         duration_ms=(time.time() - t_rec_start) * 1000.0
     )

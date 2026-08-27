@@ -37,3 +37,6 @@ plotly>=5.22.0
 # Testing & Quality
 pytest>=8.2.0
 pytest-asyncio>=0.23.7
+
+
+aiofiles
