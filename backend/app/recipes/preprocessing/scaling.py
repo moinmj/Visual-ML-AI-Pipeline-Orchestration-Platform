@@ -48,6 +48,17 @@ class FeatureScalerRecipe(BaseRecipe):
         target_cols = config.get("columns", [])
         exclude_target = config.get("exclude_target", True)
 
+        if isinstance(target_cols, str):
+            if target_cols.strip():
+                parsed = [c.strip() for c in target_cols.split(",") if c.strip() in df.columns]
+                target_cols = parsed if parsed else ([target_cols] if target_cols in df.columns else [])
+            else:
+                target_cols = []
+        elif isinstance(target_cols, (list, tuple)):
+            target_cols = [c for c in target_cols if c in df.columns]
+        else:
+            target_cols = []
+
         if not target_cols:
             # Auto-detect numeric columns
             numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]

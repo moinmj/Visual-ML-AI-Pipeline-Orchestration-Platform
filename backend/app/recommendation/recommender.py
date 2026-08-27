@@ -74,6 +74,7 @@ class AIRecommender:
             cleaning_steps.append({
                 "recipe_id": "missing_value_imputer",
                 "name": "🧹 Missing Value Imputer",
+                "recipe_name": "🧹 Missing Value Imputer",
                 "config": {"strategy": "median"},
                 "reason": f"Dataset contains {missing_cells} missing cells requiring imputation."
             })
@@ -86,6 +87,7 @@ class AIRecommender:
             cleaning_steps.append({
                 "recipe_id": "categorical_encoder",
                 "name": "🔤 Categorical One-Hot Encoder",
+                "recipe_name": "🔤 Categorical One-Hot Encoder",
                 "config": {"method": "one_hot"},
                 "reason": f"Found {len(feature_cats)} categorical features ({', '.join(feature_cats[:3])}) requiring numerical encoding."
             })
@@ -94,6 +96,7 @@ class AIRecommender:
             cleaning_steps.append({
                 "recipe_id": "feature_scaler",
                 "name": "⚖️ Feature Scaler",
+                "recipe_name": "⚖️ Feature Scaler",
                 "config": {"method": "standard"},
                 "reason": "Standardizing variance across numerical features for model stability."
             })

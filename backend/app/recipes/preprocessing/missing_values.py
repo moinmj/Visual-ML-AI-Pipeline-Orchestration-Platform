@@ -48,6 +48,17 @@ class MissingValueImputerRecipe(BaseRecipe):
         target_cols = config.get("columns", [])
         fill_val = config.get("fill_value", 0)
 
+        if isinstance(target_cols, str):
+            if target_cols.strip():
+                parsed = [c.strip() for c in target_cols.split(",") if c.strip() in df.columns]
+                target_cols = parsed if parsed else ([target_cols] if target_cols in df.columns else [])
+            else:
+                target_cols = []
+        elif isinstance(target_cols, (list, tuple)):
+            target_cols = [c for c in target_cols if c in df.columns]
+        else:
+            target_cols = []
+
         cols_to_process = target_cols if target_cols else list(df.columns)
 
         if strategy == "drop_rows":

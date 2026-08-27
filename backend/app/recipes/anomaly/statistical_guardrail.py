@@ -62,6 +62,17 @@ class StatisticalGuardrailRecipe(BaseRecipe):
         action = config.get("action", "flag")
         target_cols = config.get("columns", [])
 
+        if isinstance(target_cols, str):
+            if target_cols.strip():
+                parsed = [c.strip() for c in target_cols.split(",") if c.strip() in df_out.columns]
+                target_cols = parsed if parsed else ([target_cols] if target_cols in df_out.columns else [])
+            else:
+                target_cols = []
+        elif isinstance(target_cols, (list, tuple)):
+            target_cols = [c for c in target_cols if c in df_out.columns]
+        else:
+            target_cols = []
+
         # Detect numeric columns
         numeric_cols = [c for c in df_out.columns if pd.api.types.is_numeric_dtype(df_out[c]) and c not in ["is_anomaly", "is_outlier"]]
         if target_cols:

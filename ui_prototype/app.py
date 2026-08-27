@@ -1,3 +1,11 @@
+import os
+import sys
+
+# Ensure repository root is on sys.path for Streamlit Cloud and nested executions
+ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -395,6 +403,11 @@ def sanitize_node_configs_for_active_dataset():
         if "date_column" in cfg and cfg["date_column"] not in cols:
             date_candidates = [c for c in cols if "date" in c.lower() or "time" in c.lower()]
             cfg["date_column"] = date_candidates[0] if date_candidates else cols[0]
+        if "columns" in cfg:
+            if isinstance(cfg["columns"], str):
+                cfg["columns"] = [c.strip() for c in cfg["columns"].split(",") if c.strip() in cols]
+            elif isinstance(cfg["columns"], list):
+                cfg["columns"] = [c for c in cfg["columns"] if c in cols]
 
 
 def execute_pipeline():
@@ -499,10 +512,10 @@ def create_flow_node(node_id: str, pos: tuple, content: str) -> StreamlitFlowNod
     )
 
 
-def build_recommended_pipeline(rec_dict: dict = None):
+def build_recommended_pipeline(rec_dict: dict = None, target_col: str = None, task_type: str = None):
     """Instantiates a full end-to-end DAG based on dataset analysis."""
     df = st.session_state["active_df"]
-    rec = rec_dict or AIRecommender.recommend_pipeline(df)
+    rec = rec_dict or AIRecommender.recommend_pipeline(df, target_column=target_col, task_type=task_type)
     
     t_rec_start = time.time()
     t_nodes = []
@@ -518,19 +531,23 @@ def build_recommended_pipeline(rec_dict: dict = None):
     # 1. Preprocessing Steps
     for prep in rec.get("preprocessing_recommendations", []):
         nid = f"node_{prep['recipe_id']}"
-        t_nodes.append(create_flow_node(nid, (cur_x, 100), f"⚙️ {prep['recipe_name']}"))
+        prep_name = prep.get("name") or prep.get("recipe_name") or prep["recipe_id"]
+        prep_config = prep.get("config") or prep.get("params") or {}
+        node_label = prep_name if any(char in prep_name for char in ["⚙️", "🧹", "🔤", "⚖️"]) else f"⚙️ {prep_name}"
+        t_nodes.append(create_flow_node(nid, (cur_x, 100), node_label))
         t_edges.append(StreamlitFlowEdge(id=f"e_{prev_id}_{nid}", source=prev_id, target=nid, animated=True))
-        node_configs[nid] = {"recipe_id": prep["recipe_id"], "label": prep["recipe_name"], "config": prep.get("params", {})}
+        node_configs[nid] = {"recipe_id": prep["recipe_id"], "label": prep_name, "config": prep_config}
         prev_id = nid
         cur_x += 240
 
     task = rec.get("task_type")
+    resolved_target = rec.get("target_column") or target_col
     # 2. Split or Direct Model
     if task in ["classification", "regression"]:
         split_id = "node_split"
         t_nodes.append(create_flow_node(split_id, (cur_x, 100), "✂️ Train/Test Split"))
         t_edges.append(StreamlitFlowEdge(id=f"e_{prev_id}_{split_id}", source=prev_id, target=split_id, animated=True))
-        node_configs[split_id] = {"recipe_id": "train_test_split", "label": "✂️ Split", "config": {"target_column": target_col, "test_size": 0.2}}
+        node_configs[split_id] = {"recipe_id": "train_test_split", "label": "✂️ Split", "config": {"target_column": resolved_target, "test_size": 0.2}}
         prev_id = split_id
         cur_x += 240
 
@@ -570,8 +587,8 @@ def build_recommended_pipeline(rec_dict: dict = None):
         action_name="🧠 AI Auto-Architect Pipeline",
         endpoint="/api/v1/workflows/recommend",
         method="POST",
-        request_payload={"dataset_name": st.session_state.get("active_dataset_name"), "rows": len(df), "target_column": target_col, "task_type": task},
-        response_payload={"task_type": task, "target_column": target_col, "nodes_generated": len(t_nodes), "edges_generated": len(t_edges)},
+        request_payload={"dataset_name": st.session_state.get("active_dataset_name"), "rows": len(df), "target_column": resolved_target, "task_type": task},
+        response_payload={"task_type": task, "target_column": resolved_target, "nodes_generated": len(t_nodes), "edges_generated": len(t_edges)},
         status_code=200,
         duration_ms=(time.time() - t_rec_start) * 1000.0
     )
@@ -581,7 +598,8 @@ def build_recommended_pipeline(rec_dict: dict = None):
 
 def load_ml_template(force_preset: bool = False):
     """Applies ML classification/regression template to current active data or sample preset."""
-    if force_preset or "active_df" not in st.session_state or st.session_state["active_df"] is None:
+    curr_name = st.session_state.get("active_dataset_name", "")
+    if force_preset or "active_df" not in st.session_state or st.session_state["active_df"] is None or curr_name == "Daily Retail Sales (Time-Series)":
         st.session_state["active_df"] = get_preset_dataset("Customer Churn (Classification)")
         st.session_state["active_dataset_name"] = "Customer Churn (Classification)"
 
@@ -635,9 +653,20 @@ def load_ml_template(force_preset: bool = False):
 
 def load_forecast_template(force_preset: bool = False):
     """Applies Time-Series Forecasting template to current active data or sample preset."""
-    if force_preset or "active_df" not in st.session_state or st.session_state["active_df"] is None:
+    curr_df = st.session_state.get("active_df")
+    curr_name = st.session_state.get("active_dataset_name", "")
+    has_date = any(pd.api.types.is_datetime64_any_dtype(curr_df[c]) or "date" in c.lower() or "time" in c.lower() for c in curr_df.columns) if curr_df is not None else False
+
+    if force_preset or curr_df is None or not has_date or curr_name != "Daily Retail Sales (Time-Series)":
         st.session_state["active_df"] = get_preset_dataset("Daily Retail Sales (Time-Series)")
         st.session_state["active_dataset_name"] = "Daily Retail Sales (Time-Series)"
+        date_col = "Date"
+        target_col = "Sales"
+    else:
+        date_cols = [c for c in curr_df.columns if pd.api.types.is_datetime64_any_dtype(curr_df[c]) or "date" in c.lower() or "time" in c.lower()]
+        date_col = date_cols[0]
+        num_cols = [c for c in curr_df.columns if pd.api.types.is_numeric_dtype(curr_df[c]) and c != date_col]
+        target_col = num_cols[0] if num_cols else curr_df.columns[-1]
 
     t_nodes = [
         create_flow_node("node_csv", (40, 100), f"📄 {st.session_state.get('active_dataset_name', 'Active Data')[:15]}"),
@@ -652,8 +681,8 @@ def load_forecast_template(force_preset: bool = False):
 
     st.session_state["node_configs"] = {
         "node_csv": {"recipe_id": "csv_loader", "label": "Dataset Ingestion", "config": {}},
-        "node_impute": {"recipe_id": "missing_value_imputer", "label": "Imputer", "config": {"strategy": "mean"}},
-        "node_prophet": {"recipe_id": "prophet_forecaster", "label": "Prophet Forecaster", "config": {"date_column": "Date", "target_column": "Sales", "horizon_periods": 30}}
+        "node_impute": {"recipe_id": "missing_value_imputer", "label": "Imputer", "config": {"strategy": "ffill"}},
+        "node_prophet": {"recipe_id": "prophet_forecaster", "label": "Prophet Forecaster", "config": {"date_column": date_col, "target_column": target_col, "horizon_periods": 30}}
     }
 
     st.session_state["flow_state"] = StreamlitFlowState(nodes=t_nodes, edges=t_edges)
@@ -674,7 +703,8 @@ def load_forecast_template(force_preset: bool = False):
 
 def load_anomaly_template(force_preset: bool = False):
     """Applies Unsupervised Anomaly Detection template to current active data or sample preset."""
-    if force_preset or "active_df" not in st.session_state or st.session_state["active_df"] is None:
+    curr_name = st.session_state.get("active_dataset_name", "")
+    if force_preset or "active_df" not in st.session_state or st.session_state["active_df"] is None or curr_name == "Daily Retail Sales (Time-Series)":
         st.session_state["active_df"] = get_preset_dataset("Credit Transactions (Anomaly Injection)")
         st.session_state["active_dataset_name"] = "Credit Transactions (Anomaly Injection)"
 
@@ -736,7 +766,7 @@ if app_mode == "🎨 Pipeline Whiteboard":
             if len(st.session_state["flow_state"].nodes) > 0:
                 st.session_state["pending_action"] = "ml_template"
             else:
-                load_ml_template()
+                load_ml_template(force_preset=True)
                 st.rerun()
 
     with bar_col4:
@@ -744,7 +774,7 @@ if app_mode == "🎨 Pipeline Whiteboard":
             if len(st.session_state["flow_state"].nodes) > 0:
                 st.session_state["pending_action"] = "forecast_template"
             else:
-                load_forecast_template()
+                load_forecast_template(force_preset=True)
                 st.rerun()
 
     with bar_col5:
@@ -752,7 +782,7 @@ if app_mode == "🎨 Pipeline Whiteboard":
             if len(st.session_state["flow_state"].nodes) > 0:
                 st.session_state["pending_action"] = "anomaly_template"
             else:
-                load_anomaly_template()
+                load_anomaly_template(force_preset=True)
                 st.rerun()
 
     with bar_col6:
@@ -1157,23 +1187,48 @@ if app_mode == "🎨 Pipeline Whiteboard":
                     title = prop_meta.get("title", prop_name)
                     default_val = prop_meta.get("default", None)
                     curr_val = current_config.get(prop_name, default_val)
+                    prop_type = prop_meta.get("type")
 
-                    # Smart column selectors
-                    if "column" in prop_name.lower() and active_cols:
+                    # Smart column selectors: array of columns vs single column
+                    if prop_type == "array" or prop_name in ["columns", "feature_columns", "categorical_columns", "numerical_columns"]:
+                        if isinstance(curr_val, str):
+                            curr_list = [c.strip() for c in curr_val.split(",") if c.strip() in active_cols] if curr_val else []
+                        elif isinstance(curr_val, (list, tuple)):
+                            curr_list = [c for c in curr_val if c in active_cols]
+                        else:
+                            curr_list = []
+                        new_val = st.multiselect(
+                            title,
+                            options=active_cols,
+                            default=curr_list,
+                            key=f"cfg_{selected_node_id}_{prop_name}",
+                            help=prop_meta.get("description", "Select specific columns or leave empty to apply across all columns.")
+                        )
+                    elif ("column" in prop_name.lower() or prop_name.endswith("_col")) and active_cols:
                         col_idx = active_cols.index(curr_val) if curr_val in active_cols else len(active_cols) - 1
                         new_val = st.selectbox(title, active_cols, index=col_idx, key=f"cfg_{selected_node_id}_{prop_name}")
                     elif "enum" in prop_meta:
                         options = prop_meta["enum"]
                         opt_idx = options.index(curr_val) if curr_val in options else 0
                         new_val = st.selectbox(title, options, index=opt_idx, key=f"cfg_{selected_node_id}_{prop_name}")
-                    elif prop_meta.get("type") == "integer":
+                    elif prop_type == "integer":
                         min_v = int(prop_meta.get("minimum", 1))
                         max_v = int(prop_meta.get("maximum", 1000))
-                        new_val = st.slider(title, min_value=min_v, max_value=max_v, value=int(curr_val) if curr_val is not None else min_v, key=f"cfg_{selected_node_id}_{prop_name}")
-                    elif prop_meta.get("type") == "number":
+                        try:
+                            val_int = int(curr_val) if curr_val is not None else min_v
+                        except (ValueError, TypeError):
+                            val_int = min_v
+                        new_val = st.slider(title, min_value=min_v, max_value=max_v, value=val_int, key=f"cfg_{selected_node_id}_{prop_name}")
+                    elif prop_type == "number":
                         min_v = float(prop_meta.get("minimum", 0.0))
                         max_v = float(prop_meta.get("maximum", 1.0))
-                        new_val = st.slider(title, min_value=min_v, max_value=max_v, value=float(curr_val) if curr_val is not None else min_v, step=0.01, key=f"cfg_{selected_node_id}_{prop_name}")
+                        try:
+                            val_float = float(curr_val) if curr_val is not None else min_v
+                        except (ValueError, TypeError):
+                            val_float = min_v
+                        new_val = st.slider(title, min_value=min_v, max_value=max_v, value=val_float, step=0.01, key=f"cfg_{selected_node_id}_{prop_name}")
+                    elif prop_type == "boolean":
+                        new_val = st.checkbox(title, value=bool(curr_val) if curr_val is not None else False, key=f"cfg_{selected_node_id}_{prop_name}")
                     else:
                         new_val = st.text_input(title, value=str(curr_val) if curr_val is not None else "", key=f"cfg_{selected_node_id}_{prop_name}")
 
@@ -1222,50 +1277,68 @@ if app_mode == "🎨 Pipeline Whiteboard":
         # -----------------------------------------------------
         # 1. TIME-SERIES FORECASTING REPORT
         # -----------------------------------------------------
-        if "forecasting_summary" in exec_data and exec_data["forecasting_summary"]:
-            fc_sum = exec_data["forecasting_summary"]
+        fc_sum = exec_data.get("forecasting_summary")
+        fc_df = None
+        for n_id, out in node_outputs.items():
+            if isinstance(out, dict):
+                if "forecast_df" in out and out["forecast_df"] is not None:
+                    fc_df = out["forecast_df"]
+                    break
+                elif "dataframe" in out and isinstance(out["dataframe"], pd.DataFrame) and "ds" in out["dataframe"].columns and "yhat" in out["dataframe"].columns:
+                    fc_df = out["dataframe"]
+                    break
+
+        if fc_sum or fc_df is not None:
             st.markdown("### 📈 Time-Series Forecast Predictions")
             
             f_col1, f_col2, f_col3 = st.columns(3)
-            f_col1.metric("Historical Periods", f"{fc_sum.get('historical_points', 0):,}")
-            f_col2.metric("Forecast Horizon", f"{fc_sum.get('forecast_horizon', 0)} intervals")
-            f_col3.metric("Trend Direction", fc_sum.get("trend_direction", "Neutral").upper())
+            hist_pts = fc_sum.get('historical_points', len(fc_df[fc_df['is_future']==0]) if fc_df is not None and 'is_future' in fc_df.columns else 0) if fc_sum else (len(fc_df[fc_df['is_future']==0]) if fc_df is not None and 'is_future' in fc_df.columns else 0)
+            fc_horizon = fc_sum.get('forecast_horizon', len(fc_df[fc_df['is_future']==1]) if fc_df is not None and 'is_future' in fc_df.columns else 30) if fc_sum else (len(fc_df[fc_df['is_future']==1]) if fc_df is not None and 'is_future' in fc_df.columns else 30)
+            trend_dir = fc_sum.get("trend_direction", "Upward" if fc_df is not None and float(fc_df['yhat'].iloc[-1]) >= float(fc_df['yhat'].iloc[0]) else "Neutral") if fc_sum else "Neutral"
+            
+            f_col1.metric("Historical Periods", f"{hist_pts:,}")
+            f_col2.metric("Forecast Horizon", f"{fc_horizon} intervals")
+            f_col3.metric("Trend Direction", str(trend_dir).upper())
 
-            # Find forecasting node output
-            for n_id, out in node_outputs.items():
-                if "forecast_df" in out and out["forecast_df"] is not None:
-                    fc_df = out["forecast_df"]
-                    fig_fc = go.Figure()
-                    
-                    if "ds" in fc_df.columns and "yhat" in fc_df.columns:
-                        fig_fc.add_trace(go.Scatter(x=fc_df["ds"], y=fc_df["yhat"], mode="lines", name="Forecast", line=dict(color="#3B82F6", width=2)))
-                        if "yhat_lower" in fc_df.columns and "yhat_upper" in fc_df.columns:
-                            fig_fc.add_trace(go.Scatter(x=fc_df["ds"], y=fc_df["yhat_upper"], mode="lines", line=dict(width=0), showlegend=False))
-                            fig_fc.add_trace(go.Scatter(x=fc_df["ds"], y=fc_df["yhat_lower"], mode="lines", line=dict(width=0), fill="tonexty", fillcolor="rgba(59, 130, 246, 0.2)", name="95% Confidence Interval"))
-                    
-                    fig_fc.update_layout(title="Future Forecast Trajectory with Confidence Intervals", xaxis_title="Timeline", yaxis_title="Predicted Value", height=400)
-                    st.plotly_chart(fig_fc, use_container_width=True)
+            if fc_df is not None:
+                fig_fc = go.Figure()
+                
+                if "ds" in fc_df.columns and "yhat" in fc_df.columns:
+                    fig_fc.add_trace(go.Scatter(x=fc_df["ds"], y=fc_df["yhat"], mode="lines+markers", name="Forecast Trend", line=dict(color="#3B82F6", width=2.5)))
+                    if "yhat_lower" in fc_df.columns and "yhat_upper" in fc_df.columns:
+                        fig_fc.add_trace(go.Scatter(x=fc_df["ds"], y=fc_df["yhat_upper"], mode="lines", line=dict(width=0), showlegend=False))
+                        fig_fc.add_trace(go.Scatter(x=fc_df["ds"], y=fc_df["yhat_lower"], mode="lines", line=dict(width=0), fill="tonexty", fillcolor="rgba(59, 130, 246, 0.2)", name="95% Confidence Interval"))
+                
+                fig_fc.update_layout(title="Future Forecast Trajectory with Confidence Intervals", xaxis_title="Timeline", yaxis_title="Predicted Value", height=420)
+                st.plotly_chart(fig_fc, use_container_width=True)
 
-                    with st.expander("📋 Tabular Forecast Matrix", expanded=False):
-                        st.dataframe(fc_df, use_container_width=True)
+                with st.expander("📋 Tabular Forecast Matrix", expanded=False):
+                    st.dataframe(fc_df, use_container_width=True)
 
         # -----------------------------------------------------
         # 2. UNSUPERVISED ANOMALY DETECTION REPORT
         # -----------------------------------------------------
-        if "anomaly_summary" in exec_data and exec_data["anomaly_summary"]:
-            anom_sum = exec_data["anomaly_summary"]
+        anom_sum = exec_data.get("anomaly_summary")
+        anomaly_df = None
+        for n_id, out in node_outputs.items():
+            if isinstance(out, dict):
+                candidate_df = out.get("dataframe") if "dataframe" in out else out.get("df")
+                if candidate_df is not None and isinstance(candidate_df, pd.DataFrame) and ("is_anomaly" in candidate_df.columns or "is_outlier" in candidate_df.columns):
+                    anomaly_df = candidate_df
+                    break
+
+        if anom_sum or anomaly_df is not None:
             st.markdown("### 🚨 Anomaly Detection & Outlier Risk Matrix")
             
-            a_col1, a_col2, a_col3 = st.columns(3)
-            a_col1.metric("Total Records Inspected", f"{anom_sum.get('total_records', 0):,}")
-            a_col2.metric("Anomalies Flagged", f"{anom_sum.get('anomaly_count', 0):,}")
-            a_col3.metric("Anomaly Rate", f"{anom_sum.get('anomaly_percentage', 0.0):.2f}%")
+            tot_rec = anom_sum.get('total_records', len(anomaly_df)) if anom_sum else (len(anomaly_df) if anomaly_df is not None else 0)
+            flag_col = "is_anomaly" if anomaly_df is not None and "is_anomaly" in anomaly_df.columns else "is_outlier"
+            anom_cnt = anom_sum.get('anomaly_count', int(anomaly_df[flag_col].sum())) if anom_sum else (int(anomaly_df[flag_col].sum()) if anomaly_df is not None and flag_col in anomaly_df.columns else 0)
+            anom_rate = anom_sum.get('anomaly_percentage', (anom_cnt/tot_rec*100) if tot_rec > 0 else 0.0) if anom_sum else ((anom_cnt/tot_rec*100) if tot_rec > 0 else 0.0)
 
-            anomaly_df = None
-            for n_id, out in node_outputs.items():
-                if "df" in out and ("is_anomaly" in out["df"].columns or "is_outlier" in out["df"].columns):
-                    anomaly_df = out["df"]
-                    break
+            a_col1, a_col2, a_col3 = st.columns(3)
+            a_col1.metric("Total Records Inspected", f"{tot_rec:,}")
+            a_col2.metric("Anomalies Flagged", f"{anom_cnt:,}")
+            a_col3.metric("Anomaly Rate", f"{anom_rate:.2f}%")
 
             if anomaly_df is not None:
                 anom_tab1, anom_tab2, anom_tab3 = st.tabs([
@@ -1281,15 +1354,14 @@ if app_mode == "🎨 Pipeline Whiteboard":
                         x_ax = st.selectbox("X-Axis Feature", num_cols, index=0, key="anom_x")
                         y_ax = st.selectbox("Y-Axis Feature", num_cols, index=min(1, len(num_cols)-1), key="anom_y")
                         
-                        color_col = "is_anomaly" if "is_anomaly" in anomaly_df.columns else "is_outlier"
                         plot_df = anomaly_df.copy()
-                        plot_df[color_col] = plot_df[color_col].map({0: "Normal Record", 1: "Flagged Anomaly"})
+                        plot_df[flag_col] = plot_df[flag_col].map({0: "Normal Record", 1: "Flagged Anomaly"})
 
                         fig_anom = px.scatter(
                             plot_df,
                             x=x_ax,
                             y=y_ax,
-                            color=color_col,
+                            color=flag_col,
                             color_discrete_map={"Normal Record": "#3B82F6", "Flagged Anomaly": "#EF4444"},
                             title=f"Outlier Scatter Plot: {x_ax} vs {y_ax}",
                             hover_data=num_cols[:4]
@@ -1301,21 +1373,20 @@ if app_mode == "🎨 Pipeline Whiteboard":
                 with anom_tab2:
                     if "anomaly_score" in anomaly_df.columns:
                         hist_df = anomaly_df.copy()
-                        if "is_anomaly" in hist_df.columns:
-                            hist_df["is_anomaly"] = hist_df["is_anomaly"].astype(str)
+                        if flag_col in hist_df.columns:
+                            hist_df[flag_col] = hist_df[flag_col].astype(str)
 
                         fig_hist = px.histogram(
                             hist_df,
                             x="anomaly_score",
-                            color="is_anomaly" if "is_anomaly" in hist_df.columns else None,
-                            color_discrete_map={"0": "#3B82F6", 1: "#EF4444"},
+                            color=flag_col if flag_col in hist_df.columns else None,
+                            color_discrete_map={"0": "#3B82F6", "1": "#EF4444"},
                             nbins=30,
                             title="Distribution of Anomaly Scores (0.0 = Normal, 1.0 = High-Risk Anomaly)"
                         )
                         st.plotly_chart(fig_hist, use_container_width=True)
 
                 with anom_tab3:
-                    flag_col = "is_anomaly" if "is_anomaly" in anomaly_df.columns else "is_outlier"
                     outliers_only = anomaly_df[anomaly_df[flag_col] == 1]
                     st.markdown(f"##### Showing {len(outliers_only)} Flagged Anomalous Records:")
                     st.dataframe(outliers_only, use_container_width=True)

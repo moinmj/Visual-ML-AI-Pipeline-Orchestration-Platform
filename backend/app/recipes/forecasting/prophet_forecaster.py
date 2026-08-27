@@ -119,18 +119,10 @@ class ProphetForecasterRecipe(BaseRecipe):
         )
         model.fit(prophet_df)
 
-        # Generate Future Dataframe
-        future = model.make_future_dataframe(periods=horizon, freq=freq_code)
-        forecast = model.predict(future)
-
-        # Split historical fitted vs future predictions
-        history_len = len(prophet_df)
-        fitted = forecast.iloc[:history_len]
-        future_forecast = forecast.iloc[history_len:]
-
-        # Calculate in-sample accuracy metrics on history
+        # In-sample predictions on actual historical observations
+        in_sample = model.predict(prophet_df[["ds"]])
         actuals = prophet_df["y"].values
-        fitted_preds = fitted["yhat"].values
+        fitted_preds = in_sample["yhat"].values
         
         mae = float(round(np.mean(np.abs(actuals - fitted_preds)), 4))
         rmse = float(round(np.sqrt(np.mean((actuals - fitted_preds) ** 2)), 4))
@@ -141,11 +133,21 @@ class ProphetForecasterRecipe(BaseRecipe):
         else:
             mape = 0.0
 
+        # Generate Future Dataframe
+        future = model.make_future_dataframe(periods=horizon, freq=freq_code)
+        forecast = model.predict(future)
+
+        last_date = prophet_df["ds"].max()
+        is_future_flags = (forecast["ds"] > last_date).astype(int).tolist()
+
         metrics = {
             "task_type": "time_series_forecasting",
             "algorithm": "Meta Prophet",
             "date_column": date_col,
             "target_column": target_col,
+            "historical_points": len(prophet_df),
+            "forecast_horizon": horizon,
+            "trend_direction": "Upward" if float(forecast["yhat"].iloc[-1]) >= float(forecast["yhat"].iloc[0]) else "Downward",
             "horizon_periods": horizon,
             "mae": mae,
             "rmse": rmse,
@@ -158,7 +160,7 @@ class ProphetForecasterRecipe(BaseRecipe):
             "yhat": np.round(forecast["yhat"], 2),
             "yhat_lower": np.round(forecast["yhat_lower"], 2),
             "yhat_upper": np.round(forecast["yhat_upper"], 2),
-            "is_future": [0] * history_len + [1] * len(future_forecast)
+            "is_future": is_future_flags
         })
 
         return {

@@ -53,6 +53,17 @@ class CategoricalEncoderRecipe(BaseRecipe):
         if not target_col_name and context and isinstance(context, dict):
             target_col_name = context.get("target_column")
 
+        if isinstance(target_cols, str):
+            if target_cols.strip():
+                parsed = [c.strip() for c in target_cols.split(",") if c.strip() in df.columns]
+                target_cols = parsed if parsed else ([target_cols] if target_cols in df.columns else [])
+            else:
+                target_cols = []
+        elif isinstance(target_cols, (list, tuple)):
+            target_cols = [c for c in target_cols if c in df.columns]
+        else:
+            target_cols = []
+
         if not target_cols:
             # Pick non-numeric columns
             non_numeric = [c for c in df.columns if not pd.api.types.is_numeric_dtype(df[c])]

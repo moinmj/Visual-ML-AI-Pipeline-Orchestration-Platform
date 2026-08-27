@@ -55,3 +55,28 @@ def test_preprocessing_and_training_pipeline():
     out_eval = evaluator.execute(eval_inputs, {"metric_type": "classification"})
     assert "accuracy" in out_eval["metrics"]
     assert "confusion_matrix" in out_eval["metrics"]
+
+
+def test_preprocessing_column_type_resilience():
+    df = pd.DataFrame({
+        "Age": [25, np.nan, 35, 40],
+        "Salary": [50000, 60000, np.nan, 80000],
+        "City": ["NYC", "London", np.nan, "Paris"],
+        "Churn": [0, 1, 0, 1]
+    })
+    imputer = recipe_registry.get("missing_value_imputer")
+    
+    # 1. String single column name
+    out1 = imputer.execute({"dataframe": df}, {"strategy": "median", "columns": "Age"})
+    assert out1["dataframe"]["Age"].isna().sum() == 0
+    assert out1["dataframe"]["Salary"].isna().sum() == 1
+
+    # 2. String comma-separated
+    out2 = imputer.execute({"dataframe": df}, {"strategy": "median", "columns": "Age, Salary"})
+    assert out2["dataframe"]["Age"].isna().sum() == 0
+    assert out2["dataframe"]["Salary"].isna().sum() == 0
+
+    # 3. List of columns
+    out3 = imputer.execute({"dataframe": df}, {"strategy": "median", "columns": ["Age", "City"]})
+    assert out3["dataframe"]["Age"].isna().sum() == 0
+    assert out3["dataframe"]["City"].isna().sum() == 0
