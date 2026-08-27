@@ -1466,16 +1466,34 @@ if app_mode == "🎨 Pipeline Whiteboard":
                         st.info(f"✨ **ROC-AUC Score:** `{final_metrics['roc_auc']:.4f}` | **Log Loss:** `{final_metrics.get('log_loss', 'N/A')}`")
 
                 with rep_tab2:
-                    if "confusion_matrix" in final_metrics:
-                        cm = final_metrics["confusion_matrix"]
-                        fig_cm = ff.create_annotated_heatmap(
-                            z=cm,
-                            x=["Pred: Class 0", "Pred: Class 1"] if len(cm) == 2 else [f"Pred {i}" for i in range(len(cm))],
-                            y=["Actual: Class 0", "Actual: Class 1"] if len(cm) == 2 else [f"Actual {i}" for i in range(len(cm))],
-                            colorscale="Blues"
-                        )
-                        fig_cm.update_layout(title="Confusion Matrix Heatmap", width=480, height=360)
-                        st.plotly_chart(fig_cm, use_container_width=False)
+                    if "confusion_matrix" in final_metrics and final_metrics["confusion_matrix"]:
+                        try:
+                            cm = final_metrics["confusion_matrix"]
+                            cm_arr = np.array(cm)
+                            n_classes = len(cm_arr)
+                            labels_x = ["Pred: Class 0", "Pred: Class 1"] if n_classes == 2 else [f"Pred: Class {i}" for i in range(n_classes)]
+                            labels_y = ["Actual: Class 0", "Actual: Class 1"] if n_classes == 2 else [f"Actual: Class {i}" for i in range(n_classes)]
+
+                            fig_cm = px.imshow(
+                                cm_arr,
+                                labels=dict(x="Predicted Class", y="Actual Class", color="Count"),
+                                x=labels_x,
+                                y=labels_y,
+                                text_auto=True,
+                                color_continuous_scale="Blues",
+                                aspect="auto"
+                            )
+                            fig_cm.update_layout(
+                                title="Confusion Matrix Heatmap",
+                                height=380,
+                                xaxis_title="Predicted Label",
+                                yaxis_title="Actual Label",
+                                margin=dict(l=40, r=40, t=50, b=40)
+                            )
+                            st.plotly_chart(fig_cm, use_container_width=True)
+                        except Exception:
+                            st.markdown("##### Confusion Matrix Matrix:")
+                            st.dataframe(pd.DataFrame(final_metrics["confusion_matrix"]), use_container_width=True)
 
                 with rep_tab3:
                     if "classification_report" in final_metrics and final_metrics["classification_report"]:
