@@ -6,7 +6,10 @@ from sqlalchemy import select, delete
 from fastapi import UploadFile
 
 from backend.app.datasets.models import Dataset
-from backend.app.infrastructure.storage.storage_manager import storage_manager
+try:
+    from backend.app.infrastructure.storage.storage_manager import storage_manager
+except ImportError:
+    from backend.app.infrastructure.storage import storage_manager
 from backend.app.profiling.profiler import DataProfiler
 from backend.app.core.exceptions import NotFoundException, ValidationException
 from backend.app.core.logging import logger
