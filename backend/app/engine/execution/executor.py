@@ -3,6 +3,7 @@ import traceback
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 import pandas as pd
+import numpy as np
 from pydantic import BaseModel, Field
 
 from backend.app.engine.dag.graph import WorkflowGraph, WorkflowNode
@@ -36,6 +37,47 @@ class WorkflowExecutionResult(BaseModel):
     step_snapshots: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
 
     model_config = {"arbitrary_types_allowed": True}
+
+
+def make_json_safe(obj: Any) -> Any:
+    """
+    Recursively converts arbitrary Python/ML objects (DataFrames, ndarrays, numpy scalars,
+    models) into standard, JSON-serializable primitives for FastAPI Pydantic responses.
+    """
+    if obj is None:
+        return None
+    if isinstance(obj, pd.DataFrame):
+        clean_df = obj.replace({float("nan"): None, float("inf"): None, float("-inf"): None})
+        return {
+            "type": "DataFrame",
+            "shape": list(obj.shape),
+            "columns": list(obj.columns),
+            "records": clean_df.to_dict(orient="records")
+        }
+    elif isinstance(obj, pd.Series):
+        clean_s = obj.replace({float("nan"): None, float("inf"): None, float("-inf"): None})
+        return clean_s.to_dict()
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, (np.integer, int)):
+        return int(obj)
+    elif isinstance(obj, (np.floating, float)):
+        return None if (np.isnan(obj) or np.isinf(obj)) else float(obj)
+    elif isinstance(obj, (np.bool_, bool)):
+        return bool(obj)
+    elif isinstance(obj, dict):
+        return {str(k): make_json_safe(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple, set)):
+        return [make_json_safe(v) for v in obj]
+    elif hasattr(obj, "to_dict") and callable(getattr(obj, "to_dict")):
+        try:
+            return make_json_safe(obj.to_dict())
+        except Exception:
+            return str(obj)
+    elif type(obj).__module__ != "builtins":
+        return f"<{type(obj).__name__} Object>"
+    else:
+        return obj
 
 
 class DAGExecutor:
@@ -184,13 +226,14 @@ class DAGExecutor:
                         snapshot_info["columns"] = list(v.columns)
                         # Save top 5 rows for step inspection
                         try:
-                            snapshot_info["preview_rows"] = v.head(5).to_dict(orient="records")
+                            clean_v = v.head(5).replace({float("nan"): None, float("inf"): None, float("-inf"): None})
+                            snapshot_info["preview_rows"] = clean_v.to_dict(orient="records")
                         except Exception:
                             pass
                     elif hasattr(v, "shape"):
                         summary[k] = {"shape": list(v.shape), "type": "Array"}
                     elif k in ["metrics", "anomaly_summary", "forecasting_summary", "feature_importances"]:
-                        summary[k] = v
+                        summary[k] = make_json_safe(v)
                     else:
                         summary[k] = {"type": type(v).__name__}
 
@@ -223,16 +266,24 @@ class DAGExecutor:
         total_duration = round((time.time() - start_time) * 1000.0, 2)
         logs.append(f"🏁 Execution finished with status '{overall_status}' in {total_duration}ms")
 
+        # Sanitize all outputs to be 100% JSON serializable for FastAPI responses
+        safe_node_outputs = make_json_safe(node_outputs)
+        safe_final_metrics = make_json_safe(final_metrics)
+        safe_anomaly_summary = make_json_safe(anomaly_summary)
+        safe_forecasting_summary = make_json_safe(forecasting_summary)
+        safe_governance_summary = make_json_safe(governance_summary)
+        safe_step_snapshots = make_json_safe(step_snapshots)
+
         return WorkflowExecutionResult(
             execution_id=execution_id,
             status=overall_status,
             total_duration_ms=total_duration,
             node_results=node_results,
-            final_metrics=final_metrics,
-            anomaly_summary=anomaly_summary,
-            forecasting_summary=forecasting_summary,
-            governance_summary=governance_summary,
+            final_metrics=safe_final_metrics,
+            anomaly_summary=safe_anomaly_summary,
+            forecasting_summary=safe_forecasting_summary,
+            governance_summary=safe_governance_summary,
             logs=logs,
-            node_outputs=node_outputs,
-            step_snapshots=step_snapshots
+            node_outputs=safe_node_outputs,
+            step_snapshots=safe_step_snapshots
         )

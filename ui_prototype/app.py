@@ -1281,11 +1281,14 @@ if app_mode == "🎨 Pipeline Whiteboard":
         fc_df = None
         for n_id, out in node_outputs.items():
             if isinstance(out, dict):
-                if "forecast_df" in out and out["forecast_df"] is not None:
-                    fc_df = out["forecast_df"]
-                    break
-                elif "dataframe" in out and isinstance(out["dataframe"], pd.DataFrame) and "ds" in out["dataframe"].columns and "yhat" in out["dataframe"].columns:
-                    fc_df = out["dataframe"]
+                cand = out.get("forecast_df") or out.get("dataframe")
+                if isinstance(cand, dict) and "records" in cand:
+                    cand_df = pd.DataFrame(cand["records"])
+                    if "ds" in cand_df.columns and "yhat" in cand_df.columns:
+                        fc_df = cand_df
+                        break
+                elif isinstance(cand, pd.DataFrame) and "ds" in cand.columns and "yhat" in cand.columns:
+                    fc_df = cand
                     break
 
         if fc_sum or fc_df is not None:
@@ -1323,7 +1326,12 @@ if app_mode == "🎨 Pipeline Whiteboard":
         for n_id, out in node_outputs.items():
             if isinstance(out, dict):
                 candidate_df = out.get("dataframe") if "dataframe" in out else out.get("df")
-                if candidate_df is not None and isinstance(candidate_df, pd.DataFrame) and ("is_anomaly" in candidate_df.columns or "is_outlier" in candidate_df.columns):
+                if isinstance(candidate_df, dict) and "records" in candidate_df:
+                    cand_df = pd.DataFrame(candidate_df["records"])
+                    if "is_anomaly" in cand_df.columns or "is_outlier" in cand_df.columns:
+                        anomaly_df = cand_df
+                        break
+                elif candidate_df is not None and isinstance(candidate_df, pd.DataFrame) and ("is_anomaly" in candidate_df.columns or "is_outlier" in candidate_df.columns):
                     anomaly_df = candidate_df
                     break
 

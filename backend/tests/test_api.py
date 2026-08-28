@@ -46,3 +46,24 @@ async def test_workflow_validation_api():
         data = resp.json()
         assert data["valid"] is True
         assert len(data["errors"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_workflow_execution_api():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        payload = {
+            "nodes": [
+                {"id": "n1", "recipe_id": "csv_loader", "config": {}},
+                {"id": "n2", "recipe_id": "feature_scaler", "config": {"method": "standard"}}
+            ],
+            "edges": [
+                {"source": "n1", "target": "n2"}
+            ]
+        }
+        resp = await client.post("/api/v1/workflows/execute", json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "SUCCESS"
+        assert "node_outputs" in data
+        assert "step_snapshots" in data
