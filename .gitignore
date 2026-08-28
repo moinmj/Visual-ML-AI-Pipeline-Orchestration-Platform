@@ -26,11 +26,11 @@ wheels/
 venv/
 ENV/
 
-# Data & Storage
-data/
-storage/
-artifacts/
-uploads/
+# Data & Storage (Root Level Only)
+/data/
+/storage/
+/artifacts/
+/uploads/
 *.csv
 *.xlsx
 *.parquet
