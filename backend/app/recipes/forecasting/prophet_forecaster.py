@@ -6,7 +6,8 @@ from backend.app.recipes.base.recipe import BaseRecipe
 try:
     from prophet import Prophet
     PROPHET_AVAILABLE = True
-except ImportError:
+except (ImportError, OSError, Exception):
+    Prophet = None
     PROPHET_AVAILABLE = False
 
 

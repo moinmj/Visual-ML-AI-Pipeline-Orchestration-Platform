@@ -7,7 +7,8 @@ from backend.app.recipes.base.recipe import BaseRecipe
 try:
     import lightgbm as lgb
     LIGHTGBM_AVAILABLE = True
-except ImportError:
+except (ImportError, OSError, Exception):
+    lgb = None
     LIGHTGBM_AVAILABLE = False
 
 

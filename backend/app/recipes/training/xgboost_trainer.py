@@ -5,7 +5,8 @@ from backend.app.recipes.base.recipe import BaseRecipe
 try:
     import xgboost as xgb
     XGBOOST_AVAILABLE = True
-except ImportError:
+except (ImportError, OSError, Exception):
+    xgb = None
     XGBOOST_AVAILABLE = False
 
 

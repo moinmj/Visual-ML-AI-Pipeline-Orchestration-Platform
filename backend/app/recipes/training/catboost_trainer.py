@@ -6,7 +6,8 @@ from backend.app.recipes.base.recipe import BaseRecipe
 try:
     from catboost import CatBoostClassifier, CatBoostRegressor
     CATBOOST_AVAILABLE = True
-except ImportError:
+except (ImportError, OSError, Exception):
+    CatBoostClassifier, CatBoostRegressor = None, None
     CATBOOST_AVAILABLE = False
 
 
