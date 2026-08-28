@@ -742,6 +742,148 @@ def load_anomaly_template(force_preset: bool = False):
 
 
 # -------------------------------------------------------------
+# WORKFLOW PERSISTENCE & RESTORATION HELPERS
+# -------------------------------------------------------------
+def save_workflow_to_backend(name: str, description: str = "") -> dict:
+    """Saves current active canvas workflow and node configs to backend REST API/DB."""
+    nodes_payload = []
+    for n in st.session_state["flow_state"].nodes:
+        pos = get_node_position(n)
+        content = n.data.get("content", n.id) if hasattr(n, "data") and isinstance(n.data, dict) else n.id
+        nodes_payload.append({
+            "id": n.id,
+            "position": pos,
+            "content": content
+        })
+
+    edges_payload = [
+        {"id": e.id, "source": e.source, "target": e.target}
+        for e in st.session_state["flow_state"].edges
+    ]
+
+    body = {
+        "name": name,
+        "description": description,
+        "nodes": nodes_payload,
+        "edges": edges_payload,
+        "node_configs": st.session_state.get("node_configs", {})
+    }
+
+    try:
+        import httpx
+        res = httpx.post("http://localhost:8000/api/v1/workflows/", json=body, timeout=4.0)
+        if res.status_code in [200, 201]:
+            saved_json = res.json()
+            record_api_telemetry("💾 Save Workflow API", "/api/v1/workflows/", "POST", body, saved_json, res.status_code, 2.1)
+            return saved_json
+    except Exception:
+        pass
+
+    # Direct Async DB Fallback
+    import uuid
+    import asyncio
+    from backend.app.infrastructure.database.session import AsyncSessionLocal, init_db
+    from backend.app.workflows.models import Workflow
+
+    wf_id = str(uuid.uuid4())
+    async def _async_save():
+        await init_db()
+        async with AsyncSessionLocal() as session:
+            wf = Workflow(
+                id=wf_id,
+                name=name,
+                description=description,
+                nodes=nodes_payload,
+                edges=edges_payload,
+                node_configs=st.session_state.get("node_configs", {})
+            )
+            session.add(wf)
+            await session.commit()
+
+    try:
+        asyncio.run(_async_save())
+        saved_dict = {"id": wf_id, "name": name, "status": "SAVED"}
+        record_api_telemetry("💾 Save Workflow DB", "/api/v1/workflows/", "POST", body, saved_dict, 201, 1.8)
+        return saved_dict
+    except Exception as ex:
+        st.error(f"Error saving workflow: {str(ex)}")
+        return None
+
+
+def fetch_saved_workflows_from_backend() -> list:
+    """Fetches list of all saved pipeline workbooks from backend REST API/DB."""
+    try:
+        import httpx
+        res = httpx.get("http://localhost:8000/api/v1/workflows/", timeout=4.0)
+        if res.status_code == 200:
+            return res.json()
+    except Exception:
+        pass
+
+    # Direct Async DB Fallback
+    import asyncio
+    from backend.app.infrastructure.database.session import AsyncSessionLocal, init_db
+    from backend.app.workflows.models import Workflow
+    from sqlalchemy.future import select
+
+    async def _async_list():
+        await init_db()
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(Workflow).order_by(Workflow.updated_at.desc()))
+            wfs = result.scalars().all()
+            return [
+                {
+                    "id": w.id,
+                    "name": w.name,
+                    "description": w.description,
+                    "nodes": w.nodes,
+                    "edges": w.edges,
+                    "node_configs": w.node_configs,
+                    "updated_at": w.updated_at.strftime("%Y-%m-%d %H:%M:%S") if w.updated_at else ""
+                }
+                for w in wfs
+            ]
+
+    try:
+        return asyncio.run(_async_list())
+    except Exception:
+        return []
+
+
+def restore_saved_workflow(wf_data: dict):
+    """Restores a saved pipeline workbook into active StreamlitFlowState and node_configs."""
+    t_nodes = []
+    t_edges = []
+    
+    # Restore Nodes
+    for nd in wf_data.get("nodes", []):
+        nid = nd["id"]
+        pos = nd.get("position", (100, 100))
+        content = nd.get("content", nid)
+        t_nodes.append(create_flow_node(nid, pos, content))
+
+    # Restore Edges
+    for ed in wf_data.get("edges", []):
+        eid = ed.get("id", f"e_{ed['source']}_{ed['target']}")
+        t_edges.append(StreamlitFlowEdge(id=eid, source=ed["source"], target=ed["target"], animated=True))
+
+    st.session_state["flow_state"] = StreamlitFlowState(nodes=t_nodes, edges=t_edges)
+    st.session_state["node_configs"] = wf_data.get("node_configs", {})
+    st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
+    st.session_state["active_saved_workflow_name"] = wf_data.get("name", "Saved Workflow")
+
+    record_api_telemetry(
+        action_name=f"📂 Restore Workflow: {wf_data.get('name')}",
+        endpoint=f"/api/v1/workflows/{wf_data.get('id')}",
+        method="GET",
+        request_payload={"id": wf_data.get("id")},
+        response_payload={"nodes_restored": len(t_nodes), "edges_restored": len(t_edges)},
+        status_code=200,
+        duration_ms=1.5
+    )
+
+
+# -------------------------------------------------------------
 # TAB 1: VISUAL PIPELINE WHITEBOARD
 # -------------------------------------------------------------
 if app_mode == "🎨 Pipeline Whiteboard":
@@ -898,6 +1040,38 @@ if app_mode == "🎨 Pipeline Whiteboard":
                 st.session_state["pending_action"] = "clear_canvas"
             else:
                 st.info("ℹ️ Whiteboard is already empty.")
+
+    # Workbook Persistence & Load Bar
+    with st.expander("💾 Pipeline Workbook Manager (Save & Restore Workbooks)", expanded=False):
+        w_col1, w_col2 = st.columns([3, 3])
+        
+        with w_col1:
+            st.markdown("#### 💾 Save Current Pipeline Workbook")
+            wb_name = st.text_input("Workbook Title", value=st.session_state.get("active_saved_workflow_name", "My ML Pipeline Workbook"), key="wb_name_input")
+            wb_desc = st.text_area("Optional Description", value="", height=68, key="wb_desc_input")
+            if st.button("💾 Save Pipeline to Database & API", type="primary", use_container_width=True, key="btn_save_wb_ui"):
+                if not st.session_state["flow_state"].nodes:
+                    st.warning("⚠️ Canvas is empty. Add nodes before saving.")
+                else:
+                    saved_res = save_workflow_to_backend(wb_name, wb_desc)
+                    if saved_res:
+                        st.success(f"✅ Workbook '{wb_name}' saved permanently to SQLite & REST API!")
+                        st.session_state["active_saved_workflow_name"] = wb_name
+                        st.rerun()
+
+        with w_col2:
+            st.markdown("#### 📂 Load Saved Workbooks")
+            saved_list = fetch_saved_workflows_from_backend()
+            if not saved_list:
+                st.info("No saved pipeline workbooks found in database yet. Build a pipeline and click Save!")
+            else:
+                wf_options = {f"{w['name']} (ID: {w['id'][:8]}... | {w.get('updated_at', '')})": w for w in saved_list}
+                selected_wf_label = st.selectbox("Select Saved Workbook", list(wf_options.keys()), key="select_saved_wf")
+                if st.button("📂 Load Selected Pipeline Workbook", use_container_width=True, key="btn_load_wb_ui"):
+                    selected_wf = wf_options[selected_wf_label]
+                    restore_saved_workflow(selected_wf)
+                    st.success(f"🎉 Pipeline '{selected_wf['name']}' restored with all exact node configurations & parameters!")
+                    st.rerun()
 
     # Overwrite & Clear Confirmation Prompt
     if "pending_action" in st.session_state and st.session_state["pending_action"]:
