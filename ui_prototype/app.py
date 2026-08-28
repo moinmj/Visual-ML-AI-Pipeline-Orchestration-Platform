@@ -791,24 +791,105 @@ if app_mode == "🎨 Pipeline Whiteboard":
             if len(curr_nodes) < 2:
                 st.warning("⚠️ Auto-Wire requires at least 2 nodes on the canvas. Add components first.")
             else:
-                # 1. Sort nodes spatially from left to right (X-coordinate, then Y-coordinate)
-                sorted_nodes = sorted(curr_nodes, key=get_node_position)
-                
-                # 2. Build clean sequential left-to-right DAG connections
+                def get_recipe_type(nid: str) -> str:
+                    cfg = st.session_state.get("node_configs", {}).get(nid, {})
+                    return cfg.get("recipe_id", "")
+
+                def get_category_order(nid: str) -> int:
+                    r_id = get_recipe_type(nid)
+                    if r_id in ["cron_trigger", "webhook_trigger"]:
+                        return 0
+                    if r_id in ["csv_loader"]:
+                        return 1
+                    if r_id in ["missing_value_imputer", "feature_scaler", "categorical_encoder", "statistical_guardrail", "lag_feature_engineering"]:
+                        return 2
+                    if r_id in ["train_test_split"]:
+                        return 3
+                    if r_id in ["xgboost_trainer", "lightgbm_trainer", "catboost_trainer", "random_forest_trainer", "linear_trainer", "isolation_forest", "prophet_forecaster", "arima_forecaster"]:
+                        return 4
+                    if r_id in ["model_evaluator", "mlflow_tracker"]:
+                        return 5
+                    return 2
+
+                # Categorize nodes
+                triggers = [n for n in curr_nodes if get_category_order(n.id) == 0]
+                ingestions = [n for n in curr_nodes if get_category_order(n.id) == 1]
+                preprocessings = [n for n in curr_nodes if get_category_order(n.id) == 2]
+                splitters = [n for n in curr_nodes if get_category_order(n.id) == 3]
+                models = [n for n in curr_nodes if get_category_order(n.id) == 4]
+                evaluators = [n for n in curr_nodes if get_category_order(n.id) == 5]
+
+                # Sort each group by X position
+                triggers.sort(key=get_node_position)
+                ingestions.sort(key=get_node_position)
+                preprocessings.sort(key=get_node_position)
+                splitters.sort(key=get_node_position)
+                models.sort(key=get_node_position)
+                evaluators.sort(key=get_node_position)
+
                 new_edges = []
-                for i in range(len(sorted_nodes) - 1):
-                    src = sorted_nodes[i].id
-                    tgt = sorted_nodes[i+1].id
-                    new_edges.append(StreamlitFlowEdge(
-                        id=f"auto_{src}_{tgt}",
-                        source=src,
-                        target=tgt,
-                        animated=True
-                    ))
+                added_pairs = set()
+
+                def add_edge(src_id, tgt_id):
+                    if src_id != tgt_id and (src_id, tgt_id) not in added_pairs:
+                        added_pairs.add((src_id, tgt_id))
+                        new_edges.append(StreamlitFlowEdge(
+                            id=f"auto_{src_id}_{tgt_id}",
+                            source=src_id,
+                            target=tgt_id,
+                            animated=True
+                        ))
+
+                # 1. Triggers -> First Ingestion or Preprocessing node
+                data_candidates = ingestions + preprocessings + splitters + models
+                first_data_node = data_candidates[0].id if data_candidates else None
+                for t_node in triggers:
+                    if first_data_node:
+                        add_edge(t_node.id, first_data_node)
+
+                # 2. Ingestion + Preprocessing linear chain
+                data_chain = ingestions + preprocessings
+                for i in range(len(data_chain) - 1):
+                    add_edge(data_chain[i].id, data_chain[i+1].id)
+
+                last_prep_node = data_chain[-1].id if data_chain else (triggers[-1].id if triggers else None)
+
+                # 3. If Splitter exists
+                if splitters:
+                    main_splitter = splitters[0].id
+                    if last_prep_node:
+                        add_edge(last_prep_node, main_splitter)
+                    
+                    # Splitter connects to all models and evaluators
+                    for m in models:
+                        add_edge(main_splitter, m.id)
+                    for ev in evaluators:
+                        add_edge(main_splitter, ev.id)
+                    # Models connect to evaluators
+                    for m in models:
+                        for ev in evaluators:
+                            add_edge(m.id, ev.id)
+                else:
+                    # No splitter: Preprocessing connects to models
+                    if models:
+                        for m in models:
+                            if last_prep_node:
+                                add_edge(last_prep_node, m.id)
+                            for ev in evaluators:
+                                add_edge(m.id, ev.id)
+                    elif evaluators and last_prep_node:
+                        for ev in evaluators:
+                            add_edge(last_prep_node, ev.id)
+
+                # Fallback for any un-wired isolated nodes: chain linearly by category & x_pos
+                all_sorted = sorted(curr_nodes, key=lambda n: (get_category_order(n.id), get_node_position(n)[0]))
+                if not new_edges and len(all_sorted) >= 2:
+                    for i in range(len(all_sorted) - 1):
+                        add_edge(all_sorted[i].id, all_sorted[i+1].id)
 
                 st.session_state["flow_state"].edges = new_edges
                 st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
-                st.success(f"🔗 Sequentially wired {len(sorted_nodes)} nodes along visual left-to-right path!")
+                st.success(f"🔗 Smart-wired {len(curr_nodes)} nodes into an intelligent ML pipeline DAG!")
                 st.rerun()
 
     with bar_col7:
