@@ -34,6 +34,18 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             await session.close()
 
 
+from sqlalchemy import text
+
+
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Auto-migrate workflows table columns for soft delete support
+        try:
+            await conn.execute(text("ALTER TABLE workflows ADD COLUMN is_active BOOLEAN DEFAULT 1"))
+        except Exception:
+            pass
+        try:
+            await conn.execute(text("ALTER TABLE workflows ADD COLUMN deleted_at DATETIME"))
+        except Exception:
+            pass
