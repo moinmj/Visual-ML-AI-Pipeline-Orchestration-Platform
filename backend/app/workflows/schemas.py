@@ -30,3 +30,14 @@ class WorkflowResponse(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class AutoWireRequest(BaseModel):
+    nodes: List[Dict[str, Any]] = Field(..., description="Array of visual nodes containing id and recipe_id")
+    node_configs: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Optional mapping of node_id to recipe configuration")
+
+
+class AutoWireResponse(BaseModel):
+    edges: List[Dict[str, Any]] = Field(..., description="Smart recipe-aware generated DAG edges")
+    count: int = Field(..., description="Total edges generated")
+

@@ -11,9 +11,131 @@ from backend.app.engine.dag.graph import WorkflowGraph
 from backend.app.engine.execution.executor import DAGExecutor, WorkflowExecutionResult
 from backend.app.engine.execution.job_manager import job_manager
 from backend.app.workflows.models import Workflow
-from backend.app.workflows.schemas import WorkflowCreate, WorkflowUpdate, WorkflowResponse
+from backend.app.workflows.schemas import (
+    WorkflowCreate, WorkflowUpdate, WorkflowResponse,
+    AutoWireRequest, AutoWireResponse
+)
 
 router = APIRouter(prefix="/workflows", tags=["Workflows & DAG Execution"])
+
+
+@router.post("/autowire", response_model=AutoWireResponse)
+async def autowire_workflow(payload: AutoWireRequest):
+    """
+    Smart Recipe-Aware Auto-Wire API Endpoint.
+    Receives an array of visual canvas nodes and computes optimal DAG edge connections.
+    """
+    nodes = payload.nodes
+    if not nodes or len(nodes) < 2:
+        return {"edges": [], "count": 0}
+
+    configs = payload.node_configs or {}
+
+    def get_recipe_type(n: Dict[str, Any]) -> str:
+        nid = n.get("id", "")
+        if "recipe_id" in n and n["recipe_id"]:
+            return n["recipe_id"]
+        cfg = configs.get(nid, {})
+        return cfg.get("recipe_id", "")
+
+    def get_node_pos(n: Dict[str, Any]) -> float:
+        pos = n.get("position") or n.get("pos") or [0, 0]
+        if isinstance(pos, (list, tuple)) and len(pos) >= 1:
+            return float(pos[0])
+        elif isinstance(pos, dict):
+            return float(pos.get("x", 0))
+        return 0.0
+
+    def get_category_order(n: Dict[str, Any]) -> int:
+        r_id = get_recipe_type(n)
+        if r_id in ["cron_trigger", "webhook_trigger"]:
+            return 0
+        if r_id in ["csv_loader"]:
+            return 1
+        if r_id in ["missing_value_imputer", "feature_scaler", "categorical_encoder", "statistical_guardrail", "lag_feature_engineering"]:
+            return 2
+        if r_id in ["train_test_split"]:
+            return 3
+        if r_id in ["xgboost_trainer", "lightgbm_trainer", "catboost_trainer", "random_forest_trainer", "linear_trainer", "isolation_forest", "prophet_forecaster", "arima_forecaster"]:
+            return 4
+        if r_id in ["model_evaluator", "mlflow_tracker"]:
+            return 5
+        return 2
+
+    # Categorize nodes
+    triggers = [n for n in nodes if get_category_order(n) == 0]
+    ingestions = [n for n in nodes if get_category_order(n) == 1]
+    preprocessings = [n for n in nodes if get_category_order(n) == 2]
+    splitters = [n for n in nodes if get_category_order(n) == 3]
+    ml_models = [n for n in nodes if get_category_order(n) == 4]
+    evaluators = [n for n in nodes if get_category_order(n) == 5]
+
+    # Sort within categories by X coordinate
+    triggers.sort(key=get_node_pos)
+    ingestions.sort(key=get_node_pos)
+    preprocessings.sort(key=get_node_pos)
+    splitters.sort(key=get_node_pos)
+    ml_models.sort(key=get_node_pos)
+    evaluators.sort(key=get_node_pos)
+
+    new_edges = []
+    added_pairs = set()
+
+    def add_edge(src_id: str, tgt_id: str):
+        if src_id and tgt_id and src_id != tgt_id and (src_id, tgt_id) not in added_pairs:
+            added_pairs.add((src_id, tgt_id))
+            new_edges.append({
+                "id": f"auto_{src_id}_{tgt_id}",
+                "source": src_id,
+                "target": tgt_id,
+                "animated": True
+            })
+
+    # 1. Triggers -> First Ingestion/Data Node
+    data_candidates = ingestions + preprocessings + splitters + ml_models
+    first_data_node = data_candidates[0].get("id") if data_candidates else None
+    for t_node in triggers:
+        if first_data_node:
+            add_edge(t_node.get("id"), first_data_node)
+
+    # 2. Ingestion + Preprocessing linear chain
+    data_chain = ingestions + preprocessings
+    for i in range(len(data_chain) - 1):
+        add_edge(data_chain[i].get("id"), data_chain[i+1].get("id"))
+
+    last_prep_node = data_chain[-1].get("id") if data_chain else (triggers[-1].get("id") if triggers else None)
+
+    # 3. Splitting & Models & Evaluation
+    if splitters:
+        main_splitter = splitters[0].get("id")
+        if last_prep_node:
+            add_edge(last_prep_node, main_splitter)
+        
+        for m in ml_models:
+            add_edge(main_splitter, m.get("id"))
+        for ev in evaluators:
+            add_edge(main_splitter, ev.get("id"))
+        for m in ml_models:
+            for ev in evaluators:
+                add_edge(m.get("id"), ev.get("id"))
+    else:
+        if ml_models:
+            for m in ml_models:
+                if last_prep_node:
+                    add_edge(last_prep_node, m.get("id"))
+                for ev in evaluators:
+                    add_edge(m.get("id"), ev.get("id"))
+        elif evaluators and last_prep_node:
+            for ev in evaluators:
+                add_edge(last_prep_node, ev.get("id"))
+
+    # Fallback if no edges built
+    all_sorted = sorted(nodes, key=lambda n: (get_category_order(n), get_node_pos(n)))
+    if not new_edges and len(all_sorted) >= 2:
+        for i in range(len(all_sorted) - 1):
+            add_edge(all_sorted[i].get("id"), all_sorted[i+1].get("id"))
+
+    return {"edges": new_edges, "count": len(new_edges)}
 
 
 # -------------------------------------------------------------
