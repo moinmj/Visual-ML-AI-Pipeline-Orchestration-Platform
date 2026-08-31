@@ -870,6 +870,7 @@ def restore_saved_workflow(wf_data: dict):
     st.session_state["flow_state"] = StreamlitFlowState(nodes=t_nodes, edges=t_edges)
     st.session_state["node_configs"] = wf_data.get("node_configs", {})
     st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
+    st.session_state["active_saved_workflow_id"] = wf_data.get("id")
     st.session_state["active_saved_workflow_name"] = wf_data.get("name", "Saved Workflow")
 
     record_api_telemetry(
@@ -881,6 +882,74 @@ def restore_saved_workflow(wf_data: dict):
         status_code=200,
         duration_ms=1.5
     )
+
+
+def update_workflow_in_backend(workflow_id: str, name: str, description: str = "") -> dict:
+    """Updates an existing saved pipeline workbook using PUT /api/v1/workflows/{id}."""
+    nodes_payload = []
+    for n in st.session_state["flow_state"].nodes:
+        pos = get_node_position(n)
+        content = n.data.get("content", n.id) if hasattr(n, "data") and isinstance(n.data, dict) else n.id
+        nodes_payload.append({
+            "id": n.id,
+            "position": pos,
+            "content": content
+        })
+
+    edges_payload = [
+        {"id": e.id, "source": e.source, "target": e.target}
+        for e in st.session_state["flow_state"].edges
+    ]
+
+    body = {
+        "name": name,
+        "description": description,
+        "nodes": nodes_payload,
+        "edges": edges_payload,
+        "node_configs": st.session_state.get("node_configs", {})
+    }
+
+    try:
+        import httpx
+        res = httpx.put(f"http://localhost:8000/api/v1/workflows/{workflow_id}", json=body, timeout=4.0)
+        if res.status_code == 200:
+            updated_json = res.json()
+            record_api_telemetry("✏️ Update Workflow API", f"/api/v1/workflows/{workflow_id}", "PUT", body, updated_json, 200, 2.0)
+            return updated_json
+    except Exception:
+        pass
+
+    # Direct Async DB Fallback
+    import asyncio
+    from datetime import datetime, timezone
+    from backend.app.infrastructure.database.session import AsyncSessionLocal, init_db
+    from backend.app.workflows.models import Workflow
+    from sqlalchemy.future import select
+
+    async def _async_update():
+        await init_db()
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(Workflow).where(Workflow.id == workflow_id))
+            wf = result.scalar_one_or_none()
+            if wf:
+                wf.name = name
+                wf.description = description
+                wf.nodes = nodes_payload
+                wf.edges = edges_payload
+                wf.node_configs = st.session_state.get("node_configs", {})
+                wf.updated_at = datetime.now(timezone.utc)
+                await session.commit()
+                return {"id": workflow_id, "name": name, "status": "UPDATED"}
+            return None
+
+    try:
+        res_dict = asyncio.run(_async_update())
+        if res_dict:
+            record_api_telemetry("✏️ Update Workflow DB", f"/api/v1/workflows/{workflow_id}", "PUT", body, res_dict, 200, 1.8)
+        return res_dict
+    except Exception as ex:
+        st.error(f"Error updating workflow: {str(ex)}")
+        return None
 
 
 # -------------------------------------------------------------
@@ -1046,18 +1115,45 @@ if app_mode == "🎨 Pipeline Whiteboard":
         w_col1, w_col2 = st.columns([3, 3])
         
         with w_col1:
-            st.markdown("#### 💾 Save Current Pipeline Workbook")
+            st.markdown("#### 💾 Save / Update Pipeline Workbook")
             wb_name = st.text_input("Workbook Title", value=st.session_state.get("active_saved_workflow_name", "My ML Pipeline Workbook"), key="wb_name_input")
             wb_desc = st.text_area("Optional Description", value="", height=68, key="wb_desc_input")
-            if st.button("💾 Save Pipeline to Database & API", type="primary", use_container_width=True, key="btn_save_wb_ui"):
-                if not st.session_state["flow_state"].nodes:
-                    st.warning("⚠️ Canvas is empty. Add nodes before saving.")
-                else:
-                    saved_res = save_workflow_to_backend(wb_name, wb_desc)
-                    if saved_res:
-                        st.success(f"✅ Workbook '{wb_name}' saved permanently to SQLite & REST API!")
-                        st.session_state["active_saved_workflow_name"] = wb_name
-                        st.rerun()
+            
+            active_id = st.session_state.get("active_saved_workflow_id")
+            if active_id:
+                u_col1, u_col2 = st.columns([1, 1])
+                with u_col1:
+                    if st.button("✏️ Update Loaded Pipeline", type="primary", use_container_width=True, key="btn_update_wb_ui"):
+                        if not st.session_state["flow_state"].nodes:
+                            st.warning("⚠️ Canvas is empty. Add nodes before updating.")
+                        else:
+                            up_res = update_workflow_in_backend(active_id, wb_name, wb_desc)
+                            if up_res:
+                                st.success(f"✅ Workbook '{wb_name}' updated permanently in Database & REST API!")
+                                st.session_state["active_saved_workflow_name"] = wb_name
+                                st.rerun()
+                with u_col2:
+                    if st.button("➕ Save as New Copy", use_container_width=True, key="btn_save_new_wb_ui"):
+                        if not st.session_state["flow_state"].nodes:
+                            st.warning("⚠️ Canvas is empty.")
+                        else:
+                            saved_res = save_workflow_to_backend(f"{wb_name} (Copy)", wb_desc)
+                            if saved_res:
+                                st.success(f"✅ Saved copy '{wb_name} (Copy)' as new workbook!")
+                                st.session_state["active_saved_workflow_id"] = saved_res.get("id")
+                                st.session_state["active_saved_workflow_name"] = f"{wb_name} (Copy)"
+                                st.rerun()
+            else:
+                if st.button("💾 Save Pipeline to Database & API", type="primary", use_container_width=True, key="btn_save_wb_ui"):
+                    if not st.session_state["flow_state"].nodes:
+                        st.warning("⚠️ Canvas is empty. Add nodes before saving.")
+                    else:
+                        saved_res = save_workflow_to_backend(wb_name, wb_desc)
+                        if saved_res:
+                            st.success(f"✅ Workbook '{wb_name}' saved permanently to SQLite & REST API!")
+                            st.session_state["active_saved_workflow_id"] = saved_res.get("id")
+                            st.session_state["active_saved_workflow_name"] = wb_name
+                            st.rerun()
 
         with w_col2:
             st.markdown("#### 📂 Load Saved Workbooks")
