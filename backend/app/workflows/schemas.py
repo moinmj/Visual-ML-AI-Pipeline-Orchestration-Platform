@@ -19,6 +19,7 @@ class WorkflowUpdate(BaseModel):
     nodes: Optional[List[Dict[str, Any]]] = None
     edges: Optional[List[Dict[str, Any]]] = None
     node_configs: Optional[Dict[str, Any]] = None
+    is_active: Optional[bool] = None
 
 
 class WorkflowResponse(BaseModel):
@@ -28,6 +29,8 @@ class WorkflowResponse(BaseModel):
     nodes: List[Dict[str, Any]] = Field(default_factory=list)
     edges: List[Dict[str, Any]] = Field(default_factory=list)
     node_configs: Dict[str, Any] = Field(default_factory=dict)
+    is_active: bool = True
+    deleted_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 

@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, DateTime, JSON, Text
+from sqlalchemy import Column, String, DateTime, JSON, Text, Boolean
 from backend.app.infrastructure.database.session import Base
 
 
@@ -15,6 +15,10 @@ class Workflow(Base):
     nodes = Column(JSON, nullable=False, default=list)
     edges = Column(JSON, nullable=False, default=list)
     node_configs = Column(JSON, nullable=False, default=dict)
+
+    # Soft Delete & Governance
+    is_active = Column(Boolean, nullable=False, default=True)
+    deleted_at = Column(DateTime, nullable=True)
 
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))

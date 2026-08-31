@@ -64,12 +64,19 @@ async def save_workflow(
 
 @router.get("/", response_model=List[WorkflowResponse])
 async def list_workflows(
+    include_deleted: bool = False,
     db: AsyncSession = Depends(get_db)
 ):
     """
-    List all saved pipeline workbooks.
+    List all saved pipeline workbooks. By default filters out soft-deleted pipelines.
+    Pass include_deleted=True to retrieve archived/trash items.
     """
-    result = await db.execute(select(Workflow).order_by(Workflow.updated_at.desc()))
+    query = select(Workflow)
+    if not include_deleted:
+        query = query.where(Workflow.is_active == True)
+    
+    query = query.order_by(Workflow.updated_at.desc())
+    result = await db.execute(query)
     workflows = result.scalars().all()
     return workflows
 
@@ -122,6 +129,8 @@ async def upsert_workflow(
             wf.edges = payload.edges
         if payload.node_configs is not None:
             wf.node_configs = payload.node_configs
+        wf.is_active = True
+        wf.deleted_at = None
         wf.updated_at = datetime.now(timezone.utc)
     else:
         # Create new
@@ -131,7 +140,8 @@ async def upsert_workflow(
             description=payload.description,
             nodes=payload.nodes or [],
             edges=payload.edges or [],
-            node_configs=payload.node_configs or {}
+            node_configs=payload.node_configs or {},
+            is_active=True
         )
         db.add(wf)
 
@@ -146,7 +156,7 @@ async def delete_workflow(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Delete a saved pipeline workbook by ID.
+    Soft-delete a saved pipeline workbook by ID (sets is_active=False, deleted_at=now).
     """
     result = await db.execute(select(Workflow).where(Workflow.id == workflow_id))
     wf = result.scalar_one_or_none()
@@ -156,8 +166,38 @@ async def delete_workflow(
             detail=f"Workflow workbook '{workflow_id}' not found."
         )
 
-    await db.delete(wf)
+    wf.is_active = False
+    wf.deleted_at = datetime.now(timezone.utc)
     await db.commit()
+    return {
+        "status": "SOFT_DELETED",
+        "workflow_id": workflow_id,
+        "message": f"Workflow workbook '{workflow_id}' archived/soft-deleted successfully."
+    }
+
+
+@router.post("/{workflow_id}/restore", response_model=WorkflowResponse)
+async def restore_workflow(
+    workflow_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Restore a soft-deleted pipeline workbook back to active state.
+    """
+    result = await db.execute(select(Workflow).where(Workflow.id == workflow_id))
+    wf = result.scalar_one_or_none()
+    if not wf:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Workflow workbook '{workflow_id}' not found."
+        )
+
+    wf.is_active = True
+    wf.deleted_at = None
+    wf.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(wf)
+    return wf
     return {"status": "DELETED", "message": f"Workflow workbook '{workflow_id}' deleted successfully."}
 
 

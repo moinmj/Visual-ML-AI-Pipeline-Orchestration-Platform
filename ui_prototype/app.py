@@ -810,11 +810,12 @@ def save_workflow_to_backend(name: str, description: str = "") -> dict:
         return None
 
 
-def fetch_saved_workflows_from_backend() -> list:
+def fetch_saved_workflows_from_backend(include_deleted: bool = False) -> list:
     """Fetches list of all saved pipeline workbooks from backend REST API/DB."""
     try:
         import httpx
-        res = httpx.get("http://localhost:8000/api/v1/workflows/", timeout=4.0)
+        url = f"http://localhost:8000/api/v1/workflows/?include_deleted={'true' if include_deleted else 'false'}"
+        res = httpx.get(url, timeout=4.0)
         if res.status_code == 200:
             return res.json()
     except Exception:
@@ -829,7 +830,11 @@ def fetch_saved_workflows_from_backend() -> list:
     async def _async_list():
         await init_db()
         async with AsyncSessionLocal() as session:
-            result = await session.execute(select(Workflow).order_by(Workflow.updated_at.desc()))
+            query = select(Workflow)
+            if not include_deleted:
+                query = query.where(Workflow.is_active == True)
+            query = query.order_by(Workflow.updated_at.desc())
+            result = await session.execute(query)
             wfs = result.scalars().all()
             return [
                 {
@@ -839,6 +844,7 @@ def fetch_saved_workflows_from_backend() -> list:
                     "nodes": w.nodes,
                     "edges": w.edges,
                     "node_configs": w.node_configs,
+                    "is_active": getattr(w, "is_active", True),
                     "updated_at": w.updated_at.strftime("%Y-%m-%d %H:%M:%S") if w.updated_at else ""
                 }
                 for w in wfs
@@ -848,6 +854,79 @@ def fetch_saved_workflows_from_backend() -> list:
         return asyncio.run(_async_list())
     except Exception:
         return []
+
+
+def soft_delete_workflow_backend(workflow_id: str) -> bool:
+    """Soft-deletes a workflow by ID."""
+    try:
+        import httpx
+        res = httpx.delete(f"http://localhost:8000/api/v1/workflows/{workflow_id}", timeout=4.0)
+        if res.status_code == 200:
+            record_api_telemetry("🗑️ Soft-Delete Workflow API", f"/api/v1/workflows/{workflow_id}", "DELETE", {"id": workflow_id}, res.json(), 200, 1.9)
+            return True
+    except Exception:
+        pass
+
+    # Direct Async DB Fallback
+    import asyncio
+    from datetime import datetime, timezone
+    from backend.app.infrastructure.database.session import AsyncSessionLocal, init_db
+    from backend.app.workflows.models import Workflow
+    from sqlalchemy.future import select
+
+    async def _async_delete():
+        await init_db()
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(Workflow).where(Workflow.id == workflow_id))
+            wf = result.scalar_one_or_none()
+            if wf:
+                wf.is_active = False
+                wf.deleted_at = datetime.now(timezone.utc)
+                await session.commit()
+                return True
+            return False
+
+    try:
+        return asyncio.run(_async_delete())
+    except Exception:
+        return False
+
+
+def restore_deleted_workflow_backend(workflow_id: str) -> bool:
+    """Restores a soft-deleted workflow by ID back to active state."""
+    try:
+        import httpx
+        res = httpx.post(f"http://localhost:8000/api/v1/workflows/{workflow_id}/restore", timeout=4.0)
+        if res.status_code == 200:
+            record_api_telemetry("♻️ Restore Workflow API", f"/api/v1/workflows/{workflow_id}/restore", "POST", {"id": workflow_id}, res.json(), 200, 2.0)
+            return True
+    except Exception:
+        pass
+
+    # Direct Async DB Fallback
+    import asyncio
+    from datetime import datetime, timezone
+    from backend.app.infrastructure.database.session import AsyncSessionLocal, init_db
+    from backend.app.workflows.models import Workflow
+    from sqlalchemy.future import select
+
+    async def _async_restore():
+        await init_db()
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(Workflow).where(Workflow.id == workflow_id))
+            wf = result.scalar_one_or_none()
+            if wf:
+                wf.is_active = True
+                wf.deleted_at = None
+                wf.updated_at = datetime.now(timezone.utc)
+                await session.commit()
+                return True
+            return False
+
+    try:
+        return asyncio.run(_async_restore())
+    except Exception:
+        return False
 
 
 def restore_saved_workflow(wf_data: dict):
@@ -1060,18 +1139,40 @@ if app_mode == "🎨 Pipeline Whiteboard":
                         st.rerun()
 
         with w_col2:
-            st.markdown("#### 📂 Load Saved Workbooks")
-            saved_list = fetch_saved_workflows_from_backend()
+            st.markdown("#### 📂 Load & Manage Saved Workbooks")
+            show_archived = st.checkbox("♻️ Show Soft-Deleted / Archived Pipelines", value=False, key="chk_show_archived_wb")
+            saved_list = fetch_saved_workflows_from_backend(include_deleted=show_archived)
+            
+            if show_archived:
+                saved_list = [w for w in saved_list if not w.get("is_active", True)]
+            else:
+                saved_list = [w for w in saved_list if w.get("is_active", True)]
+
             if not saved_list:
-                st.info("No saved pipeline workbooks found in database yet. Build a pipeline and click Save!")
+                msg = "No archived pipeline workbooks in trash." if show_archived else "No active saved pipeline workbooks found in database. Build a pipeline and click Save!"
+                st.info(msg)
             else:
                 wf_options = {f"{w['name']} (ID: {w['id'][:8]}... | {w.get('updated_at', '')})": w for w in saved_list}
                 selected_wf_label = st.selectbox("Select Saved Workbook", list(wf_options.keys()), key="select_saved_wf")
-                if st.button("📂 Load Selected Pipeline Workbook", use_container_width=True, key="btn_load_wb_ui"):
-                    selected_wf = wf_options[selected_wf_label]
-                    restore_saved_workflow(selected_wf)
-                    st.success(f"🎉 Pipeline '{selected_wf['name']}' restored with all exact node configurations & parameters!")
-                    st.rerun()
+                selected_wf = wf_options[selected_wf_label]
+                
+                if not show_archived:
+                    btn_c1, btn_c2 = st.columns([3, 2])
+                    with btn_c1:
+                        if st.button("📂 Load Selected Workbook", use_container_width=True, key="btn_load_wb_ui"):
+                            restore_saved_workflow(selected_wf)
+                            st.success(f"🎉 Pipeline '{selected_wf['name']}' restored with all exact node configurations & parameters!")
+                            st.rerun()
+                    with btn_c2:
+                        if st.button("🗑️ Soft-Delete", use_container_width=True, key="btn_del_wb_ui"):
+                            if soft_delete_workflow_backend(selected_wf["id"]):
+                                st.success(f"🗑️ Soft-deleted '{selected_wf['name']}'. It is safely archived in DB!")
+                                st.rerun()
+                else:
+                    if st.button("♻️ Restore Selected Pipeline from Trash", type="primary", use_container_width=True, key="btn_restore_wb_ui"):
+                        if restore_deleted_workflow_backend(selected_wf["id"]):
+                            st.success(f"♻️ Restored '{selected_wf['name']}' back to active state!")
+                            st.rerun()
 
     # Overwrite & Clear Confirmation Prompt
     if "pending_action" in st.session_state and st.session_state["pending_action"]:
