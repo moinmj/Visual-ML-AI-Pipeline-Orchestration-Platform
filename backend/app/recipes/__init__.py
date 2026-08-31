@@ -3,6 +3,12 @@ from backend.app.recipes.ingestion.csv_loader import CSVLoaderRecipe
 from backend.app.recipes.preprocessing.missing_values import MissingValueImputerRecipe
 from backend.app.recipes.preprocessing.scaling import FeatureScalerRecipe
 from backend.app.recipes.preprocessing.encoding import CategoricalEncoderRecipe
+from backend.app.recipes.preprocessing.duplicates import (
+    DuplicateRemoverRecipe,
+    CategorySanitizerRecipe,
+    CorrelationFilterRecipe,
+    VarianceFilterRecipe
+)
 from backend.app.recipes.splitting.train_test_split import TrainTestSplitRecipe
 from backend.app.recipes.training.xgboost_trainer import XGBoostTrainerRecipe
 from backend.app.recipes.training.random_forest_trainer import RandomForestTrainerRecipe
@@ -24,6 +30,10 @@ def register_all_recipes():
     recipe_registry.register(CSVLoaderRecipe())
     recipe_registry.register(WebhookTriggerRecipe())
     recipe_registry.register(CronScheduleTriggerRecipe())
+    recipe_registry.register(DuplicateRemoverRecipe())
+    recipe_registry.register(CategorySanitizerRecipe())
+    recipe_registry.register(CorrelationFilterRecipe())
+    recipe_registry.register(VarianceFilterRecipe())
     recipe_registry.register(MissingValueImputerRecipe())
     recipe_registry.register(FeatureScalerRecipe())
     recipe_registry.register(CategoricalEncoderRecipe())
