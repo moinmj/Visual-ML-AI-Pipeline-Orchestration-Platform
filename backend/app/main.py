@@ -16,6 +16,10 @@ from backend.app.core.logging import setup_logging, logger
 from backend.app.core.exceptions import PlatformException
 from backend.app.infrastructure.database.session import init_db
 
+# Import models to register tables with SQLAlchemy Base
+import backend.app.datasets.models
+import backend.app.workflows.models
+
 # Import routers
 from backend.app.datasets.router import router as datasets_router
 from backend.app.recipes.router import router as recipes_router
