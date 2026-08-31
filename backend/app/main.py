@@ -24,6 +24,8 @@ import backend.app.workflows.models
 from backend.app.datasets.router import router as datasets_router
 from backend.app.recipes.router import router as recipes_router
 from backend.app.workflows.router import router as workflows_router
+from backend.app.recommendation.router import router as recommendation_router
+from backend.app.templates.router import router as templates_router
 
 
 @asynccontextmanager
@@ -93,3 +95,5 @@ async def health_check():
 app.include_router(datasets_router, prefix=settings.API_V1_STR)
 app.include_router(recipes_router, prefix=settings.API_V1_STR)
 app.include_router(workflows_router, prefix=settings.API_V1_STR)
+app.include_router(recommendation_router, prefix=settings.API_V1_STR)
+app.include_router(templates_router, prefix=settings.API_V1_STR)

@@ -67,3 +67,43 @@ async def test_workflow_execution_api():
         assert data["status"] == "SUCCESS"
         assert "node_outputs" in data
         assert "step_snapshots" in data
+
+
+@pytest.mark.asyncio
+async def test_recommendation_and_templates_api():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. Test AI Recommendation
+        rec_resp = await client.post("/api/v1/recommend/pipeline", json={"preset": "balanced"})
+        assert rec_resp.status_code == 200
+        rec_data = rec_resp.json()
+        assert "task_type" in rec_data
+        assert "model_rankings" in rec_data
+        assert "recommended_dag" in rec_data
+        assert len(rec_data["recommended_dag"]["nodes"]) >= 3
+
+        # 2. Test Auto-Wire
+        wire_resp = await client.post("/api/v1/recommend/autowire", json={
+            "nodes": [
+                {"id": "node_1", "recipe_id": "csv_loader", "label": "CSV Ingest"},
+                {"id": "node_2", "recipe_id": "feature_scaler", "label": "Scaler"},
+                {"id": "node_3", "recipe_id": "xgboost_trainer", "label": "Model"}
+            ]
+        })
+        assert wire_resp.status_code == 200
+        wire_data = wire_resp.json()
+        assert wire_data["status"] == "AUTOWIRED"
+        assert len(wire_data["edges"]) >= 2
+
+        # 3. Test Templates List
+        tmpl_list = await client.get("/api/v1/templates/")
+        assert tmpl_list.status_code == 200
+        templates = tmpl_list.json()
+        assert len(templates) >= 3
+
+        # 4. Test Get Template DAG
+        ml_tmpl = await client.get("/api/v1/templates/ml_supervised")
+        assert ml_tmpl.status_code == 200
+        ml_dag = ml_tmpl.json()["dag"]
+        assert len(ml_dag["nodes"]) == 6
+        assert len(ml_dag["edges"]) == 6
