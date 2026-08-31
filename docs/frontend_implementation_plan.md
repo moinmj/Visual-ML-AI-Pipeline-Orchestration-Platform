@@ -322,6 +322,125 @@ export interface WorkflowExecutionResult {
 
 ---
 
+### 4.4. AI Recommendation & Auto-Architect (`/api/v1/recommend`)
+
+#### 1. One-Click AI Pipeline Recommendation
+- **Endpoint**: `POST /api/v1/recommend/pipeline`
+- **Request Body**:
+  ```json
+  {
+    "dataset_id": "ds_8f21bc9e",
+    "target_column": "churn",
+    "task_type": "classification",
+    "preset": "balanced"
+  }
+  ```
+- **Response**: `200 OK`
+  ```json
+  {
+    "task_type": "classification",
+    "explanation": "Detected discrete classification on `churn` (2 unique classes).",
+    "target_column": "churn",
+    "profile_summary": {
+      "rows": 1000,
+      "columns": 12,
+      "missing_cells": 15,
+      "categorical_columns": 4,
+      "numeric_columns": 8,
+      "date_columns": 0
+    },
+    "preprocessing_recommendations": [
+      {
+        "recipe_id": "missing_value_imputer",
+        "name": "🧹 Missing Value Imputer",
+        "config": { "strategy": "median" },
+        "reason": "Dataset contains 15 missing cells requiring imputation."
+      }
+    ],
+    "model_rankings": [
+      {
+        "recipe_id": "xgboost_trainer",
+        "name": "⚡ XGBoost Classification",
+        "score": 9.8,
+        "tier": "Tier-1 Gold Standard",
+        "reason": "Highest accuracy and regularized gradient boosting for tabular datasets."
+      },
+      {
+        "recipe_id": "lightgbm_trainer",
+        "name": "🚀 LightGBM Classification",
+        "score": 9.5,
+        "tier": "Tier-1 High Speed",
+        "reason": "Optimal for ultra-fast training with histogram-based leaf growth."
+      }
+    ],
+    "recommended_dag": {
+      "nodes": [
+        { "id": "node_csv", "recipe_id": "csv_loader", "label": "📄 Data Ingestion", "position": { "x": 40, "y": 100 }, "config": { "dataset_id": "ds_8f21bc9e" } },
+        { "id": "node_prep_1", "recipe_id": "missing_value_imputer", "label": "🧹 Missing Value Imputer", "position": { "x": 280, "y": 100 }, "config": { "strategy": "median" } },
+        { "id": "node_split", "recipe_id": "train_test_split", "label": "✂️ Train/Test Split", "position": { "x": 520, "y": 100 }, "config": { "target_column": "churn", "test_size": 0.2 } },
+        { "id": "node_model", "recipe_id": "xgboost_trainer", "label": "⚡ XGBoost Trainer", "position": { "x": 760, "y": 50 }, "config": { "task_type": "classification", "n_estimators": 100 } },
+        { "id": "node_eval", "recipe_id": "classification_evaluator", "label": "🎯 Model Evaluator", "position": { "x": 1000, "y": 100 }, "config": { "report_type": "Comprehensive" } }
+      ],
+      "edges": [
+        { "id": "e_node_csv_node_prep_1", "source": "node_csv", "target": "node_prep_1", "animated": true },
+        { "id": "e_node_prep_1_node_split", "source": "node_prep_1", "target": "node_split", "animated": true },
+        { "id": "e_node_split_node_model", "source": "node_split", "target": "node_model", "animated": true },
+        { "id": "e_node_split_node_eval", "source": "node_split", "target": "node_eval", "animated": true },
+        { "id": "e_node_model_node_eval", "source": "node_model", "target": "node_eval", "animated": true }
+      ],
+      "node_configs": { ... }
+    }
+  }
+  ```
+
+#### 2. Auto-Wiring Endpoint
+- **Endpoint**: `POST /api/v1/recommend/autowire` (or `POST /api/v1/workflows/autowire`)
+- **Request Body**:
+  ```json
+  {
+    "nodes": [
+      { "id": "node_csv", "recipe_id": "csv_loader", "position": { "x": 40, "y": 100 } },
+      { "id": "node_scale", "recipe_id": "feature_scaler", "position": { "x": 280, "y": 100 } },
+      { "id": "node_model", "recipe_id": "xgboost_trainer", "position": { "x": 520, "y": 100 } }
+    ]
+  }
+  ```
+- **Response**: `200 OK` → `{ "status": "AUTOWIRED", "nodes_count": 3, "edges_count": 2, "edges": [ ... ] }`
+
+---
+
+### 4.5. Pipeline Templates & Blueprints (`/api/v1/templates`)
+
+#### 1. List Available Templates
+- **Endpoint**: `GET /api/v1/templates/`
+- **Response**: `200 OK`
+  ```json
+  [
+    { "id": "ml_supervised", "name": "Supervised ML Classification / Regression", "category": "Machine Learning", "icon": "⚡", "node_count": 6 },
+    { "id": "time_series_forecasting", "name": "Time-Series Seasonality & Trend Forecasting", "category": "Time-Series", "icon": "🔮", "node_count": 3 },
+    { "id": "anomaly_detection", "name": "Unsupervised Anomaly & Outlier Detection", "category": "Anomaly Detection", "icon": "🚨", "node_count": 3 },
+    { "id": "enterprise_governance", "name": "Enterprise CatBoost with Model Governance Card", "category": "Governance & Compliance", "icon": "🛡️", "node_count": 7 }
+  ]
+  ```
+
+#### 2. Get Specific Blueprint DAG
+- **Endpoint**: `GET /api/v1/templates/{template_id}`
+- **Examples**: `/api/v1/templates/ml_supervised`, `/api/v1/templates/time_series_forecasting`, `/api/v1/templates/anomaly_detection`
+- **Response**: `200 OK` → Returns the full ready-to-render DAG (`dag.nodes`, `dag.edges`, `dag.node_configs`).
+
+---
+
+### 4.6. Saved Workflow Workbooks & Soft-Delete CRUD (`/api/v1/workflows`)
+
+- `POST /api/v1/workflows/` — Save / create pipeline workbook.
+- `GET /api/v1/workflows/` — List saved workbooks (`include_deleted=true` to retrieve trash).
+- `GET /api/v1/workflows/{id}` — Load specific workbook with exact configurations.
+- `PUT /api/v1/workflows/{id}` — Upsert / update existing workbook.
+- `DELETE /api/v1/workflows/{id}` — Soft-delete workbook (archives it).
+- `POST /api/v1/workflows/{id}/restore` — Restore soft-deleted workbook.
+
+---
+
 ## 5. UI Views & Visual Component Specifications
 
 ### 5.1. View 1: 🎨 Visual Pipeline Studio (Canvas)

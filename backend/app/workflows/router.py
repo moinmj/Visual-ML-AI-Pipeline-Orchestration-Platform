@@ -281,3 +281,14 @@ async def trigger_webhook(
         "columns_received": list(df.columns),
         "sample_preview": df.head(3).to_dict(orient="records")
     }
+
+
+@router.post("/autowire")
+async def autowire_workflow_nodes(payload: Dict[str, Any] = Body(...)):
+    """
+    Auto-Wire DAG Endpoint. Automatically links whiteboard nodes into an intelligent pipeline DAG.
+    """
+    from backend.app.recommendation.router import autowire_nodes, AutoWireRequest
+    nodes = payload.get("nodes", [])
+    return await autowire_nodes(AutoWireRequest(nodes=nodes))
+
