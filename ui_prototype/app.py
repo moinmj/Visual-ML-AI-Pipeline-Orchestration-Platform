@@ -150,6 +150,10 @@ RECIPE_CATEGORY_MAP = {
         {"id": "csv_loader", "name": "Dataset Ingestion (CSV/Excel/Upload)", "icon": "📄", "default_config": {}}
     ],
     "🧹 Data Cleaning & Preprocessing": [
+        {"id": "duplicate_remover", "name": "Duplicate Row Handler & Remover", "icon": "👯", "default_config": {"strategy": "drop_first"}},
+        {"id": "category_sanitizer", "name": "Categorical & Text Label Standardizer", "icon": "🔤", "default_config": {"lowercase": True, "strip_whitespace": True}},
+        {"id": "correlation_filter", "name": "Redundant Column & Multicollinearity Filter", "icon": "📊", "default_config": {"threshold": 0.95}},
+        {"id": "variance_filter", "name": "Constant & Low Variance Feature Filter", "icon": "🛑", "default_config": {"max_dominant_percentage": 0.99}},
         {"id": "missing_value_imputer", "name": "Missing Value Imputer (Mean/Median/Mode)", "icon": "🧹", "default_config": {"strategy": "median"}},
         {"id": "feature_scaler", "name": "Feature Scaler (StandardScaler/MinMax)", "icon": "⚖️", "default_config": {"method": "standard"}},
         {"id": "categorical_encoder", "name": "Categorical Encoder (One-Hot/Label)", "icon": "🔤", "default_config": {"method": "one_hot"}}
@@ -1022,7 +1026,7 @@ if app_mode == "🎨 Pipeline Whiteboard":
                         return 0
                     if r_id in ["csv_loader"]:
                         return 1
-                    if r_id in ["missing_value_imputer", "feature_scaler", "categorical_encoder", "statistical_guardrail", "lag_feature_engineering"]:
+                    if r_id in ["missing_value_imputer", "feature_scaler", "categorical_encoder", "statistical_guardrail", "lag_feature_engineering", "duplicate_remover", "category_sanitizer", "correlation_filter", "variance_filter"]:
                         return 2
                     if r_id in ["train_test_split"]:
                         return 3
