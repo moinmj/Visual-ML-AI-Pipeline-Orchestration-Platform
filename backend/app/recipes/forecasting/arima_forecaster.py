@@ -183,6 +183,13 @@ class ARIMAForecasterRecipe(BaseRecipe):
         })
 
         full_forecast_df = pd.concat([hist_df, fut_df], ignore_index=True)
+        if hasattr(full_forecast_df["ds"].dt, "strftime"):
+            full_forecast_df["ds"] = full_forecast_df["ds"].dt.strftime("%Y-%m-%d")
+        else:
+            full_forecast_df["ds"] = full_forecast_df["ds"].astype(str)
+
+        # Embed forecast points directly into metrics/summary for instant lightweight charting
+        metrics["forecast_data"] = full_forecast_df.to_dict(orient="records")
 
         return {
             "forecast_df": full_forecast_df,

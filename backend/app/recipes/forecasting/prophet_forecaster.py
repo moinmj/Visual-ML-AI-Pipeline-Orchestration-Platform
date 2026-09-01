@@ -157,12 +157,15 @@ class ProphetForecasterRecipe(BaseRecipe):
 
         # Build clean visualization table
         result_df = pd.DataFrame({
-            "ds": forecast["ds"],
+            "ds": forecast["ds"].dt.strftime("%Y-%m-%d") if hasattr(forecast["ds"].dt, "strftime") else forecast["ds"].astype(str),
             "yhat": np.round(forecast["yhat"], 2),
             "yhat_lower": np.round(forecast["yhat_lower"], 2),
             "yhat_upper": np.round(forecast["yhat_upper"], 2),
             "is_future": is_future_flags
         })
+
+        # Embed forecast points directly into metrics/summary for instant lightweight charting
+        metrics["forecast_data"] = result_df.to_dict(orient="records")
 
         return {
             "forecast_df": result_df,

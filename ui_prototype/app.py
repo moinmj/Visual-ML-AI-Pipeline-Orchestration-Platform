@@ -1637,19 +1637,22 @@ if app_mode == "🎨 Pipeline Whiteboard":
         # -----------------------------------------------------
         # 1. TIME-SERIES FORECASTING REPORT
         # -----------------------------------------------------
-        fc_sum = exec_data.get("forecasting_summary")
+        fc_sum = exec_data.get("forecasting_summary") or final_metrics if (final_metrics and final_metrics.get("task_type") == "time_series_forecasting") else exec_data.get("forecasting_summary")
         fc_df = None
-        for n_id, out in node_outputs.items():
-            if isinstance(out, dict):
-                cand = out.get("forecast_df") or out.get("dataframe")
-                if isinstance(cand, dict) and "records" in cand:
-                    cand_df = pd.DataFrame(cand["records"])
-                    if "ds" in cand_df.columns and "yhat" in cand_df.columns:
-                        fc_df = cand_df
+        if fc_sum and "forecast_data" in fc_sum:
+            fc_df = pd.DataFrame(fc_sum["forecast_data"])
+        else:
+            for n_id, out in node_outputs.items():
+                if isinstance(out, dict):
+                    cand = out.get("forecast_df") or out.get("dataframe")
+                    if isinstance(cand, dict) and "records" in cand:
+                        cand_df = pd.DataFrame(cand["records"])
+                        if "ds" in cand_df.columns and "yhat" in cand_df.columns:
+                            fc_df = cand_df
+                            break
+                    elif isinstance(cand, pd.DataFrame) and "ds" in cand.columns and "yhat" in cand.columns:
+                        fc_df = cand
                         break
-                elif isinstance(cand, pd.DataFrame) and "ds" in cand.columns and "yhat" in cand.columns:
-                    fc_df = cand
-                    break
 
         if fc_sum or fc_df is not None:
             st.markdown("### 📈 Time-Series Forecast Predictions")
@@ -1681,19 +1684,22 @@ if app_mode == "🎨 Pipeline Whiteboard":
         # -----------------------------------------------------
         # 2. UNSUPERVISED ANOMALY DETECTION REPORT
         # -----------------------------------------------------
-        anom_sum = exec_data.get("anomaly_summary")
+        anom_sum = exec_data.get("anomaly_summary") or final_metrics if (final_metrics and final_metrics.get("task_type") == "anomaly_detection") else exec_data.get("anomaly_summary")
         anomaly_df = None
-        for n_id, out in node_outputs.items():
-            if isinstance(out, dict):
-                candidate_df = out.get("dataframe") if "dataframe" in out else out.get("df")
-                if isinstance(candidate_df, dict) and "records" in candidate_df:
-                    cand_df = pd.DataFrame(candidate_df["records"])
-                    if "is_anomaly" in cand_df.columns or "is_outlier" in cand_df.columns:
-                        anomaly_df = cand_df
+        if anom_sum and "scatter_preview" in anom_sum:
+            anomaly_df = pd.DataFrame(anom_sum["scatter_preview"])
+        else:
+            for n_id, out in node_outputs.items():
+                if isinstance(out, dict):
+                    candidate_df = out.get("dataframe") if "dataframe" in out else out.get("df")
+                    if isinstance(candidate_df, dict) and "records" in candidate_df:
+                        cand_df = pd.DataFrame(candidate_df["records"])
+                        if "is_anomaly" in cand_df.columns or "is_outlier" in cand_df.columns:
+                            anomaly_df = cand_df
+                            break
+                    elif candidate_df is not None and isinstance(candidate_df, pd.DataFrame) and ("is_anomaly" in candidate_df.columns or "is_outlier" in candidate_df.columns):
+                        anomaly_df = candidate_df
                         break
-                elif candidate_df is not None and isinstance(candidate_df, pd.DataFrame) and ("is_anomaly" in candidate_df.columns or "is_outlier" in candidate_df.columns):
-                    anomaly_df = candidate_df
-                    break
 
         if anom_sum or anomaly_df is not None:
             st.markdown("### 🚨 Anomaly Detection & Outlier Risk Matrix")

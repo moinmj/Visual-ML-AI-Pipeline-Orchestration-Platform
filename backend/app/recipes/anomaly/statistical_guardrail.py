@@ -132,6 +132,12 @@ class StatisticalGuardrailRecipe(BaseRecipe):
             "column_breakdown": column_outlier_counts
         }
 
+        clean_out = final_df.replace({float("nan"): None, float("inf"): None, float("-inf"): None})
+        flag_col = "is_outlier" if "is_outlier" in clean_out.columns else "is_anomaly"
+        metrics["scatter_preview"] = clean_out.head(150).to_dict(orient="records")
+        if flag_col in clean_out.columns:
+            metrics["anomalies_sample"] = clean_out[clean_out[flag_col] == 1].head(50).to_dict(orient="records")
+
         return {
             "dataframe": final_df,
             "metrics": metrics,
