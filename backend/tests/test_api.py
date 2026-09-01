@@ -107,3 +107,52 @@ async def test_recommendation_and_templates_api():
         ml_dag = ml_tmpl.json()["dag"]
         assert len(ml_dag["nodes"]) == 6
         assert len(ml_dag["edges"]) == 6
+
+
+@pytest.mark.asyncio
+async def test_upload_dataset_and_execute_custom_pipeline():
+    await init_db()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. Upload a custom CSV with unique identifiable column names
+        csv_bytes = b"custom_col_x,custom_col_y,custom_target\n10.5,20.1,1\n30.2,40.5,0\n50.1,60.8,1\n70.3,80.9,0\n90.0,100.2,1\n"
+        files = {"file": ("custom_experiment.csv", csv_bytes, "text/csv")}
+        upload_resp = await client.post("/api/v1/datasets/upload", files=files, data={"name": "Custom Experiment Dataset"})
+        assert upload_resp.status_code == 201
+        ds_data = upload_resp.json()
+        dataset_id = ds_data["id"]
+        assert dataset_id is not None
+        assert ds_data["row_count"] == 5
+        assert ds_data["column_count"] == 3
+
+        # 2. Execute a workflow DAG pointing explicitly to this dataset_id
+        dag_payload = {
+            "nodes": [
+                {
+                    "id": "node_csv",
+                    "recipe_id": "csv_loader",
+                    "label": "Custom CSV Loader",
+                    "config": {"dataset_id": dataset_id}
+                },
+                {
+                    "id": "node_scaler",
+                    "recipe_id": "feature_scaler",
+                    "label": "Feature Scaler",
+                    "config": {"method": "standard"}
+                }
+            ],
+            "edges": [
+                {"source": "node_csv", "target": "node_scaler"}
+            ]
+        }
+        exec_resp = await client.post("/api/v1/workflows/execute", json=dag_payload)
+        assert exec_resp.status_code == 200
+        exec_data = exec_resp.json()
+        assert exec_data["status"] == "SUCCESS"
+
+        # 3. Verify step snapshots contains our unique uploaded columns
+        csv_snapshot = exec_data["step_snapshots"]["node_csv"]
+        assert "custom_col_x" in csv_snapshot["columns"]
+        assert "custom_col_y" in csv_snapshot["columns"]
+        assert "custom_target" in csv_snapshot["columns"]
+        assert csv_snapshot["row_count"] == 5
