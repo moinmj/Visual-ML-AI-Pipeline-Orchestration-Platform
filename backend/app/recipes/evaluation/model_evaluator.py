@@ -43,7 +43,9 @@ class ModelEvaluatorRecipe(BaseRecipe):
         }
 
     def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
-        model = inputs.get("model")
+        model = inputs.get("model") or inputs.get("trained_model")
+        if model is None and isinstance(context, dict):
+            model = context.get("model") or context.get("trained_model")
         
         X_test = inputs.get("X_test")
         if X_test is None and isinstance(context, dict):
@@ -58,7 +60,7 @@ class ModelEvaluatorRecipe(BaseRecipe):
         if X_test is None or y_test is None:
             raise ValueError("ModelEvaluator expects 'X_test' and 'y_test' in inputs. Please ensure a Train/Test Split node is connected in the pipeline.")
 
-        task_type = inputs.get("task_type", "classification")
+        task_type = inputs.get("task_type") or (context.get("task_type") if isinstance(context, dict) else "classification") or "classification"
         avg_strat = config.get("average_strategy", "weighted")
 
         # Graceful check for Time-Series models (Prophet/ARIMA) connected into Evaluator

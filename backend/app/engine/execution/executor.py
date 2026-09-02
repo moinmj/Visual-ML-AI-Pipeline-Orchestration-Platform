@@ -189,7 +189,7 @@ class DAGExecutor:
                 node_outputs[node.id] = outputs
 
                 # Propagate standard artifacts to shared context
-                for key in ["X_test", "y_test", "X_train", "y_train", "dataframe", "forecast_df"]:
+                for key in ["X_test", "y_test", "X_train", "y_train", "dataframe", "forecast_df", "model", "scaler", "encoder", "task_type", "feature_names", "feature_importances"]:
                     if key in outputs:
                         pipeline_context[key] = outputs[key]
 
