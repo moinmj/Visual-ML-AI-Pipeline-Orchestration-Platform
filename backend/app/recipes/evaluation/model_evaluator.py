@@ -74,11 +74,45 @@ class ModelEvaluatorRecipe(BaseRecipe):
                 "report": "Time-series forecasting evaluation completed."
             }
 
+        # Ensure X_test non-numeric columns are safely encoded and aligned with model features
+        if isinstance(X_test, pd.DataFrame):
+            expected_features = None
+            if hasattr(model, "feature_names_in_"):
+                expected_features = list(model.feature_names_in_)
+            elif isinstance(context, dict) and context.get("feature_names"):
+                expected_features = context.get("feature_names")
+
+            non_numeric = [c for c in X_test.columns if not pd.api.types.is_numeric_dtype(X_test[c])]
+            if non_numeric:
+                from backend.app.recipes.training.encoder_utils import safe_prepare_training_data
+                X_train_ctx = context.get("X_train") if isinstance(context, dict) else None
+                if X_train_ctx is not None and isinstance(X_train_ctx, pd.DataFrame):
+                    _, X_test_prep = safe_prepare_training_data(X_train_ctx, X_test)
+                    if X_test_prep is not None:
+                        X_test = X_test_prep
+                else:
+                    X_test_prep, _ = safe_prepare_training_data(X_test, None)
+                    if X_test_prep is not None:
+                        X_test = X_test_prep
+
+            if expected_features:
+                X_test = X_test.reindex(columns=expected_features, fill_value=0)
+
         predictions = model.predict(X_test)
         metrics: Dict[str, Any] = {"task_type": task_type}
         detailed_report = {}
 
         if task_type == "classification":
+            # Align y_test types with predictions if needed
+            try:
+                if len(predictions) > 0 and len(y_test) > 0:
+                    first_pred = predictions[0]
+                    first_y = y_test.iloc[0] if hasattr(y_test, "iloc") else y_test[0]
+                    if isinstance(first_pred, (int, np.integer)) and isinstance(first_y, str):
+                        from sklearn.preprocessing import LabelEncoder
+                        y_test = LabelEncoder().fit_transform(y_test)
+            except Exception:
+                pass
             acc = float(round(accuracy_score(y_test, predictions), 4))
             bal_acc = float(round(balanced_accuracy_score(y_test, predictions), 4))
             prec = float(round(precision_score(y_test, predictions, average=avg_strat, zero_division=0), 4))
