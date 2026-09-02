@@ -18,9 +18,81 @@ class NodeExecutionResult(BaseModel):
     status: str  # "SUCCESS", "FAILED", "SKIPPED"
     duration_ms: float
     error_message: Optional[str] = None
+    error_title: Optional[str] = None
+    error_suggestion: Optional[str] = None
     output_summary: Dict[str, Any] = Field(default_factory=dict)
 
     model_config = {"arbitrary_types_allowed": True}
+
+
+def diagnose_execution_error(
+    recipe: Any,
+    error: Exception,
+    inputs: Dict[str, Any],
+    config: Dict[str, Any],
+    context: Dict[str, Any]
+) -> Dict[str, str]:
+    """
+    Translates cryptic low-level Python/C++/ML library errors into plain-English root causes
+    and concrete, actionable step-by-step UI suggestions for the visual pipeline canvas.
+    """
+    err_str = str(error)
+    rec_name = getattr(recipe, "name", "Processor")
+
+    # 1. Unencoded Categorical/String Columns in ML Trainers
+    if any(k in err_str for k in ["enable_categorical", "DataFrame.dtypes for data must be int, float", "could not convert string to float", "cannot convert string"]):
+        return {
+            "title": "Unencoded Categorical Features",
+            "message": f"Trainer '{rec_name}' received non-numeric text columns. Machine learning algorithms require categorical features to be encoded into numbers.",
+            "suggestion": "Insert a 'Categorical Feature Encoder' processor before 'Train / Test Splitter' to choose an encoding strategy (One-Hot, Target, Label, or Binary)."
+        }
+
+    # 2. Missing Train/Test Split or Missing Partition Keys
+    if any(k in err_str for k in ["expects 'X_train' and 'y_train'", "expects 'X_test' and 'y_test'"]):
+        return {
+            "title": "Missing Dataset Split",
+            "message": f"'{rec_name}' requires train/test dataset partitions but did not find them in upstream inputs.",
+            "suggestion": "Connect a 'Train / Test Splitter' processor before this component and ensure a target column is selected."
+        }
+
+    # 3. Missing Model in Model Evaluator
+    if "expects a trained 'model'" in err_str:
+        return {
+            "title": "Missing Trained Model",
+            "message": f"'{rec_name}' requires a trained machine learning model to evaluate.",
+            "suggestion": "Connect a model trainer (e.g. XGBoost, Random Forest, LightGBM, CatBoost) to this Evaluator."
+        }
+
+    # 4. Time Series Forecaster Missing Date Column
+    if any(k in err_str for k in ["'ds'", "time-series observations", "date_column"]):
+        return {
+            "title": "Time-Series Date Column Issue",
+            "message": f"Forecaster '{rec_name}' could not identify a valid sequential date column.",
+            "suggestion": "Open processor settings and configure 'date_column' to your date/timestamp column (e.g., 'OrderDate', 'Date')."
+        }
+
+    # 5. Target Column Missing or Not Found
+    if any(k in err_str for k in ["Target column", "target_column", "not found in dataframe"]):
+        return {
+            "title": "Target Column Not Found",
+            "message": f"The target variable specified does not exist in the incoming dataset.",
+            "suggestion": "Open processor configuration and select a valid target column from your dataset."
+        }
+
+    # 6. Feature Dimension Mismatch
+    if "not aligned" in err_str or "feature_names" in err_str:
+        return {
+            "title": "Feature Dimension Mismatch",
+            "message": f"The feature columns in test data do not match what the model was trained on.",
+            "suggestion": "Ensure the exact same preprocessing steps (Imputer, Scaler, Encoder) are applied before both training and testing."
+        }
+
+    # Default fallback
+    return {
+        "title": f"Execution Error in {rec_name}",
+        "message": err_str,
+        "suggestion": "Check incoming connection handles and verify the processor configuration parameters."
+    }
 
 
 class WorkflowExecutionResult(BaseModel):
@@ -250,16 +322,23 @@ class DAGExecutor:
 
             except Exception as e:
                 duration_ms = round((time.time() - node_start) * 1000.0, 2)
-                err_msg = str(e)
-                logs.append(f"❌ Node `{node.id}` [{recipe.name}] failed in {duration_ms}ms: {err_msg}")
-                logger.error(f"Execution failed on node {node.id}: {traceback.format_exc()}")
+                diag = diagnose_execution_error(recipe, e, node_inputs, node.config, pipeline_context)
+                err_title = diag["title"]
+                err_msg = diag["message"]
+                err_sugg = diag["suggestion"]
+
+                logs.append(f"❌ Node `{node.id}` [{recipe.name}] failed in {duration_ms}ms: {err_title} ➔ {err_msg}")
+                logs.append(f"💡 Suggestion: {err_sugg}")
+                logger.error(f"Execution failed on node {node.id} ({err_title}): {traceback.format_exc()}")
 
                 node_results.append(NodeExecutionResult(
                     node_id=node.id,
                     recipe_id=node.recipe_id,
                     status="FAILED",
                     duration_ms=duration_ms,
-                    error_message=err_msg
+                    error_message=err_msg,
+                    error_title=err_title,
+                    error_suggestion=err_sugg
                 ))
                 overall_status = "FAILED"
                 break
