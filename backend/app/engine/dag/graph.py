@@ -101,12 +101,41 @@ class WorkflowGraph(BaseModel):
                             f"Fix: Insert a '✂️ Train / Test Splitter' between data preparation and this trainer."
                         )
 
-            # Evaluator Check: Evaluator requires test data or model output
-            elif recipe.recipe_id == "model_evaluator":
-                if not parents:
-                    errors.append(f"❌ '{node.id}' [Model Evaluator] has no inputs. Connect a trained Model and Splitter to evaluate.")
+        # 4. ML Best Practice Checks & Recommendations
+        all_recipe_ids = {n.recipe_id for n in self.nodes}
+        for node in self.nodes:
+            try:
+                recipe = recipe_registry.get(node.recipe_id)
+            except Exception:
+                continue
+
+            # Check if ML Trainer is present without any Categorical Encoder in the pipeline
+            if recipe.category == "training":
+                if "categorical_encoder" not in all_recipe_ids:
+                    errors.append(
+                        f"💡 Pro-Tip for '{node.id}' [{recipe.name}]: No 'Categorical Feature Encoder' processor found in pipeline. "
+                        f"If your dataset contains text/string categories (e.g. Region, Category, Status), "
+                        f"insert a 'Categorical Feature Encoder' before Train/Test Split to boost model accuracy."
+                    )
 
         return errors
+
+    def get_diagnostics(self) -> Dict[str, Any]:
+        """
+        Returns structured diagnostic breakdown categorized into blocking errors,
+        warnings, and actionable best-practice recommendations for frontend canvas display.
+        """
+        raw_items = self.validate_graph()
+        errors = [item for item in raw_items if item.startswith("❌") or (not item.startswith("⚠️") and not item.startswith("💡"))]
+        warnings = [item for item in raw_items if item.startswith("⚠️")]
+        recommendations = [item for item in raw_items if item.startswith("💡")]
+
+        return {
+            "is_valid": len(errors) == 0,
+            "errors": errors,
+            "warnings": warnings,
+            "recommendations": recommendations
+        }
 
     def get_topological_order(self) -> List[WorkflowNode]:
         """

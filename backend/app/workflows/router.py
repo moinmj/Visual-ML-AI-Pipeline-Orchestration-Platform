@@ -208,12 +208,14 @@ async def restore_workflow(
 @router.post("/validate", response_model=Dict[str, Any])
 async def validate_workflow(workflow: WorkflowGraph):
     """
-    Validate a workflow graph for cycle detection, valid node connectivity, and schema requirements.
+    Validate a workflow graph for cycle detection, valid node connectivity, schema requirements, and best-practice recommendations.
     """
-    errors = workflow.validate_graph()
+    diag = workflow.get_diagnostics()
     return {
-        "valid": len(errors) == 0,
-        "errors": errors
+        "valid": diag["is_valid"],
+        "errors": diag["errors"],
+        "warnings": diag["warnings"],
+        "recommendations": diag["recommendations"]
     }
 
 
