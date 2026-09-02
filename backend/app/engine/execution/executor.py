@@ -189,8 +189,11 @@ class DAGExecutor:
         try:
             ordered_nodes = workflow.get_topological_order()
         except Exception as e:
-            err_msg = f"DAG Resolution Error: {str(e)}"
-            logs.append(f"❌ {err_msg}")
+            if hasattr(e, "errors") and getattr(e, "errors"):
+                for err in getattr(e, "errors"):
+                    logs.append(f"❌ DAG Resolution Error: {err}")
+            else:
+                logs.append(f"❌ DAG Resolution Error: {str(e)}")
             return WorkflowExecutionResult(
                 execution_id=execution_id,
                 status="FAILED",
