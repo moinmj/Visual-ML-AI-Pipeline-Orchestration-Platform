@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Body
+from fastapi import APIRouter, Depends, HTTPException, status, Body, Query
 from typing import Dict, Any, List, Optional, Union
 import uuid
 import pandas as pd
@@ -218,22 +218,37 @@ async def validate_workflow(workflow: WorkflowGraph):
 
 
 @router.post("/execute", response_model=WorkflowExecutionResult)
-async def execute_workflow(workflow: WorkflowGraph):
+async def execute_workflow(
+    workflow: WorkflowGraph,
+    include_node_outputs: bool = Query(False, description="Opt-in to include full raw data of every node (default: false for lean response)")
+):
     """
     Execute a full workflow DAG end-to-end synchronously.
+    Returns lean response by default (node_results, step_snapshots 5-row previews, final_metrics, logs).
     """
     execution_id = str(uuid.uuid4())
-    result = DAGExecutor.execute_workflow(execution_id=execution_id, workflow=workflow)
+    result = DAGExecutor.execute_workflow(
+        execution_id=execution_id,
+        workflow=workflow,
+        include_node_outputs=include_node_outputs
+    )
     return result
 
 
 @router.post("/async-execute")
-async def submit_async_workflow(workflow: WorkflowGraph):
+async def submit_async_workflow(
+    workflow: WorkflowGraph,
+    include_node_outputs: bool = Query(False, description="Opt-in to include full raw data of every node")
+):
     """
     Submit a workflow for asynchronous background execution (n8n/Boomi worker pool pattern).
     Returns immediately with a job_id for status polling.
     """
-    job_id = job_manager.submit_job(workflow=workflow, trigger_type="api_async")
+    job_id = job_manager.submit_job(
+        workflow=workflow,
+        trigger_type="api_async",
+        include_node_outputs=include_node_outputs
+    )
     return {
         "job_id": job_id,
         "status": "PENDING",

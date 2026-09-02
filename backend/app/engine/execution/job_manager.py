@@ -40,7 +40,8 @@ class PipelineJobManager:
         initial_df: Optional[pd.DataFrame] = None,
         context: Optional[Dict[str, Any]] = None,
         trigger_type: str = "manual",
-        trigger_id: Optional[str] = None
+        trigger_id: Optional[str] = None,
+        include_node_outputs: bool = False
     ) -> str:
         """Submits a DAG execution job to the background worker pool."""
         job_id = f"job_{uuid.uuid4().hex[:8]}"
@@ -67,7 +68,8 @@ class PipelineJobManager:
             job_id=job_id,
             workflow=workflow,
             initial_df=initial_df,
-            context=context
+            context=context,
+            include_node_outputs=include_node_outputs
         )
         self.job_futures[job_id] = future
         return job_id
@@ -77,7 +79,8 @@ class PipelineJobManager:
         job_id: str,
         workflow: WorkflowGraph,
         initial_df: Optional[pd.DataFrame],
-        context: Optional[Dict[str, Any]]
+        context: Optional[Dict[str, Any]],
+        include_node_outputs: bool = False
     ):
         with self.lock:
             if job_id in self.jobs:
@@ -90,7 +93,8 @@ class PipelineJobManager:
                 execution_id=job_id,
                 workflow=workflow,
                 initial_df=initial_df,
-                context=context
+                context=context,
+                include_node_outputs=include_node_outputs
             )
             duration_ms = round((time.time() - start_t) * 1000.0, 2)
             with self.lock:

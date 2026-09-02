@@ -104,6 +104,11 @@ class IsolationForestRecipe(BaseRecipe):
             "top_anomalies_indices": df_out.sort_values(by="anomaly_score", ascending=False).head(10).index.tolist()
         }
 
+        # Embed scatter plot preview rows (all columns + is_anomaly + anomaly_score)
+        clean_out = df_out.replace({float("nan"): None, float("inf"): None, float("-inf"): None})
+        metrics["scatter_preview"] = clean_out.head(150).to_dict(orient="records")
+        metrics["anomalies_sample"] = clean_out[clean_out["is_anomaly"] == 1].head(50).to_dict(orient="records")
+
         return {
             "dataframe": df_out,
             "model": iso_forest,

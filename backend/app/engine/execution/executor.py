@@ -93,7 +93,8 @@ class DAGExecutor:
         execution_id: str,
         workflow: WorkflowGraph,
         initial_df: Optional[pd.DataFrame] = None,
-        context: Optional[Dict[str, Any]] = None
+        context: Optional[Dict[str, Any]] = None,
+        include_node_outputs: bool = False
     ) -> WorkflowExecutionResult:
         start_time = time.time()
         logs: List[str] = []
@@ -267,7 +268,7 @@ class DAGExecutor:
         logs.append(f"🏁 Execution finished with status '{overall_status}' in {total_duration}ms")
 
         # Sanitize all outputs to be 100% JSON serializable for FastAPI responses
-        safe_node_outputs = make_json_safe(node_outputs)
+        safe_node_outputs = make_json_safe(node_outputs) if include_node_outputs else {}
         safe_final_metrics = make_json_safe(final_metrics)
         safe_anomaly_summary = make_json_safe(anomaly_summary)
         safe_forecasting_summary = make_json_safe(forecasting_summary)

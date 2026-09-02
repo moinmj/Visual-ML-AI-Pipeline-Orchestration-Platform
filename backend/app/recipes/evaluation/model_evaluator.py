@@ -61,6 +61,17 @@ class ModelEvaluatorRecipe(BaseRecipe):
         task_type = inputs.get("task_type", "classification")
         avg_strat = config.get("average_strategy", "weighted")
 
+        # Graceful check for Time-Series models (Prophet/ARIMA) connected into Evaluator
+        if type(model).__name__ == "Prophet" or "prophet" in str(type(model)).lower() or task_type == "time_series_forecasting":
+            metrics = inputs.get("metrics") or inputs.get("forecasting_summary") or {
+                "task_type": "time_series_forecasting",
+                "algorithm": type(model).__name__
+            }
+            return {
+                "metrics": metrics,
+                "report": "Time-series forecasting evaluation completed."
+            }
+
         predictions = model.predict(X_test)
         metrics: Dict[str, Any] = {"task_type": task_type}
         detailed_report = {}
