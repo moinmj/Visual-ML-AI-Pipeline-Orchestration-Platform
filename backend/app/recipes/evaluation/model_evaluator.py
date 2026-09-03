@@ -12,9 +12,9 @@ from backend.app.recipes.base.recipe import BaseRecipe
 class ModelEvaluatorRecipe(BaseRecipe):
     recipe_id = "model_evaluator"
     name = "Model Performance Evaluator"
-    version = "1.0.0"
+    version = "1.1.0"
     category = "evaluation"
-    description = "Evaluates trained models and generates comprehensive performance reports (Classification, Regression, Confusion Matrix, Per-Class Metrics, Feature Analysis)."
+    description = "Evaluates models with comprehensive performance reports, custom decision thresholds (sensitivity tuning), and business cost/loss impact metrics."
     input_types = ["model", "test_data"]
     output_types = ["metrics", "report"]
 
@@ -38,6 +38,28 @@ class ModelEvaluatorRecipe(BaseRecipe):
                     "title": "Multiclass Averaging Strategy",
                     "enum": ["weighted", "macro", "micro"],
                     "default": "weighted"
+                },
+                "decision_threshold": {
+                    "type": "number",
+                    "title": "Decision Probability Threshold",
+                    "default": 0.5,
+                    "minimum": 0.05,
+                    "maximum": 0.95,
+                    "description": "Business threshold for positive class (e.g. lower to 0.2 to catch more fraud/churn; raise to 0.8 to minimize false alarms)."
+                },
+                "cost_false_positive": {
+                    "type": "number",
+                    "title": "Business Cost per False Positive ($)",
+                    "default": 0.0,
+                    "minimum": 0.0,
+                    "description": "Cost of a false alarm (e.g. customer support call or investigation cost)."
+                },
+                "cost_false_negative": {
+                    "type": "number",
+                    "title": "Business Cost per False Negative ($)",
+                    "default": 0.0,
+                    "minimum": 0.0,
+                    "description": "Financial cost of a missed positive (e.g. unprevented fraud loss or customer churn value)."
                 }
             }
         }
@@ -62,6 +84,9 @@ class ModelEvaluatorRecipe(BaseRecipe):
 
         task_type = inputs.get("task_type") or (context.get("task_type") if isinstance(context, dict) else "classification") or "classification"
         avg_strat = config.get("average_strategy", "weighted")
+        decision_threshold = float(config.get("decision_threshold", 0.5))
+        cost_fp = float(config.get("cost_false_positive", 0.0))
+        cost_fn = float(config.get("cost_false_negative", 0.0))
 
         # Graceful check for Time-Series models (Prophet/ARIMA) connected into Evaluator
         if type(model).__name__ == "Prophet" or "prophet" in str(type(model)).lower() or task_type == "time_series_forecasting":
@@ -100,46 +125,15 @@ class ModelEvaluatorRecipe(BaseRecipe):
 
         predictions = model.predict(X_test)
         metrics: Dict[str, Any] = {"task_type": task_type}
-        detailed_report = {}
 
         if task_type == "classification":
-            # Align y_test types with predictions if needed
-            try:
-                if len(predictions) > 0 and len(y_test) > 0:
-                    first_pred = predictions[0]
-                    first_y = y_test.iloc[0] if hasattr(y_test, "iloc") else y_test[0]
-                    if isinstance(first_pred, (int, np.integer)) and isinstance(first_y, str):
-                        from sklearn.preprocessing import LabelEncoder
-                        y_test = LabelEncoder().fit_transform(y_test)
-            except Exception:
-                pass
-            acc = float(round(accuracy_score(y_test, predictions), 4))
-            bal_acc = float(round(balanced_accuracy_score(y_test, predictions), 4))
-            prec = float(round(precision_score(y_test, predictions, average=avg_strat, zero_division=0), 4))
-            rec = float(round(recall_score(y_test, predictions, average=avg_strat, zero_division=0), 4))
-            f1 = float(round(f1_score(y_test, predictions, average=avg_strat, zero_division=0), 4))
-            cm = confusion_matrix(y_test, predictions).tolist()
-
-            # Per-class detailed report dictionary
-            try:
-                clf_rep = classification_report(y_test, predictions, output_dict=True, zero_division=0)
-            except Exception:
-                clf_rep = {}
-
-            metrics.update({
-                "accuracy": acc,
-                "balanced_accuracy": bal_acc,
-                "precision": prec,
-                "recall": rec,
-                "f1_score": f1,
-                "confusion_matrix": cm,
-                "classification_report": clf_rep
-            })
-
-            # Check if probability predictions available for ROC-AUC & Log Loss
+            # Check if probability predictions available and apply custom decision threshold
             if hasattr(model, "predict_proba"):
                 try:
                     probs = model.predict_proba(X_test)
+                    if probs.shape[1] == 2 and decision_threshold != 0.5:
+                        predictions = (probs[:, 1] >= decision_threshold).astype(int)
+
                     if probs.shape[1] == 2:
                         auc = float(round(roc_auc_score(y_test, probs[:, 1]), 4))
                         metrics["roc_auc"] = auc
@@ -151,6 +145,53 @@ class ModelEvaluatorRecipe(BaseRecipe):
                     metrics["log_loss"] = ll
                 except Exception:
                     pass
+
+            # Align y_test types with predictions if needed
+            try:
+                if len(predictions) > 0 and len(y_test) > 0:
+                    first_pred = predictions[0]
+                    first_y = y_test.iloc[0] if hasattr(y_test, "iloc") else y_test[0]
+                    if isinstance(first_pred, (int, np.integer)) and isinstance(first_y, str):
+                        from sklearn.preprocessing import LabelEncoder
+                        y_test = LabelEncoder().fit_transform(y_test)
+            except Exception:
+                pass
+
+            acc = float(round(accuracy_score(y_test, predictions), 4))
+            bal_acc = float(round(balanced_accuracy_score(y_test, predictions), 4))
+            prec = float(round(precision_score(y_test, predictions, average=avg_strat, zero_division=0), 4))
+            rec = float(round(recall_score(y_test, predictions, average=avg_strat, zero_division=0), 4))
+            f1 = float(round(f1_score(y_test, predictions, average=avg_strat, zero_division=0), 4))
+            cm = confusion_matrix(y_test, predictions).tolist()
+
+            try:
+                clf_rep = classification_report(y_test, predictions, output_dict=True, zero_division=0)
+            except Exception:
+                clf_rep = {}
+
+            metrics.update({
+                "accuracy": acc,
+                "balanced_accuracy": bal_acc,
+                "precision": prec,
+                "recall": rec,
+                "f1_score": f1,
+                "decision_threshold_used": decision_threshold,
+                "confusion_matrix": cm,
+                "classification_report": clf_rep
+            })
+
+            # Calculate Business Dollar Impact if cost values provided
+            if (cost_fp > 0 or cost_fn > 0) and len(cm) == 2 and len(cm[0]) == 2:
+                tn, fp = cm[0][0], cm[0][1]
+                fn, tp = cm[1][0], cm[1][1]
+                total_business_cost = round((fp * cost_fp) + (fn * cost_fn), 2)
+                metrics["business_loss_impact"] = {
+                    "cost_per_false_positive": cost_fp,
+                    "cost_per_false_negative": cost_fn,
+                    "false_positive_count": fp,
+                    "false_negative_count": fn,
+                    "total_estimated_business_loss": total_business_cost
+                }
 
         else:
             mae = float(round(mean_absolute_error(y_test, predictions), 4))

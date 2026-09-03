@@ -13,9 +13,9 @@ except (ImportError, OSError, Exception):
 class XGBoostTrainerRecipe(BaseRecipe):
     recipe_id = "xgboost_trainer"
     name = "XGBoost Classifier / Regressor"
-    version = "1.0.0"
+    version = "1.1.0"
     category = "training"
-    description = "Trains a gradient-boosted decision tree ensemble using XGBoost."
+    description = "Trains a gradient-boosted decision tree ensemble using XGBoost with full regularization, subsampling, and class imbalance business tuning."
     input_types = ["train_data"]
     output_types = ["model"]
 
@@ -50,6 +50,53 @@ class XGBoostTrainerRecipe(BaseRecipe):
                     "minimum": 0.001,
                     "maximum": 1.0
                 },
+                "subsample": {
+                    "type": "number",
+                    "title": "Row Subsample Ratio",
+                    "default": 1.0,
+                    "minimum": 0.3,
+                    "maximum": 1.0,
+                    "description": "Fraction of training rows randomly sampled per tree (prevents overfitting)."
+                },
+                "colsample_bytree": {
+                    "type": "number",
+                    "title": "Feature Subsample Ratio",
+                    "default": 1.0,
+                    "minimum": 0.3,
+                    "maximum": 1.0,
+                    "description": "Fraction of columns randomly sampled per tree."
+                },
+                "reg_alpha": {
+                    "type": "number",
+                    "title": "L1 Regularization (reg_alpha)",
+                    "default": 0.0,
+                    "minimum": 0.0,
+                    "maximum": 100.0,
+                    "description": "L1 penalty on leaf weights (encourages sparsity in noisy datasets)."
+                },
+                "reg_lambda": {
+                    "type": "number",
+                    "title": "L2 Regularization (reg_lambda)",
+                    "default": 1.0,
+                    "minimum": 0.0,
+                    "maximum": 100.0,
+                    "description": "L2 penalty on leaf weights (smooths predictions)."
+                },
+                "scale_pos_weight": {
+                    "type": "number",
+                    "title": "Class Imbalance Weight (scale_pos_weight)",
+                    "default": 1.0,
+                    "minimum": 0.1,
+                    "maximum": 1000.0,
+                    "description": "Crucial business parameter for imbalanced data (e.g. Fraud or Churn). Set to (Negative Cases / Positive Cases)."
+                },
+                "min_child_weight": {
+                    "type": "number",
+                    "title": "Min Child Weight",
+                    "default": 1.0,
+                    "minimum": 0.1,
+                    "maximum": 50.0
+                },
                 "random_state": {
                     "type": "integer",
                     "title": "Random Seed",
@@ -78,6 +125,12 @@ class XGBoostTrainerRecipe(BaseRecipe):
         n_estimators = int(config.get("n_estimators", 100))
         max_depth = int(config.get("max_depth", 6))
         lr = float(config.get("learning_rate", 0.1))
+        subsample = float(config.get("subsample", 1.0))
+        colsample_bytree = float(config.get("colsample_bytree", 1.0))
+        reg_alpha = float(config.get("reg_alpha", 0.0))
+        reg_lambda = float(config.get("reg_lambda", 1.0))
+        scale_pos_weight = float(config.get("scale_pos_weight", 1.0))
+        min_child_weight = float(config.get("min_child_weight", 1.0))
         random_state = int(config.get("random_state", 42))
 
         # Check if y_train is continuous float for classification
@@ -91,7 +144,6 @@ class XGBoostTrainerRecipe(BaseRecipe):
             le = LabelEncoder()
             y_train = pd.Series(le.fit_transform(y_train), index=y_train.index if hasattr(y_train, 'index') else None)
             if y_test is not None:
-                # Handle unseen labels gracefully
                 try:
                     y_test = pd.Series(le.transform(y_test), index=y_test.index if hasattr(y_test, 'index') else None)
                 except Exception:
@@ -101,6 +153,12 @@ class XGBoostTrainerRecipe(BaseRecipe):
                 n_estimators=n_estimators,
                 max_depth=max_depth,
                 learning_rate=lr,
+                subsample=subsample,
+                colsample_bytree=colsample_bytree,
+                reg_alpha=reg_alpha,
+                reg_lambda=reg_lambda,
+                scale_pos_weight=scale_pos_weight,
+                min_child_weight=min_child_weight,
                 random_state=random_state,
                 eval_metric="logloss"
             )
@@ -110,6 +168,11 @@ class XGBoostTrainerRecipe(BaseRecipe):
                 n_estimators=n_estimators,
                 max_depth=max_depth,
                 learning_rate=lr,
+                subsample=subsample,
+                colsample_bytree=colsample_bytree,
+                reg_alpha=reg_alpha,
+                reg_lambda=reg_lambda,
+                min_child_weight=min_child_weight,
                 random_state=random_state
             )
 
@@ -140,6 +203,7 @@ class XGBoostTrainerRecipe(BaseRecipe):
         n_est = config.get("n_estimators", 100)
         depth = config.get("max_depth", 6)
         lr = config.get("learning_rate", 0.1)
+        subsample = config.get("subsample", 1.0)
         task = config.get("task_type", "classification")
         cls_name = "XGBClassifier" if task == "classification" else "XGBRegressor"
-        return f"import xgboost as xgb\n\nmodel = xgb.{cls_name}(\n    n_estimators={n_est},\n    max_depth={depth},\n    learning_rate={lr},\n    random_state=42\n)\nmodel.fit(X_train, y_train)"
+        return f"import xgboost as xgb\n\nmodel = xgb.{cls_name}(\n    n_estimators={n_est},\n    max_depth={depth},\n    learning_rate={lr},\n    subsample={subsample},\n    random_state=42\n)\nmodel.fit(X_train, y_train)"

@@ -158,6 +158,10 @@ RECIPE_CATEGORY_MAP = {
         {"id": "feature_scaler", "name": "Feature Scaler (StandardScaler/MinMax)", "icon": "⚖️", "default_config": {"method": "standard"}},
         {"id": "categorical_encoder", "name": "Categorical Encoder (One-Hot/Label)", "icon": "🔤", "default_config": {"method": "one_hot"}}
     ],
+    "🔤 NLP & Text Processing": [
+        {"id": "text_preprocessor", "name": "Text Preprocessor (Stemming/Lemmatization)", "icon": "🧹", "default_config": {"lowercase": True, "strip_html_urls": True, "remove_stopwords": True, "normalization": "lemmatization"}},
+        {"id": "text_vectorizer", "name": "Text Vectorizer (TF-IDF / Word2Vec / Count)", "icon": "🔤", "default_config": {"method": "tfidf", "max_features": 50, "drop_original": True}}
+    ],
     "✂️ Splitting": [
         {"id": "train_test_split", "name": "Train / Test Splitter", "icon": "✂️", "default_config": {"target_column": "Churn", "test_size": 0.2}}
     ],
@@ -1026,7 +1030,7 @@ if app_mode == "🎨 Pipeline Whiteboard":
                         return 0
                     if r_id in ["csv_loader"]:
                         return 1
-                    if r_id in ["missing_value_imputer", "feature_scaler", "categorical_encoder", "statistical_guardrail", "lag_feature_engineering", "duplicate_remover", "category_sanitizer", "correlation_filter", "variance_filter"]:
+                    if r_id in ["missing_value_imputer", "feature_scaler", "categorical_encoder", "statistical_guardrail", "lag_feature_engineering", "duplicate_remover", "category_sanitizer", "correlation_filter", "variance_filter", "text_preprocessor", "text_vectorizer"]:
                         return 2
                     if r_id in ["train_test_split"]:
                         return 3
