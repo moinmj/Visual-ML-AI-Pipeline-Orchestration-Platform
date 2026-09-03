@@ -141,11 +141,10 @@ class WorkflowGraph(BaseModel):
         """
         Returns nodes in valid execution order using Kahn's topological sort.
         """
-        errors = self.validate_graph()
-        # Filter out warnings from hard blocking execution errors
-        blocking_errors = [e for e in errors if not e.startswith("⚠️")]
-        if blocking_errors:
-            raise ValidationException("Invalid workflow DAG structure", errors=blocking_errors)
+        diag = self.get_diagnostics()
+        if not diag["is_valid"]:
+            error_details = " | ".join(diag["errors"])
+            raise ValidationException(f"Invalid workflow DAG structure: {error_details}", errors=diag["errors"])
 
         in_degree = {n.id: 0 for n in self.nodes}
         adj = defaultdict(list)
