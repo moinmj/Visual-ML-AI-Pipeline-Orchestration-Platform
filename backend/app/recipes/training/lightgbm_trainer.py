@@ -134,7 +134,7 @@ class LightGBMTrainerRecipe(BaseRecipe):
         if X_test is not None:
             X_test = sanitize_lgb_colnames(X_test)
 
-        task_type = config.get("task_type", "classification")
+        task_type = str(config.get("task_type", "classification")).lower()
         n_estimators = int(config.get("n_estimators", 100))
         num_leaves = int(config.get("num_leaves", 31))
         lr = float(config.get("learning_rate", 0.1))
@@ -146,34 +146,38 @@ class LightGBMTrainerRecipe(BaseRecipe):
         min_child_samples = int(config.get("min_child_samples", 20))
         random_state = int(config.get("random_state", 42))
 
-        is_continuous = False
-        if pd.api.types.is_float_dtype(y_train) and y_train.nunique() > 20:
-            is_continuous = True
-
-        if task_type == "classification" and not is_continuous:
+        if task_type == "classification":
             from sklearn.preprocessing import LabelEncoder
             le = LabelEncoder()
             y_train = pd.Series(le.fit_transform(y_train), index=y_train.index if hasattr(y_train, 'index') else None)
             if y_test is not None:
                 try:
-                    y_test = pd.Series(le.transform(y_test), index=y_test.index if hasattr(y_test, 'index') else None)
+                    known_classes = set(le.classes_)
+                    y_test = pd.Series(
+                        [le.transform([val])[0] if val in known_classes else 0 for val in y_test],
+                        index=y_test.index if hasattr(y_test, 'index') else None
+                    )
                 except Exception:
                     pass
 
-            model = lgb.LGBMClassifier(
-                n_estimators=n_estimators,
-                num_leaves=num_leaves,
-                learning_rate=lr,
-                subsample=subsample,
-                subsample_freq=1 if subsample < 1.0 else 0,
-                colsample_bytree=colsample_bytree,
-                reg_alpha=reg_alpha,
-                reg_lambda=reg_lambda,
-                scale_pos_weight=scale_pos_weight,
-                min_child_samples=min_child_samples,
-                random_state=random_state,
-                verbose=-1
-            )
+            n_classes = int(y_train.nunique())
+            lgb_kwargs = {
+                "n_estimators": n_estimators,
+                "num_leaves": num_leaves,
+                "learning_rate": lr,
+                "subsample": subsample,
+                "subsample_freq": 1 if subsample < 1.0 else 0,
+                "colsample_bytree": colsample_bytree,
+                "reg_alpha": reg_alpha,
+                "reg_lambda": reg_lambda,
+                "min_child_samples": min_child_samples,
+                "random_state": random_state,
+                "verbose": -1
+            }
+            if n_classes <= 2 and scale_pos_weight != 1.0:
+                lgb_kwargs["scale_pos_weight"] = scale_pos_weight
+
+            model = lgb.LGBMClassifier(**lgb_kwargs)
         else:
             task_type = "regression"
             model = lgb.LGBMRegressor(

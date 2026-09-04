@@ -121,7 +121,7 @@ class XGBoostTrainerRecipe(BaseRecipe):
         from backend.app.recipes.training.encoder_utils import safe_prepare_training_data
         X_train, X_test = safe_prepare_training_data(X_train, X_test)
 
-        task_type = config.get("task_type", "classification")
+        task_type = str(config.get("task_type", "classification")).lower()
         n_estimators = int(config.get("n_estimators", 100))
         max_depth = int(config.get("max_depth", 6))
         lr = float(config.get("learning_rate", 0.1))
@@ -133,35 +133,40 @@ class XGBoostTrainerRecipe(BaseRecipe):
         min_child_weight = float(config.get("min_child_weight", 1.0))
         random_state = int(config.get("random_state", 42))
 
-        # Check if y_train is continuous float for classification
-        is_continuous = False
-        if pd.api.types.is_float_dtype(y_train) and y_train.nunique() > 20:
-            is_continuous = True
-
-        if task_type == "classification" and not is_continuous:
+        if task_type == "classification":
             # Encode target labels to 0..N-1
             from sklearn.preprocessing import LabelEncoder
             le = LabelEncoder()
             y_train = pd.Series(le.fit_transform(y_train), index=y_train.index if hasattr(y_train, 'index') else None)
             if y_test is not None:
                 try:
-                    y_test = pd.Series(le.transform(y_test), index=y_test.index if hasattr(y_test, 'index') else None)
+                    known_classes = set(le.classes_)
+                    y_test = pd.Series(
+                        [le.transform([val])[0] if val in known_classes else 0 for val in y_test],
+                        index=y_test.index if hasattr(y_test, 'index') else None
+                    )
                 except Exception:
                     pass
 
-            model = xgb.XGBClassifier(
-                n_estimators=n_estimators,
-                max_depth=max_depth,
-                learning_rate=lr,
-                subsample=subsample,
-                colsample_bytree=colsample_bytree,
-                reg_alpha=reg_alpha,
-                reg_lambda=reg_lambda,
-                scale_pos_weight=scale_pos_weight,
-                min_child_weight=min_child_weight,
-                random_state=random_state,
-                eval_metric="logloss"
-            )
+            n_classes = int(y_train.nunique())
+            eval_metric = "logloss" if n_classes <= 2 else "mlogloss"
+
+            xgb_kwargs = {
+                "n_estimators": n_estimators,
+                "max_depth": max_depth,
+                "learning_rate": lr,
+                "subsample": subsample,
+                "colsample_bytree": colsample_bytree,
+                "reg_alpha": reg_alpha,
+                "reg_lambda": reg_lambda,
+                "min_child_weight": min_child_weight,
+                "random_state": random_state,
+                "eval_metric": eval_metric
+            }
+            if n_classes <= 2 and scale_pos_weight != 1.0:
+                xgb_kwargs["scale_pos_weight"] = scale_pos_weight
+
+            model = xgb.XGBClassifier(**xgb_kwargs)
         else:
             task_type = "regression"
             model = xgb.XGBRegressor(

@@ -87,7 +87,7 @@ class RandomForestTrainerRecipe(BaseRecipe):
         from backend.app.recipes.training.encoder_utils import safe_prepare_training_data
         X_train, X_test = safe_prepare_training_data(X_train, X_test)
 
-        task_type = config.get("task_type", "classification")
+        task_type = str(config.get("task_type", "classification")).lower()
         n_estimators = int(config.get("n_estimators", 100))
         max_depth = int(config.get("max_depth", 10))
         min_samples_split = int(config.get("min_samples_split", 2))
@@ -98,18 +98,17 @@ class RandomForestTrainerRecipe(BaseRecipe):
         class_weight = None if class_weight_str == "none" else class_weight_str
         random_state = int(config.get("random_state", 42))
 
-        # Check if y_train is continuous float for classification
-        is_continuous = False
-        if pd.api.types.is_float_dtype(y_train) and y_train.nunique() > 20:
-            is_continuous = True
-
-        if task_type == "classification" and not is_continuous:
+        if task_type == "classification":
             from sklearn.preprocessing import LabelEncoder
             le = LabelEncoder()
             y_train = pd.Series(le.fit_transform(y_train), index=y_train.index if hasattr(y_train, 'index') else None)
             if y_test is not None:
                 try:
-                    y_test = pd.Series(le.transform(y_test), index=y_test.index if hasattr(y_test, 'index') else None)
+                    known_classes = set(le.classes_)
+                    y_test = pd.Series(
+                        [le.transform([val])[0] if val in known_classes else 0 for val in y_test],
+                        index=y_test.index if hasattr(y_test, 'index') else None
+                    )
                 except Exception:
                     pass
 
