@@ -103,36 +103,88 @@ async def autowire_nodes(payload: AutoWireRequest):
 
     # Hierarchy ranking for automatic topological pipeline construction
     category_weights = {
-        "ingestion": 1,
-        "preprocessing": 2,
-        "splitting": 3,
-        "training": 4,
-        "forecasting": 4,
-        "anomaly": 4,
-        "evaluation": 5,
-        "governance": 6
+        "ingestion": 1.0,
+        "nlp": 1.5,
+        "preprocessing": 2.0,
+        "splitting": 3.0,
+        "training": 4.0,
+        "forecasting": 4.0,
+        "anomaly": 4.0,
+        "evaluation": 5.0,
+        "governance": 6.0
     }
 
-    def get_node_weight(node: Dict[str, Any]) -> int:
+    recipe_weights = {
+        # Triggers / Ingestion
+        "webhook_trigger": 1.0,
+        "cron_trigger": 1.0,
+        "csv_loader": 1.1,
+
+        # NLP (Clean text first, then vectorize text strings into numeric feature columns)
+        "text_preprocessor": 1.4,
+        "text_vectorizer": 1.6,
+
+        # Preprocessing (Deduplicate -> Impute NaNs -> Encode Categories -> Scale Numbers)
+        "duplicates": 2.0,
+        "missing_values": 2.1,
+        "categorical_encoder": 2.2,
+        "feature_scaler": 2.4,
+
+        # Splitting
+        "train_test_split": 3.0,
+
+        # Training / Forecasting / Anomaly
+        "xgboost_trainer": 4.0,
+        "lightgbm_trainer": 4.0,
+        "catboost_trainer": 4.0,
+        "random_forest_trainer": 4.0,
+        "logistic_regression_trainer": 4.0,
+        "isolation_forest": 4.0,
+        "statistical_guardrail": 4.0,
+        "prophet_forecaster": 4.0,
+        "arima_forecaster": 4.0,
+
+        # Evaluation
+        "model_evaluator": 5.0,
+
+        # Governance
+        "mlflow_tracker": 6.0
+    }
+
+    def get_node_weight(node: Dict[str, Any]) -> float:
         r_id = node.get("recipe_id") or node.get("data", {}).get("recipe_id")
+        if r_id and r_id in recipe_weights:
+            return recipe_weights[r_id]
+
         recipe = recipe_registry.get(r_id) if r_id else None
-        if recipe:
-            return category_weights.get(recipe.category, 3)
-        # Inferred from id/label
+        if recipe and recipe.category in category_weights:
+            return category_weights[recipe.category]
+
+        # Inferred from id/label fallback
         label = str(node.get("label") or node.get("id") or "").lower()
-        if "csv" in label or "loader" in label:
-            return 1
-        elif "impute" in label or "scale" in label or "encode" in label:
-            return 2
+        if any(k in label for k in ["csv", "loader", "trigger", "ingest"]):
+            return 1.0
+        elif any(k in label for k in ["text_prep", "stem", "lemmatiz", "clean_text"]):
+            return 1.4
+        elif any(k in label for k in ["vector", "tfidf", "word2vec", "count_vec", "nlp"]):
+            return 1.6
+        elif any(k in label for k in ["dup", "dedup"]):
+            return 2.0
+        elif any(k in label for k in ["impute", "missing", "nan"]):
+            return 2.1
+        elif any(k in label for k in ["encode", "onehot", "label_enc", "categorical"]):
+            return 2.2
+        elif any(k in label for k in ["scale", "scaler", "standard", "minmax", "robust"]):
+            return 2.4
         elif "split" in label:
-            return 3
-        elif "xgb" in label or "lightgbm" in label or "catboost" in label or "model" in label or "train" in label:
-            return 4
-        elif "eval" in label or "metric" in label:
-            return 5
-        elif "gov" in label or "audit" in label:
-            return 6
-        return 3
+            return 3.0
+        elif any(k in label for k in ["xgb", "lightgbm", "catboost", "model", "train", "forest", "linear", "logistic"]):
+            return 4.0
+        elif any(k in label for k in ["eval", "metric", "performance"]):
+            return 5.0
+        elif any(k in label for k in ["gov", "audit", "mlflow"]):
+            return 6.0
+        return 2.5
 
     # Sort nodes by pipeline category weight, then by horizontal position x
     sorted_nodes = sorted(
@@ -151,14 +203,17 @@ async def autowire_nodes(payload: AutoWireRequest):
 
     for idx, node in enumerate(sorted_nodes):
         n_id = node["id"]
-        weight = get_node_weight(node)
+        r_id = node.get("recipe_id") or node.get("data", {}).get("recipe_id")
+        recipe = recipe_registry.get(r_id) if r_id else None
+        cat = recipe.category if recipe else ""
+        label = str(node.get("label") or node.get("id") or "").lower()
 
-        if weight == 3: # Splitter
-            split_node_id = n_id
-        elif weight == 4: # Model trainer
-            model_node_id = n_id
-        elif weight == 5: # Evaluator
+        if r_id == "model_evaluator" or cat == "evaluation" or any(k in label for k in ["eval", "metric", "performance"]):
             eval_node_id = n_id
+        elif r_id == "train_test_split" or cat == "splitting" or "split" in label:
+            split_node_id = n_id
+        elif cat in ["training", "forecasting", "anomaly"] or any(k in label for k in ["xgb", "lightgbm", "catboost", "train", "classifier", "regressor", "forest"]):
+            model_node_id = n_id
 
         if idx > 0 and prev_node_id:
             edges.append({
