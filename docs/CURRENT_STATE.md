@@ -38,11 +38,14 @@
 * **Preserved Inference Bundles:** `DAGExecutor` automatically captures and registers live fitted models, scalers, imputers, vectorizers, and target class mappings in `job_manager` keyed by `execution_id`.
 * **Dynamic Target Label Decoding:** Trainers and train-test splitters preserve target class mappings so predictions decode numeric outputs (0, 1, 2) back to human-readable names (e.g., `Iris-setosa`).
 * **Interactive Prediction Dialog & Sandbox:** Added `@st.dialog("🔮 Interactive Model Prediction Studio")` and in-page sandbox in Streamlit with 1-click test sampling, batch CSV scoring, and live REST API cURL generation.
-* **Automated Verification:** 29/29 automated unit and integration tests passing (`backend/tests`), covering classification, forecasting, anomaly detection, and API endpoints.
+* **Groq LLM Pipeline Architect:** Added `LLMRecommender` ([backend/app/recommendation/llm_recommender.py](file:///c:/Data%20Science/Projects/Visual%20MLAI%20Pipeline%20Orchestration%20Platform/backend/app/recommendation/llm_recommender.py)) powered by Groq (`openai/gpt-oss-120b`) to synthesize tailored end-to-end visual ML pipelines from natural language prompts, with resilient fallback to deterministic heuristics.
+* **Evaluator Recipe Resolution & Aliasing:** Fixed recipe ID mismatch (`classification_evaluator` -> `model_evaluator`) and added backward-compatible alias resolution in `RecipeRegistry`.
+* **Automated Verification:** 31/31 automated unit and integration tests passing (`pytest backend/tests/`).
+* **Strict Git Discipline:** Backend pushed strictly to `ml-ai-pipeline` on personal and origin remotes. Frontend repository (`FE_POC`) is kept strictly local and never pushed.
 
 ---
 
 ## 🎯 Next Immediate Tasks
-1. **Frontend Integration Hand-off:** Provide backend OpenAPI specification and test payloads to the frontend developer for React Flow / Next.js integration.
+1. **Frontend Developer Hand-off:** Frontend developer will review local UI integration in `FE_POC` and connect to backend APIs.
 2. **Webhook & Cron Trigger Engine:** Enhance automated scheduled trigger pipelines.
 
