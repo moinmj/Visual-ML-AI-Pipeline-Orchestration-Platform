@@ -97,6 +97,7 @@ def diagnose_execution_error(
 
 class WorkflowExecutionResult(BaseModel):
     execution_id: str
+    workflow_id: Optional[str] = None
     status: str  # "SUCCESS", "FAILED"
     total_duration_ms: float
     node_results: List[Any] = Field(default_factory=list)
