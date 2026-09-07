@@ -34,10 +34,29 @@ def fetch_tenant_models(tenant_id: int, environment_id: int) -> List[Dict[str, A
     return asyncio.run(_fetch())
 
 
+def fetch_druid_datasources(
+    tenant_id: int,
+    environment_id: int,
+    model_name: str,
+    druid_datasource_name: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Fetches candidate Druid datasources with row counts for a model."""
+    try:
+        return tenant_data_service.get_druid_datasources(
+            tenant_id=tenant_id,
+            environment_id=environment_id,
+            model_name=model_name,
+            druid_datasource_name=druid_datasource_name,
+        )
+    except Exception:
+        return []
+
+
 def ingest_tenant_model(
     tenant_id: int,
     environment_id: int,
     model_id: int,
+    datasource_name: Optional[str] = None,
     row_limit: Optional[int] = None,
     custom_name: Optional[str] = None,
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
@@ -55,6 +74,7 @@ def ingest_tenant_model(
                     tenant_id=tenant_id,
                     environment_id=environment_id,
                     model_id=model_id,
+                    datasource_name=datasource_name,
                     name=custom_name,
                     row_limit=row_limit,
                 )

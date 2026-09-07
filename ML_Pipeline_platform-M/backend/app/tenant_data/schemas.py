@@ -37,6 +37,7 @@ class EnvironmentResponse(BaseModel):
 class IngestModelTableRequest(BaseModel):
     name: Optional[str] = Field(None, description="Optional display name for the created dataset")
     description: Optional[str] = Field(None, description="Optional dataset description")
+    datasource_name: Optional[str] = Field(None, description="Optional Druid datasource or physical table name to ingest from")
     row_limit: Optional[int] = Field(
         None, ge=1, le=1_000_000, description="Optional cap on rows pulled from the source table"
     )

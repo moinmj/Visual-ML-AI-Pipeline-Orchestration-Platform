@@ -78,6 +78,7 @@ async def ingest_model_table(
         tenant_id=user.tenant_id,
         environment_id=environment_id,
         model_id=model_id,
+        datasource_name=payload.datasource_name,
         name=payload.name,
         description=payload.description,
         row_limit=payload.row_limit,
