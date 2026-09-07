@@ -107,6 +107,7 @@ class WorkflowExecutionResult(BaseModel):
     logs: List[str] = Field(default_factory=list)
     node_outputs: Dict[str, Any] = Field(default_factory=dict)
     step_snapshots: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    inference_schema: Optional[Dict[str, Any]] = None
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -264,9 +265,17 @@ class DAGExecutor:
                 node_outputs[node.id] = outputs
 
                 # Propagate standard artifacts to shared context
-                for key in ["X_test", "y_test", "X_train", "y_train", "dataframe", "forecast_df", "model", "scaler", "encoder", "task_type", "feature_names", "feature_importances"]:
+                for key in [
+                    "X_test", "y_test", "X_train", "y_train", "dataframe", "forecast_df",
+                    "model", "scaler", "encoder", "task_type", "feature_names", "feature_importances",
+                    "target_classes", "target_encoder", "target_column", "imputer_stats",
+                    "vectorizer", "text_column"
+                ]:
                     if key in outputs:
                         pipeline_context[key] = outputs[key]
+
+                if "target_column" in node.config and node.config["target_column"]:
+                    pipeline_context["target_column"] = node.config["target_column"]
 
                 # Capture summaries & KPIs
                 if "metrics" in outputs:
@@ -349,6 +358,86 @@ class DAGExecutor:
         total_duration = round((time.time() - start_time) * 1000.0, 2)
         logs.append(f"🏁 Execution finished with status '{overall_status}' in {total_duration}ms")
 
+        # 4. Construct Inference Bundle & Dynamic Schema
+        features_schema = []
+        sample_payload = {}
+        fn_list = list(pipeline_context.get("feature_names", []))
+        X_eval = pipeline_context.get("X_test") if pipeline_context.get("X_test") is not None else pipeline_context.get("X_train")
+
+        if X_eval is not None and isinstance(X_eval, pd.DataFrame):
+            if not fn_list:
+                fn_list = list(X_eval.columns)
+            for col in fn_list:
+                if col in X_eval.columns:
+                    s = X_eval[col]
+                    if pd.api.types.is_numeric_dtype(s):
+                        mn = float(s.min()) if not s.empty and pd.notna(s.min()) else 0.0
+                        mx = float(s.max()) if not s.empty and pd.notna(s.max()) else 100.0
+                        med = float(s.median()) if not s.empty and pd.notna(s.median()) else 0.0
+                        mean_v = float(s.mean()) if not s.empty and pd.notna(s.mean()) else 0.0
+                        features_schema.append({
+                            "name": col,
+                            "data_type": "numeric",
+                            "min_value": round(mn, 2),
+                            "max_value": round(mx, 2),
+                            "median_value": round(med, 2),
+                            "mean_value": round(mean_v, 2),
+                            "default_value": round(med, 2)
+                        })
+                        sample_payload[col] = round(med, 2)
+                    else:
+                        cats = [str(v) for v in s.dropna().unique()[:30]]
+                        def_v = cats[0] if cats else "Unknown"
+                        features_schema.append({
+                            "name": col,
+                            "data_type": "categorical",
+                            "allowed_categories": cats,
+                            "default_value": def_v
+                        })
+                        sample_payload[col] = def_v
+        elif fn_list:
+            for col in fn_list:
+                features_schema.append({
+                    "name": col,
+                    "data_type": "numeric",
+                    "default_value": 0.0
+                })
+                sample_payload[col] = 0.0
+
+        inference_schema = {
+            "execution_id": execution_id,
+            "task_type": pipeline_context.get("task_type", "classification"),
+            "target_column": pipeline_context.get("target_column"),
+            "target_classes": pipeline_context.get("target_classes", []),
+            "features": features_schema,
+            "sample_payload": sample_payload,
+            "time_series_meta": pipeline_context.get("forecasting_summary")
+        }
+
+        inference_bundle = {
+            "execution_id": execution_id,
+            "task_type": pipeline_context.get("task_type", "classification"),
+            "model": pipeline_context.get("model"),
+            "feature_names": fn_list,
+            "target_column": pipeline_context.get("target_column"),
+            "target_classes": pipeline_context.get("target_classes", []),
+            "target_encoder": pipeline_context.get("target_encoder"),
+            "scaler": pipeline_context.get("scaler"),
+            "encoder": pipeline_context.get("encoder"),
+            "vectorizer": pipeline_context.get("vectorizer"),
+            "text_column": pipeline_context.get("text_column"),
+            "imputer_stats": pipeline_context.get("imputer_stats", {}),
+            "forecasting_summary": pipeline_context.get("forecasting_summary", {}),
+            "sample_row": sample_payload,
+            "training_feature_summary": {f["name"]: f for f in features_schema}
+        }
+
+        try:
+            from backend.app.engine.execution.job_manager import job_manager
+            job_manager.register_inference_bundle(execution_id, inference_bundle)
+        except Exception as e:
+            logger.warning(f"Could not register inference bundle with job_manager: {str(e)}")
+
         # Sanitize all outputs to be 100% JSON serializable for FastAPI responses
         safe_node_outputs = make_json_safe(node_outputs) if include_node_outputs else {}
         safe_final_metrics = make_json_safe(final_metrics)
@@ -356,6 +445,7 @@ class DAGExecutor:
         safe_forecasting_summary = make_json_safe(forecasting_summary)
         safe_governance_summary = make_json_safe(governance_summary)
         safe_step_snapshots = make_json_safe(step_snapshots)
+        safe_inference_schema = make_json_safe(inference_schema)
 
         return WorkflowExecutionResult(
             execution_id=execution_id,
@@ -368,5 +458,6 @@ class DAGExecutor:
             governance_summary=safe_governance_summary,
             logs=logs,
             node_outputs=safe_node_outputs,
-            step_snapshots=safe_step_snapshots
+            step_snapshots=safe_step_snapshots,
+            inference_schema=safe_inference_schema
         )

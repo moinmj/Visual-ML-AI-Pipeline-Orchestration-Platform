@@ -135,6 +135,9 @@ class CatBoostTrainerRecipe(BaseRecipe):
             "feature_names": feature_names
         }
 
+        if task_type == "classification" and hasattr(model, "classes_"):
+            output["target_classes"] = [str(c) for c in model.classes_]
+
         if X_test is not None:
             output["X_test"] = X_test
         if y_test is not None:

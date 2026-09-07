@@ -132,6 +132,10 @@ class LogisticRegressionTrainerRecipe(BaseRecipe):
             "feature_names": feature_names
         }
 
+        if task_type == "classification" and "le" in locals():
+            output["target_classes"] = [str(c) for c in le.classes_]
+            output["target_encoder"] = le
+
         if X_test is not None:
             output["X_test"] = X_test
         if y_test is not None:

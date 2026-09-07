@@ -32,6 +32,7 @@ class PipelineJobManager:
         self.executor_pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="PipelineWorker")
         self.jobs: Dict[str, Dict[str, Any]] = {}
         self.job_futures: Dict[str, Any] = {}
+        self.inference_bundles: Dict[str, Dict[str, Any]] = {}
         self.lock = threading.Lock()
 
     def submit_job(
@@ -131,11 +132,22 @@ class PipelineJobManager:
             )
             return sorted_jobs[:limit]
 
+    def register_inference_bundle(self, execution_id: str, bundle: Dict[str, Any]):
+        """Caches live fitted model, transformers, and schema for instant real-time predictions."""
+        with self.lock:
+            self.inference_bundles[execution_id] = bundle
+
+    def get_inference_bundle(self, execution_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieves cached fitted model and pipeline transformers by execution ID."""
+        with self.lock:
+            return self.inference_bundles.get(execution_id)
+
     def clear_history(self):
-        """Clears completed job records from memory."""
+        """Clears completed job records and inference bundles from memory."""
         with self.lock:
             self.jobs.clear()
             self.job_futures.clear()
+            self.inference_bundles.clear()
 
 
 # Global singleton instance

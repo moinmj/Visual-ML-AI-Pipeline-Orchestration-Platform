@@ -113,7 +113,8 @@ class IsolationForestRecipe(BaseRecipe):
             "dataframe": df_out,
             "model": iso_forest,
             "metrics": metrics,
-            "anomaly_summary": metrics
+            "anomaly_summary": metrics,
+            "task_type": "anomaly_detection"
         }
 
     def to_code(self, config: Dict[str, Any]) -> str:

@@ -85,7 +85,7 @@ All development progress is categorized into structured phases. Each task is mar
 - [x] Node-level Code View (`to_code()`) toggle in Inspector.
 - [x] 1-Click Line Connector & Auto-Wire functionality.
 - [x] Dynamic Canvas Versioning (`canvas_version`) for seamless node additions.
-- [x] 19/19 Automated unit and integration tests passing.
+- [x] Automated unit and integration tests passing (29/29 tests).
 
 ---
 
@@ -93,4 +93,19 @@ All development progress is categorized into structured phases. Each task is mar
 - [x] `MLflowTrackerRecipe` (Experiment logging for parameters, evaluation metrics, and artifacts).
 - [x] Model Registry integration (`models:/name/Production` and `Staging` stage tags).
 - [x] Governance Audit Card in Streamlit UI.
-- [ ] `PretrainedModelInferenceRecipe` (Batch inference on registered model URIs without retraining).
+- [x] `PipelineInferencer` Universal Inference Engine:
+  - [x] Live single-record prediction with preprocessing replay (imputation, scaling, vectorization, encoding).
+  - [x] Target label decoding for multi-class classification (e.g., `Iris-setosa`).
+  - [x] Continuous regression prediction with feature bounds.
+  - [x] Future time-series horizon and date range forecasting with 95% confidence intervals.
+  - [x] Real-time anomaly risk scoring and outlier level calculation.
+  - [x] Batch CSV dataset scoring with downloadable predictions.
+- [x] Production Inference REST Endpoints:
+  - [x] `POST /api/v1/workflows/{execution_id}/predict`
+  - [x] `GET /api/v1/workflows/{execution_id}/schema`
+  - [x] `POST /api/v1/workflows/predict`
+- [x] Streamlit Interactive Prediction Studio:
+  - [x] Native `@st.dialog` modal popup window.
+  - [x] In-page interactive sandbox with "🎲 Load Random Test Sample" and "⚡ Run Instant Prediction".
+  - [x] Plotly probability distribution charts and cURL terminal snippet generator.
+

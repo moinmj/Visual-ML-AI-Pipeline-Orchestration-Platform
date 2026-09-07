@@ -29,6 +29,9 @@ from backend.app.recommendation.recommender import AIRecommender
 import backend.app.engine.execution.executor as executor_mod
 importlib.reload(executor_mod)
 from backend.app.engine.execution.executor import DAGExecutor
+from backend.app.engine.execution.job_manager import job_manager
+from backend.app.engine.inference.pipeline_inferencer import PipelineInferencer
+from backend.app.engine.inference.schemas import PredictionRequest
 
 from backend.app.profiling.profiler import DataProfiler
 from backend.app.recipes.base.registry import recipe_registry
@@ -468,6 +471,7 @@ def execute_pipeline():
     exec_latency = (time.time() - t_exec_start) * 1000.0
 
     st.session_state["last_execution"] = {
+        "execution_id": exec_result.execution_id,
         "status": exec_result.status,
         "final_metrics": exec_result.final_metrics,
         "anomaly_summary": exec_result.anomaly_summary,
@@ -475,8 +479,11 @@ def execute_pipeline():
         "governance_summary": exec_result.governance_summary,
         "execution_logs": exec_result.logs,
         "node_outputs": exec_result.node_outputs,
-        "step_snapshots": exec_result.step_snapshots
+        "step_snapshots": exec_result.step_snapshots,
+        "inference_schema": exec_result.inference_schema
     }
+    st.session_state["inference_bundle"] = job_manager.get_inference_bundle(exec_result.execution_id)
+    st.session_state["inference_schema"] = exec_result.inference_schema
 
     # Record Telemetry for Workflow Execution API
     record_api_telemetry(
@@ -502,6 +509,299 @@ def execute_pipeline():
         for log in exec_result.logs:
             if "❌" in log:
                 st.markdown(f"> {log}")
+
+
+def render_prediction_studio(bundle: Optional[Dict[str, Any]], schema: Optional[Dict[str, Any]], in_dialog: bool = False):
+    """
+    Renders the complete, interactive model prediction studio supporting
+    classification, regression, forecasting, anomaly detection, and batch CSV scoring.
+    """
+    if not bundle or not bundle.get("model"):
+        st.info("ℹ️ No trained model found. Please construct and run your pipeline first to test live predictions.")
+        return
+
+    exec_id = bundle.get("execution_id", "latest")
+    task_type = bundle.get("task_type") or (schema.get("task_type") if schema else "classification")
+    if bundle.get("forecasting_summary") or hasattr(bundle.get("model"), "make_future_dataframe") or hasattr(bundle.get("model"), "get_forecast"):
+        task_type = "time_series_forecasting"
+    elif bundle.get("anomaly_summary") or type(bundle.get("model")).__name__ in ["IsolationForest", "EllipticEnvelope"]:
+        task_type = "anomaly_detection"
+
+    prefix = "dlg_" if in_dialog else "page_"
+
+    # =========================================================
+    # 1. TABULAR CLASSIFICATION & REGRESSION
+    # =========================================================
+    if task_type in ["classification", "regression"]:
+        p_tab1, p_tab2, p_tab3 = st.tabs([
+            "🎛️ Interactive Prediction",
+            "📁 Batch CSV Scoring",
+            "📡 REST API & cURL Command"
+        ])
+
+        with p_tab1:
+            features = schema.get("features", []) if schema else []
+            fn_list = bundle.get("feature_names", [f["name"] for f in features])
+            sample_row = bundle.get("sample_row", {})
+
+            # Quick action buttons
+            q_col1, q_col2, _ = st.columns([2.5, 2.5, 5])
+            with q_col1:
+                if st.button("🎲 Load Random Test Sample", key=f"{prefix}btn_load_sample", use_container_width=True):
+                    X_test = bundle.get("X_test")
+                    if X_test is not None and isinstance(X_test, pd.DataFrame) and not X_test.empty:
+                        rand_row = X_test.sample(1).to_dict(orient="records")[0]
+                    else:
+                        rand_row = sample_row
+                    for fn in fn_list:
+                        if fn in rand_row:
+                            st.session_state[f"{prefix}input_{fn}"] = rand_row[fn]
+                    st.rerun()
+
+            with q_col2:
+                if st.button("🧹 Reset to Medians", key=f"{prefix}btn_reset_sample", use_container_width=True):
+                    for fn in fn_list:
+                        k = f"{prefix}input_{fn}"
+                        if k in st.session_state:
+                            del st.session_state[k]
+                    st.rerun()
+
+            st.markdown("##### 📝 Input Feature Values:")
+            user_inputs = {}
+            f_cols = st.columns(2)
+
+            feat_meta_dict = {f["name"]: f for f in features} if features else {}
+
+            for idx, fn in enumerate(fn_list):
+                col = f_cols[idx % 2]
+                f_meta = feat_meta_dict.get(fn, {})
+                d_type = f_meta.get("data_type", "numeric")
+                widget_key = f"{prefix}input_{fn}"
+
+                if d_type == "categorical" and f_meta.get("allowed_categories"):
+                    cats = f_meta["allowed_categories"]
+                    def_idx = 0
+                    if widget_key in st.session_state and str(st.session_state[widget_key]) in cats:
+                        def_idx = cats.index(str(st.session_state[widget_key]))
+                    user_inputs[fn] = col.selectbox(fn, cats, index=def_idx, key=widget_key)
+                else:
+                    def_val = float(f_meta.get("default_value", 0.0))
+                    min_val = float(f_meta.get("min_value", -1000000.0))
+                    max_val = float(f_meta.get("max_value", 1000000.0))
+                    if min_val >= max_val:
+                        min_val = def_val - 100.0
+                        max_val = def_val + 100.0
+                    
+                    cur_val = float(st.session_state.get(widget_key, def_val))
+                    step = 0.1 if isinstance(def_val, float) else 1.0
+                    user_inputs[fn] = col.number_input(
+                        f"{fn}",
+                        value=cur_val,
+                        step=step,
+                        key=widget_key
+                    )
+
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("⚡ Run Instant Prediction", type="primary", use_container_width=True, key=f"{prefix}btn_run_pred"):
+                with st.spinner("Executing model prediction..."):
+                    pred_res = PipelineInferencer.predict(bundle, PredictionRequest(inputs=user_inputs))
+
+                if pred_res.status == "SUCCESS":
+                    if pred_res.task_type == "classification":
+                        c_card1, c_card2, c_card3 = st.columns(3)
+                        c_card1.metric("Predicted Target Class", f"🎯 {pred_res.prediction}")
+                        c_card2.metric("Prediction Confidence", f"{pred_res.confidence:.1f}%")
+                        c_card3.metric("Inference Latency", f"{pred_res.inference_latency_ms}ms")
+
+                        if pred_res.probabilities:
+                            prob_df = pd.DataFrame(
+                                list(pred_res.probabilities.items()),
+                                columns=["Class", "Probability"]
+                            ).sort_values(by="Probability", ascending=True)
+                            prob_df["Likelihood (%)"] = prob_df["Probability"] * 100.0
+
+                            fig_prob = px.bar(
+                                prob_df,
+                                x="Likelihood (%)",
+                                y="Class",
+                                orientation="h",
+                                text=prob_df["Likelihood (%)"].apply(lambda p: f"{p:.1f}%"),
+                                color="Likelihood (%)",
+                                color_continuous_scale="Blues",
+                                title="Per-Class Prediction Likelihood Distribution"
+                            )
+                            fig_prob.update_layout(height=260, margin=dict(l=20, r=20, t=35, b=20), xaxis_title="Likelihood (%)", yaxis_title="")
+                            st.plotly_chart(fig_prob, use_container_width=True)
+
+                    else:
+                        r_card1, r_card2 = st.columns(2)
+                        r_card1.metric("Predicted Value", f"📈 {pred_res.prediction}")
+                        r_card2.metric("Inference Latency", f"{pred_res.inference_latency_ms}ms")
+
+                    with st.expander("🔍 Inspected Input Payload (JSON)", expanded=False):
+                        st.json(user_inputs)
+                else:
+                    st.error(f"❌ Prediction Failed: {pred_res.error_message}")
+
+        with p_tab2:
+            st.markdown("##### 📁 Batch CSV Dataset Scoring")
+            st.caption("Upload an unlabelled CSV file to score all observations simultaneously.")
+            up_file = st.file_uploader("Upload CSV file", type=["csv"], key=f"{prefix}csv_uploader")
+            if up_file is not None:
+                try:
+                    df_up = pd.read_csv(up_file)
+                    st.write(f"Loaded **{len(df_up):,}** rows and **{len(df_up.columns)}** columns.")
+                    st.dataframe(df_up.head(5), use_container_width=True)
+
+                    if st.button("⚡ Score Entire Batch Dataset", type="primary", key=f"{prefix}btn_score_batch"):
+                        with st.spinner("Scoring batch dataset..."):
+                            batch_res = PipelineInferencer.predict(
+                                bundle,
+                                PredictionRequest(inputs=df_up.to_dict(orient="records"))
+                            )
+                        if batch_res.status == "SUCCESS" and batch_res.batch_predictions:
+                            scored_df = pd.DataFrame(batch_res.batch_predictions)
+                            st.success(f"🎉 Successfully scored {len(scored_df):,} records in {batch_res.inference_latency_ms}ms!")
+                            st.dataframe(scored_df.head(50), use_container_width=True)
+
+                            st.download_button(
+                                "📥 Download Scored Dataset (CSV)",
+                                data=scored_df.to_csv(index=False),
+                                file_name=f"scored_predictions_{exec_id}.csv",
+                                mime="text/csv",
+                                key=f"{prefix}btn_dl_batch"
+                            )
+                        else:
+                            st.error(f"❌ Batch scoring failed: {batch_res.error_message}")
+                except Exception as e:
+                    st.error(f"Error parsing CSV file: {str(e)}")
+
+        with p_tab3:
+            st.markdown("##### 📡 Production REST API Endpoint")
+            st.caption("External frontend developers, microservices, and automated cron jobs can invoke live predictions via this endpoint.")
+            
+            api_url = f"http://localhost:8000/api/v1/workflows/{exec_id}/predict"
+            sample_body = {"inputs": user_inputs if 'user_inputs' in locals() and user_inputs else sample_row}
+            body_json = json.dumps(sample_body, indent=2)
+
+            st.markdown(f"**Endpoint:** `POST {api_url}`")
+            st.code(body_json, language="json")
+
+            curl_str = f"""curl -X POST {api_url} \\
+  -H "Content-Type: application/json" \\
+  -d '{json.dumps(sample_body)}'"""
+            st.markdown("##### 💻 Ready-to-Run cURL Terminal Command:")
+            st.code(curl_str, language="bash")
+
+    # =========================================================
+    # 2. TIME-SERIES FORECASTING
+    # =========================================================
+    elif task_type == "time_series_forecasting":
+        st.markdown("##### 📈 Future Trajectory & Horizon Forecasting")
+        st.caption("Generate time-series projections with confidence bands for arbitrary forecast intervals.")
+
+        fc_c1, fc_c2, fc_c3 = st.columns(3)
+        h_val = fc_c1.slider("Forecast Horizon (Steps)", min_value=1, max_value=180, value=30, key=f"{prefix}fc_h")
+        freq_opt = fc_c2.selectbox("Frequency", ["Daily (D)", "Weekly (W)", "Monthly (M)", "Hourly (H)"], index=0, key=f"{prefix}fc_freq")
+        freq_code = freq_opt.split("(")[-1].replace(")", "")
+        custom_range = fc_c3.checkbox("Custom Date Range", value=False, key=f"{prefix}fc_custom")
+
+        s_date, e_date = None, None
+        if custom_range:
+            dr_c1, dr_c2 = st.columns(2)
+            s_date = str(dr_c1.date_input("Start Date", value=datetime.date.today(), key=f"{prefix}s_date"))
+            e_date = str(dr_c2.date_input("End Date", value=datetime.date.today() + datetime.timedelta(days=30), key=f"{prefix}e_date"))
+
+        if st.button("📈 Generate Forecast Predictions", type="primary", use_container_width=True, key=f"{prefix}btn_fc_run"):
+            with st.spinner("Generating future forecast trajectory..."):
+                fc_req = PredictionRequest(
+                    forecast_horizon=h_val,
+                    freq=freq_code,
+                    start_date=s_date,
+                    end_date=e_date
+                )
+                fc_res = PipelineInferencer.predict(bundle, fc_req)
+
+            if fc_res.status == "SUCCESS" and fc_res.forecast_records:
+                st.success(f"🎉 Generated {len(fc_res.forecast_records)} forecast intervals in {fc_res.inference_latency_ms}ms!")
+                f_df = pd.DataFrame(fc_res.forecast_records)
+
+                m_col1, m_col2, m_col3 = st.columns(3)
+                m_col1.metric("Projected End Value", f"{fc_res.projected_end_value:,.2f}" if fc_res.projected_end_value is not None else "N/A")
+                m_col2.metric("Projected Change", f"{fc_res.projected_change_pct:+.2f}%" if fc_res.projected_change_pct is not None else "N/A")
+                m_col3.metric("Projected Trend", str(fc_res.trend).upper())
+
+                fig_fc = go.Figure()
+                fig_fc.add_trace(go.Scatter(x=f_df["ds"], y=f_df["yhat"], mode="lines+markers", name="Forecast", line=dict(color="#3B82F6", width=2.5)))
+                if "yhat_lower" in f_df.columns and "yhat_upper" in f_df.columns:
+                    fig_fc.add_trace(go.Scatter(x=f_df["ds"], y=f_df["yhat_upper"], mode="lines", line=dict(width=0), showlegend=False))
+                    fig_fc.add_trace(go.Scatter(x=f_df["ds"], y=f_df["yhat_lower"], mode="lines", line=dict(width=0), fill="tonexty", fillcolor="rgba(59, 130, 246, 0.2)", name="95% Confidence Interval"))
+
+                fig_fc.update_layout(title="Future Forecast Trajectory with Confidence Intervals", xaxis_title="Timeline", yaxis_title="Predicted Value", height=400)
+                st.plotly_chart(fig_fc, use_container_width=True)
+
+                st.download_button(
+                    "📥 Download Forecast (CSV)",
+                    data=f_df.to_csv(index=False),
+                    file_name=f"future_forecast_{exec_id}.csv",
+                    mime="text/csv",
+                    key=f"{prefix}btn_dl_fc"
+                )
+            else:
+                st.error(f"❌ Forecasting failed: {fc_res.error_message}")
+
+    # =========================================================
+    # 3. ANOMALY DETECTION
+    # =========================================================
+    elif task_type == "anomaly_detection":
+        st.markdown("##### 🚨 Anomaly Detection & Outlier Risk Scoring")
+        st.caption("Score observations to determine if they represent abnormal deviations from normal historical patterns.")
+
+        features = schema.get("features", []) if schema else []
+        fn_list = bundle.get("feature_names", [f["name"] for f in features])
+        sample_row = bundle.get("sample_row", {})
+
+        user_inputs = {}
+        anom_cols = st.columns(2)
+        for idx, fn in enumerate(fn_list):
+            c = anom_cols[idx % 2]
+            def_v = float(sample_row.get(fn, 0.0))
+            user_inputs[fn] = c.number_input(fn, value=def_v, step=0.1, key=f"{prefix}anom_{fn}")
+
+        if st.button("🚨 Check Outlier Risk", type="primary", use_container_width=True, key=f"{prefix}btn_anom_run"):
+            with st.spinner("Scoring outlier risk..."):
+                anom_res = PipelineInferencer.predict(bundle, PredictionRequest(inputs=user_inputs))
+
+            if anom_res.status == "SUCCESS":
+                badge_color = "#EF4444" if anom_res.is_anomaly == 1 else "#10B981"
+                verdict_text = "🚨 HIGH-RISK ANOMALY DETECTED" if anom_res.is_anomaly == 1 else "🟢 NORMAL TRANSACTION / RECORD"
+                
+                st.markdown(f"""
+                <div style="background: linear-gradient(135deg, #1E293B, #0F172A); padding: 18px 24px; border-radius: 12px; border: 1px solid {badge_color}; margin-bottom: 16px;">
+                    <div style="font-size: 0.85rem; color: #94A3B8; text-transform: uppercase;">Anomaly Detection Verdict</div>
+                    <div style="font-size: 1.6rem; font-weight: 700; color: {badge_color}; margin-top: 4px;">{verdict_text}</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                a1, a2, a3 = st.columns(3)
+                a1.metric("Outlier Score", f"{anom_res.anomaly_score:.4f}")
+                a2.metric("Risk Level", str(anom_res.risk_level))
+                a3.metric("Latency", f"{anom_res.inference_latency_ms}ms")
+            else:
+                st.error(f"❌ Scoring failed: {anom_res.error_message}")
+
+
+if hasattr(st, "dialog"):
+    @st.dialog("🔮 Interactive Model Prediction Studio", width="large")
+    def show_prediction_dialog():
+        bundle = st.session_state.get("inference_bundle")
+        schema = st.session_state.get("inference_schema")
+        render_prediction_studio(bundle, schema, in_dialog=True)
+else:
+    def show_prediction_dialog():
+        bundle = st.session_state.get("inference_bundle")
+        schema = st.session_state.get("inference_schema")
+        render_prediction_studio(bundle, schema, in_dialog=False)
 
 
 def create_flow_node(node_id: str, pos: tuple, content: str) -> StreamlitFlowNode:
@@ -1935,7 +2235,28 @@ if app_mode == "🎨 Pipeline Whiteboard":
                 st.write(log)
 
         # -----------------------------------------------------
-        # 5. LIVE REST API CONTRACT & CURL GENERATOR
+        # 5. INTERACTIVE MODEL PREDICTION STUDIO & DIALOG
+        # -----------------------------------------------------
+        st.markdown("---")
+        st.markdown("### 🔮 Interactive Model Prediction Studio & Sandbox")
+        st.caption("Ask for live predictions on new observations, time ranges, or test records using your trained pipeline model.")
+
+        bundle = st.session_state.get("inference_bundle")
+        schema = st.session_state.get("inference_schema")
+
+        if bundle and bundle.get("model"):
+            col_dlg1, col_dlg2 = st.columns([3.5, 6.5])
+            with col_dlg1:
+                if st.button("🔮 Open Live Prediction Dialog (Modal Window)", type="primary", use_container_width=True, key="btn_open_dialog_modal_hero"):
+                    show_prediction_dialog()
+
+            with st.expander("⚡ In-Page Prediction Sandbox", expanded=True):
+                render_prediction_studio(bundle, schema, in_dialog=False)
+        else:
+            st.info("ℹ️ Pipeline has executed. If a predictive model was trained, its live prediction sandbox will appear here.")
+
+        # -----------------------------------------------------
+        # 6. LIVE REST API CONTRACT & CURL GENERATOR
         # -----------------------------------------------------
         with st.expander("📡 Live REST API Contract & cURL Generator (n8n / Postman Integration)", expanded=False):
             st.markdown("##### 📦 Active DAG Execution Payload (`POST /api/v1/workflows/execute`):")
