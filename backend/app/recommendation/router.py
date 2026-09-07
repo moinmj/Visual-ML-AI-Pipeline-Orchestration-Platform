@@ -235,9 +235,27 @@ async def autowire_nodes(payload: AutoWireRequest):
                 "animated": True
             })
 
+    # Validate whether any nodes have unconfigured required fields
+    warnings = []
+    for node in curr_nodes:
+        r_id = node.get("recipe_id") or node.get("data", {}).get("recipe_id")
+        recipe = recipe_registry.get(r_id) if r_id else None
+        if recipe:
+            schema = recipe.get_schema()
+            reqs = schema.get("required", [])
+            node_cfg = node.get("config") or node.get("data", {}).get("config") or {}
+            for req in reqs:
+                if r_id == "csv_loader" and req == "dataset_id":
+                    continue
+                val = node_cfg.get(req)
+                if val is None or val == "" or str(val).strip() in ["-- Select Column --", "(None)"]:
+                    field_title = schema.get("properties", {}).get(req, {}).get("title", req)
+                    warnings.append(f"Node '{node.get('id')}' ({recipe.name}) has unconfigured required field '{field_title}'.")
+
     return {
         "status": "AUTOWIRED",
         "nodes_count": len(curr_nodes),
         "edges_count": len(edges),
-        "edges": edges
+        "edges": edges,
+        "warnings": warnings
     }
