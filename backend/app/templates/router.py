@@ -20,7 +20,7 @@ TEMPLATES_CATALOG = {
                 {"id": "node_scale", "recipe_id": "feature_scaler", "label": "⚖️ Feature Scaler", "position": {"x": 520, "y": 100}, "config": {"method": "standard"}},
                 {"id": "node_split", "recipe_id": "train_test_split", "label": "✂️ Train/Test Split", "position": {"x": 760, "y": 100}, "config": {"target_column": "target", "test_size": 0.2}},
                 {"id": "node_xgb", "recipe_id": "xgboost_trainer", "label": "⚡ XGBoost Classifier", "position": {"x": 1000, "y": 50}, "config": {"task_type": "classification", "n_estimators": 100, "max_depth": 6}},
-                {"id": "node_eval", "recipe_id": "classification_evaluator", "label": "🎯 Model Evaluator", "position": {"x": 1240, "y": 100}, "config": {"report_type": "Comprehensive"}}
+                {"id": "node_eval", "recipe_id": "model_evaluator", "label": "🎯 Model Evaluator", "position": {"x": 1240, "y": 100}, "config": {"report_type": "Comprehensive"}}
             ],
             "edges": [
                 {"id": "e1", "source": "node_csv", "target": "node_impute", "animated": True},
@@ -36,7 +36,7 @@ TEMPLATES_CATALOG = {
                 "node_scale": {"recipe_id": "feature_scaler", "label": "Scaler", "config": {"method": "standard"}},
                 "node_split": {"recipe_id": "train_test_split", "label": "Splitter", "config": {"target_column": "target", "test_size": 0.2}},
                 "node_xgb": {"recipe_id": "xgboost_trainer", "label": "XGBoost", "config": {"task_type": "classification", "n_estimators": 100, "max_depth": 6}},
-                "node_eval": {"recipe_id": "classification_evaluator", "label": "Evaluator", "config": {"report_type": "Comprehensive"}}
+                "node_eval": {"recipe_id": "model_evaluator", "label": "Evaluator", "config": {"report_type": "Comprehensive"}}
             }
         }
     },
@@ -102,7 +102,7 @@ TEMPLATES_CATALOG = {
                 {"id": "node_encode", "recipe_id": "categorical_encoder", "label": "🔤 Cat Encoder", "position": {"x": 480, "y": 100}, "config": {"method": "one_hot"}},
                 {"id": "node_split", "recipe_id": "train_test_split", "label": "✂️ Splitter", "position": {"x": 700, "y": 100}, "config": {"target_column": "target", "test_size": 0.2}},
                 {"id": "node_cb", "recipe_id": "catboost_trainer", "label": "🐱 CatBoost Classifier", "position": {"x": 920, "y": 50}, "config": {"task_type": "classification", "iterations": 100}},
-                {"id": "node_eval", "recipe_id": "classification_evaluator", "label": "🎯 Evaluator", "position": {"x": 1140, "y": 100}, "config": {"report_type": "Comprehensive"}},
+                {"id": "node_eval", "recipe_id": "model_evaluator", "label": "🎯 Evaluator", "position": {"x": 1140, "y": 100}, "config": {"report_type": "Comprehensive"}},
                 {"id": "node_gov", "recipe_id": "model_governance_card", "label": "🛡️ Governance Card", "position": {"x": 1360, "y": 100}, "config": {"author": "AI Engineering Team", "organization": "Enterprise AI", "version": "1.0.0"}}
             ],
             "edges": [
@@ -120,7 +120,7 @@ TEMPLATES_CATALOG = {
                 "node_encode": {"recipe_id": "categorical_encoder", "label": "Encoder", "config": {"method": "one_hot"}},
                 "node_split": {"recipe_id": "train_test_split", "label": "Splitter", "config": {"target_column": "target", "test_size": 0.2}},
                 "node_cb": {"recipe_id": "catboost_trainer", "label": "CatBoost", "config": {"task_type": "classification", "iterations": 100}},
-                "node_eval": {"recipe_id": "classification_evaluator", "label": "Evaluator", "config": {"report_type": "Comprehensive"}},
+                "node_eval": {"recipe_id": "model_evaluator", "label": "Evaluator", "config": {"report_type": "Comprehensive"}},
                 "node_gov": {"recipe_id": "model_governance_card", "label": "Governance Card", "config": {"author": "AI Engineering Team", "organization": "Enterprise AI", "version": "1.0.0"}}
             }
         }
