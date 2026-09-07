@@ -397,25 +397,69 @@ with st.sidebar.expander("⚡ 1-Click Pre-Flight Validator", expanded=False):
 # -------------------------------------------------------------
 # HELPER: SANITIZE NODE CONFIGS & EXECUTE VIA DAG EXECUTOR
 # -------------------------------------------------------------
+def get_incomplete_pipeline_nodes() -> List[Dict[str, Any]]:
+    """
+    Checks all canvas nodes for unconfigured required schema properties.
+    Returns list of dicts: [{'node_id': ..., 'label': ..., 'recipe_name': ..., 'missing_fields': [...]}]
+    """
+    incomplete = []
+    flow_state = st.session_state.get("flow_state")
+    current_nodes = flow_state.nodes if flow_state else []
+    node_configs = st.session_state.get("node_configs", {})
+
+    for n in current_nodes:
+        cfg_entry = node_configs.get(n.id, {})
+        r_id = cfg_entry.get("recipe_id")
+        recipe_obj = recipe_registry.get(r_id) if r_id else None
+        if not recipe_obj:
+            continue
+
+        schema = recipe_obj.get_schema()
+        required_fields = schema.get("required", [])
+        cfg = cfg_entry.get("config", {})
+
+        missing = []
+        for rf in required_fields:
+            if r_id == "csv_loader" and rf == "dataset_id" and st.session_state.get("active_df") is not None:
+                continue
+            val = cfg.get(rf)
+            if val is None or val == "" or str(val).strip() in ["-- Select Column --", "(None)"]:
+                field_title = schema.get("properties", {}).get(rf, {}).get("title", rf)
+                missing.append(field_title)
+
+        if missing:
+            node_label = n.data.get("content", n.id) if hasattr(n, "data") and isinstance(n.data, dict) else n.id
+            incomplete.append({
+                "node_id": n.id,
+                "label": node_label,
+                "recipe_name": recipe_obj.name,
+                "missing_fields": missing
+            })
+
+    return incomplete
+
+
 def sanitize_node_configs_for_active_dataset():
-    """Sanitizes node parameters when active dataset columns change."""
+    """Sanitizes node parameters when active dataset columns change without destructively wiping saved columns."""
     df = st.session_state.get("active_df")
     if df is None:
         return
     cols = list(df.columns)
+    saved_cols = list(st.session_state.get("saved_dataset_columns", []))
+    all_known_cols = set(cols + saved_cols)
+
     for n_id, cfg_data in st.session_state.get("node_configs", {}).items():
         cfg = cfg_data.get("config", {})
-        if "target_column" in cfg and cfg["target_column"] not in cols:
-            cfg["target_column"] = cols[-1]
-            st.info(f"ℹ️ Auto-aligned target column for `{n_id}` to `{cols[-1]}`.")
-        if "date_column" in cfg and cfg["date_column"] not in cols:
-            date_candidates = [c for c in cols if "date" in c.lower() or "time" in c.lower()]
-            cfg["date_column"] = date_candidates[0] if date_candidates else cols[0]
+        # Do NOT destructively overwrite target_column with cols[-1] if user has not picked one yet or if it was saved
         if "columns" in cfg:
-            if isinstance(cfg["columns"], str):
-                cfg["columns"] = [c.strip() for c in cfg["columns"].split(",") if c.strip() in cols]
-            elif isinstance(cfg["columns"], list):
-                cfg["columns"] = [c for c in cfg["columns"] if c in cols]
+            if isinstance(cfg["columns"], str) and cfg["columns"].strip():
+                valid = [c.strip() for c in cfg["columns"].split(",") if c.strip() in all_known_cols]
+                if valid:
+                    cfg["columns"] = valid
+            elif isinstance(cfg["columns"], list) and cfg["columns"]:
+                valid = [c for c in cfg["columns"] if c in all_known_cols]
+                if valid:
+                    cfg["columns"] = valid
 
 
 def execute_pipeline():
@@ -424,6 +468,14 @@ def execute_pipeline():
 
     if not canvas_nodes:
         st.warning("⚠️ The canvas is empty. Please add nodes or load a template first.")
+        return
+
+    # 1. Enforce Required Fields Pre-Flight Check
+    incomplete = get_incomplete_pipeline_nodes()
+    if incomplete:
+        st.error("### ❌ Cannot Execute Pipeline: Required Fields Missing")
+        for item in incomplete:
+            st.markdown(f"> ⚠️ **Node `{item['node_id']}` ({item['recipe_name']})** requires: **`{', '.join(item['missing_fields'])}`** to be selected before running.")
         return
 
     sanitize_node_configs_for_active_dataset()
@@ -754,14 +806,27 @@ def load_anomaly_template(force_preset: bool = False):
 # -------------------------------------------------------------
 def save_workflow_to_backend(name: str, description: str = "") -> dict:
     """Saves current active canvas workflow and node configs to backend REST API/DB."""
+    active_df = st.session_state.get("active_df")
+    saved_cols = list(st.session_state.get("saved_dataset_columns", []))
+    active_cols = list(active_df.columns) if active_df is not None else saved_cols
+    
+    dataset_metadata = {
+        "dataset_name": st.session_state.get("active_dataset_name", ""),
+        "columns": active_cols,
+        "row_count": len(active_df) if active_df is not None else 0
+    }
+
     nodes_payload = []
     for n in st.session_state["flow_state"].nodes:
         pos = get_node_position(n)
         content = n.data.get("content", n.id) if hasattr(n, "data") and isinstance(n.data, dict) else n.id
+        n_cfg = st.session_state.get("node_configs", {}).get(n.id, {})
         nodes_payload.append({
             "id": n.id,
             "position": pos,
-            "content": content
+            "content": content,
+            "recipe_id": n_cfg.get("recipe_id", ""),
+            "config": n_cfg.get("config", {})
         })
 
     edges_payload = [
@@ -769,12 +834,15 @@ def save_workflow_to_backend(name: str, description: str = "") -> dict:
         for e in st.session_state["flow_state"].edges
     ]
 
+    persisted_configs = dict(st.session_state.get("node_configs", {}))
+    persisted_configs["_dataset_metadata"] = dataset_metadata
+
     body = {
         "name": name,
         "description": description,
         "nodes": nodes_payload,
         "edges": edges_payload,
-        "node_configs": st.session_state.get("node_configs", {})
+        "node_configs": persisted_configs
     }
 
     try:
@@ -784,6 +852,8 @@ def save_workflow_to_backend(name: str, description: str = "") -> dict:
             saved_json = res.json()
             record_api_telemetry("💾 Save Workflow API", "/api/v1/workflows/", "POST", body, saved_json, res.status_code, 2.1)
             return saved_json
+    except Exception:
+        pass
     except Exception:
         pass
 
@@ -803,7 +873,7 @@ def save_workflow_to_backend(name: str, description: str = "") -> dict:
                 description=description,
                 nodes=nodes_payload,
                 edges=edges_payload,
-                node_configs=st.session_state.get("node_configs", {})
+                node_configs=persisted_configs
             )
             session.add(wf)
             await session.commit()
@@ -942,12 +1012,42 @@ def restore_saved_workflow(wf_data: dict):
     t_nodes = []
     t_edges = []
     
+    # Restore saved configs and extract dataset metadata
+    saved_configs = dict(wf_data.get("node_configs", {}))
+    ds_meta = saved_configs.pop("_dataset_metadata", {})
+    if ds_meta and isinstance(ds_meta, dict):
+        if ds_meta.get("columns"):
+            st.session_state["saved_dataset_columns"] = ds_meta["columns"]
+        if ds_meta.get("dataset_name"):
+            st.session_state["saved_dataset_name"] = ds_meta["dataset_name"]
+            if not st.session_state.get("active_dataset_name"):
+                st.session_state["active_dataset_name"] = ds_meta["dataset_name"]
+
+    # Clear stale widget keys to prevent Streamlit widget state collision
+    for k in list(st.session_state.keys()):
+        if k.startswith("cfg_") or k.startswith("lbl_") or k.startswith("vmode_"):
+            del st.session_state[k]
+
+    # Pre-populate widget session state keys so UI widgets immediately reflect saved parameters
+    for nid, node_entry in saved_configs.items():
+        if isinstance(node_entry, dict) and "config" in node_entry and isinstance(node_entry["config"], dict):
+            for prop_name, prop_val in node_entry["config"].items():
+                st.session_state[f"cfg_{nid}_{prop_name}"] = prop_val
+
     # Restore Nodes
     for nd in wf_data.get("nodes", []):
         nid = nd["id"]
         pos = nd.get("position", (100, 100))
         content = nd.get("content", nid)
         t_nodes.append(create_flow_node(nid, pos, content))
+        
+        # If node had inline config and was missing from saved_configs, backfill it
+        if nid not in saved_configs and ("recipe_id" in nd or "config" in nd):
+            saved_configs[nid] = {
+                "recipe_id": nd.get("recipe_id", ""),
+                "label": content,
+                "config": nd.get("config", {})
+            }
 
     # Restore Edges
     for ed in wf_data.get("edges", []):
@@ -955,7 +1055,7 @@ def restore_saved_workflow(wf_data: dict):
         t_edges.append(StreamlitFlowEdge(id=eid, source=ed["source"], target=ed["target"], animated=True))
 
     st.session_state["flow_state"] = StreamlitFlowState(nodes=t_nodes, edges=t_edges)
-    st.session_state["node_configs"] = wf_data.get("node_configs", {})
+    st.session_state["node_configs"] = saved_configs
     st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
     st.session_state["active_saved_workflow_name"] = wf_data.get("name", "Saved Workflow")
 
@@ -1017,6 +1117,13 @@ if app_mode == "🎨 Pipeline Whiteboard":
     with bar_col6:
         if st.button("🔗 Auto-Wire", use_container_width=True):
             curr_nodes = st.session_state["flow_state"].nodes
+            incomplete = get_incomplete_pipeline_nodes()
+            if incomplete:
+                st.session_state["autowire_validation_error"] = incomplete
+                st.rerun()
+            else:
+                st.session_state.pop("autowire_validation_error", None)
+
             if len(curr_nodes) < 2:
                 st.warning("⚠️ Auto-Wire requires at least 2 nodes on the canvas. Add components first.")
             else:
@@ -1024,21 +1131,23 @@ if app_mode == "🎨 Pipeline Whiteboard":
                     cfg = st.session_state.get("node_configs", {}).get(nid, {})
                     return cfg.get("recipe_id", "")
 
-                def get_category_order(nid: str) -> int:
+                def get_category_order(nid: str) -> float:
                     r_id = get_recipe_type(nid)
                     if r_id in ["cron_trigger", "webhook_trigger"]:
-                        return 0
+                        return 0.0
                     if r_id in ["csv_loader"]:
-                        return 1
-                    if r_id in ["missing_value_imputer", "feature_scaler", "categorical_encoder", "statistical_guardrail", "lag_feature_engineering", "duplicate_remover", "category_sanitizer", "correlation_filter", "variance_filter", "text_preprocessor", "text_vectorizer"]:
-                        return 2
+                        return 1.0
+                    if r_id in ["text_preprocessor", "text_vectorizer"]:
+                        return 1.5
+                    if r_id in ["missing_value_imputer", "feature_scaler", "categorical_encoder", "statistical_guardrail", "lag_feature_engineering", "duplicate_remover", "category_sanitizer", "correlation_filter", "variance_filter"]:
+                        return 2.0
                     if r_id in ["train_test_split"]:
-                        return 3
+                        return 3.0
                     if r_id in ["xgboost_trainer", "lightgbm_trainer", "catboost_trainer", "random_forest_trainer", "linear_trainer", "isolation_forest", "prophet_forecaster", "arima_forecaster"]:
-                        return 4
+                        return 4.0
                     if r_id in ["model_evaluator", "mlflow_tracker"]:
-                        return 5
-                    return 2
+                        return 5.0
+                    return 2.0
 
                 # Categorize nodes
                 triggers = [n for n in curr_nodes if get_category_order(n.id) == 0]
@@ -1342,8 +1451,7 @@ if app_mode == "🎨 Pipeline Whiteboard":
                 
                 init_cfg = dict(chosen_meta["default_config"])
                 if "target_column" in init_cfg:
-                    cols = list(st.session_state["active_df"].columns)
-                    init_cfg["target_column"] = cols[-1]
+                    init_cfg["target_column"] = ""
 
                 st.session_state["node_configs"][node_id] = {
                     "recipe_id": chosen_meta["id"],
@@ -1368,6 +1476,23 @@ if app_mode == "🎨 Pipeline Whiteboard":
     # ---------------------------------------------------------
     # STEP 2 & 3: CANVAS + CONNECTOR + INSPECTOR
     # ---------------------------------------------------------
+    if "autowire_validation_error" in st.session_state and st.session_state["autowire_validation_error"]:
+        err_items = st.session_state["autowire_validation_error"]
+        st.error("### ⚠️ Auto-Wire Halted: Incomplete Node Configurations Detected!")
+        st.markdown(
+            "Auto-Wire cannot automatically connect nodes while required configuration fields are missing or unset. "
+            "Please configure the following required fields in the Inspector panel before auto-wiring:"
+        )
+        for item in err_items:
+            missing_str = ", ".join(f"`{f}`" for f in item["missing_fields"])
+            st.warning(f"👉 **{item['label']}** (`{item['node_id']}`): Missing required parameter(s): **{missing_str}**")
+        
+        c_dismiss, _ = st.columns([1, 4])
+        with c_dismiss:
+            if st.button("✕ Dismiss Warning", key="dismiss_autowire_err"):
+                del st.session_state["autowire_validation_error"]
+                st.rerun()
+
     canvas_col, right_col = st.columns([3, 1])
 
     with canvas_col:
@@ -1546,6 +1671,11 @@ if app_mode == "🎨 Pipeline Whiteboard":
                 current_config = dict(node_cfg.get("config", {}))
 
                 active_cols = list(st.session_state["active_df"].columns) if "active_df" in st.session_state and st.session_state["active_df"] is not None else []
+                saved_cols = list(st.session_state.get("saved_dataset_columns", []))
+                available_cols = []
+                for c in active_cols + saved_cols:
+                    if c not in available_cols:
+                        available_cols.append(c)
 
                 for prop_name, prop_meta in props.items():
                     title = prop_meta.get("title", prop_name)
@@ -1555,22 +1685,48 @@ if app_mode == "🎨 Pipeline Whiteboard":
 
                     # Smart column selectors: array of columns vs single column
                     if prop_type == "array" or prop_name in ["columns", "feature_columns", "categorical_columns", "numerical_columns"]:
+                        multiselect_options = list(available_cols)
                         if isinstance(curr_val, str):
-                            curr_list = [c.strip() for c in curr_val.split(",") if c.strip() in active_cols] if curr_val else []
+                            curr_list = [c.strip() for c in curr_val.split(",") if c.strip()]
                         elif isinstance(curr_val, (list, tuple)):
-                            curr_list = [c for c in curr_val if c in active_cols]
+                            curr_list = [str(c) for c in curr_val]
                         else:
                             curr_list = []
+                        # Ensure any saved columns are in the options list so they don't disappear
+                        for c in curr_list:
+                            if c not in multiselect_options:
+                                multiselect_options.append(c)
                         new_val = st.multiselect(
                             title,
-                            options=active_cols,
+                            options=multiselect_options,
                             default=curr_list,
                             key=f"cfg_{selected_node_id}_{prop_name}",
                             help=prop_meta.get("description", "Select specific columns or leave empty to apply across all columns.")
                         )
-                    elif ("column" in prop_name.lower() or prop_name.endswith("_col")) and active_cols:
-                        col_idx = active_cols.index(curr_val) if curr_val in active_cols else len(active_cols) - 1
-                        new_val = st.selectbox(title, active_cols, index=col_idx, key=f"cfg_{selected_node_id}_{prop_name}")
+                    elif ("column" in prop_name.lower() or prop_name.endswith("_col")):
+                        is_required = prop_name in schema.get("required", []) or prop_name == "target_column"
+                        col_options = list(available_cols)
+                        if curr_val and str(curr_val).strip() and str(curr_val) not in col_options and str(curr_val) not in ["-- Select Column --", "(None)"]:
+                            col_options.append(str(curr_val))
+                        
+                        if is_required:
+                            options = ["-- Select Column --"] + col_options
+                            if curr_val and str(curr_val) in options:
+                                col_idx = options.index(str(curr_val))
+                            else:
+                                col_idx = 0
+                        else:
+                            options = ["(None)"] + col_options
+                            if curr_val and str(curr_val) in options:
+                                col_idx = options.index(str(curr_val))
+                            else:
+                                col_idx = 0
+
+                        selected_opt = st.selectbox(title, options, index=col_idx, key=f"cfg_{selected_node_id}_{prop_name}")
+                        if selected_opt in ["-- Select Column --", "(None)"]:
+                            new_val = ""
+                        else:
+                            new_val = selected_opt
                     elif "enum" in prop_meta:
                         options = prop_meta["enum"]
                         opt_idx = options.index(curr_val) if curr_val in options else 0
