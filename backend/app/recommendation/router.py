@@ -9,13 +9,16 @@ from backend.app.infrastructure.database.session import get_db
 from backend.app.infrastructure.storage.storage_manager import storage_manager
 from backend.app.datasets.models import Dataset
 from backend.app.recommendation.recommender import AIRecommender
+from backend.app.recommendation.llm_recommender import LLMRecommender
 from backend.app.recipes.base.registry import recipe_registry
+from backend.app.core.config import settings
 
 router = APIRouter(prefix="/recommend", tags=["AI Recommendation & Auto-Architect"])
 
 
 class RecommendationRequest(BaseModel):
     dataset_id: Optional[str] = Field(None, description="Optional ID of an uploaded dataset")
+    query: Optional[str] = Field(None, description="Optional natural language prompt or objective for LLM pipeline synthesis")
     target_column: Optional[str] = Field(None, description="Optional target label column for supervised tasks")
     time_column: Optional[str] = Field(None, description="Optional timestamp column for time-series tasks")
     task_type: Optional[str] = Field(None, description="Optional forced task: 'classification', 'regression', 'time_series_forecasting', 'anomaly_detection'")
@@ -34,8 +37,9 @@ async def recommend_pipeline(
 ):
     """
     AI Recommendation & Pipeline Auto-Architect Endpoint.
-    Analyzes dataset profile, determines optimal task type, ranks Tier-1 ML models,
-    and returns a ready-to-render visual DAG (nodes, edges, layout, parameters).
+    Analyzes dataset profile and user natural language query (via Groq LLM),
+    determines optimal task type, ranks ML models, and returns a ready-to-render
+    visual DAG (nodes, edges, layout, parameters) with architectural explanation.
     """
     df = None
     dataset_name = "Sample Dataset"
@@ -66,11 +70,23 @@ async def recommend_pipeline(
             "churn": [1, 0, 0, 0, 1, 0, 0, 1, 0, 0]
         })
 
-    recommendation = AIRecommender.recommend_pipeline(
-        df=df,
-        target_column=payload.target_column,
-        task_type=payload.task_type
-    )
+    # If user provided a query or Groq key is configured, synthesize via LLM with fallback
+    if payload.query or settings.GROQ_API_KEY:
+        recommendation = await LLMRecommender.recommend_pipeline_async(
+            df=df,
+            query=payload.query,
+            target_column=payload.target_column,
+            time_column=payload.time_column,
+            task_type=payload.task_type,
+            preset=payload.preset,
+            dataset_name=dataset_name
+        )
+    else:
+        recommendation = AIRecommender.recommend_pipeline(
+            df=df,
+            target_column=payload.target_column,
+            task_type=payload.task_type
+        )
 
     # Update dataset_id in the synthesized ingestion node
     if payload.dataset_id and "recommended_dag" in recommendation:

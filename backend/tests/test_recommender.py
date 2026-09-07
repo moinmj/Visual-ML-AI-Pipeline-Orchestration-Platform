@@ -50,3 +50,28 @@ def test_ai_recommender_time_series():
     for n in rec["recommended_dag"]["nodes"]:
         assert recipe_registry.has(n["recipe_id"]), f"Recipe {n['recipe_id']} not found in registry"
 
+
+@pytest.mark.asyncio
+async def test_llm_recommender_synthesis():
+    from backend.app.recommendation.llm_recommender import LLMRecommender
+    from backend.app.recipes.base.registry import recipe_registry
+
+    df = pd.DataFrame({
+        "sepal_length": [5.1, 4.9, 4.7, 4.6, 5.0],
+        "petal_length": [1.4, 1.4, 1.3, 1.5, 1.4],
+        "species": ["setosa", "setosa", "setosa", "setosa", "setosa"]
+    })
+
+    res = await LLMRecommender.recommend_pipeline_async(
+        df=df,
+        query="Train a high-accuracy classifier to identify Iris species and evaluate results",
+        target_column="species"
+    )
+
+    assert "recommended_dag" in res
+    assert len(res["recommended_dag"]["nodes"]) >= 3
+    assert "explanation" in res
+    for n in res["recommended_dag"]["nodes"]:
+        assert recipe_registry.has(n["recipe_id"]), f"Recipe {n['recipe_id']} not found in registry"
+
+

@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     # MLflow Settings
     MLFLOW_TRACKING_URI: str = "sqlite:///./data/mlflow.db"
 
+    # Groq LLM Settings
+    GROQ_API_KEY: Optional[str] = None
+    GROQ_MODEL: str = "openai/gpt-oss-120b"
+
+
     model_config = {
         "env_file": ".env",
         "extra": "ignore"
