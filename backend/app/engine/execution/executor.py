@@ -260,19 +260,25 @@ class DAGExecutor:
                     parent_out = node_outputs.get(parent_id, {})
                     node_inputs.update(parent_out)
 
+                # Fallback to pipeline_context if node requires model/scaler/encoder but immediate parent didn't pass it
+                for ctx_key in ["model", "scaler", "encoder", "target_classes", "target_encoder", "feature_names", "imputer_stats", "vectorizer"]:
+                    if ctx_key not in node_inputs or node_inputs[ctx_key] is None:
+                        if pipeline_context.get(ctx_key) is not None:
+                            node_inputs[ctx_key] = pipeline_context[ctx_key]
+
             # Execution
             try:
                 outputs = recipe.execute(inputs=node_inputs, config=node.config, context=pipeline_context)
                 node_outputs[node.id] = outputs
 
-                # Propagate standard artifacts to shared context
+                # Propagate standard artifacts to shared context (never overwrite existing valid object with None)
                 for key in [
                     "X_test", "y_test", "X_train", "y_train", "dataframe", "forecast_df",
                     "model", "scaler", "encoder", "task_type", "feature_names", "feature_importances",
                     "target_classes", "target_encoder", "target_column", "imputer_stats",
                     "vectorizer", "text_column"
                 ]:
-                    if key in outputs:
+                    if key in outputs and outputs[key] is not None:
                         pipeline_context[key] = outputs[key]
 
                 if "target_column" in node.config and node.config["target_column"]:
@@ -415,10 +421,18 @@ class DAGExecutor:
             "time_series_meta": pipeline_context.get("forecasting_summary")
         }
 
+        # Ensure model is preserved even if a downstream node produced outputs or was ordered differently
+        resolved_model = pipeline_context.get("model")
+        if resolved_model is None:
+            for n_out in node_outputs.values():
+                if isinstance(n_out, dict) and n_out.get("model") is not None:
+                    resolved_model = n_out["model"]
+                    break
+
         inference_bundle = {
             "execution_id": execution_id,
             "task_type": pipeline_context.get("task_type", "classification"),
-            "model": pipeline_context.get("model"),
+            "model": resolved_model,
             "feature_names": fn_list,
             "target_column": pipeline_context.get("target_column"),
             "target_classes": pipeline_context.get("target_classes", []),

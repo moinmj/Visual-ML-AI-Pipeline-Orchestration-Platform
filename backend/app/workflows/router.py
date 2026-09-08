@@ -88,6 +88,25 @@ async def list_workflows(
     return workflows
 
 
+@router.get("/jobs")
+async def list_jobs(limit: int = 50):
+    """
+    List recent workflow execution jobs and their runtime statuses.
+    """
+    return job_manager.list_jobs(limit=limit)
+
+
+@router.get("/jobs/{job_id}")
+async def get_job_status(job_id: str):
+    """
+    Poll the status, logs, step snapshots, and results for an async workflow job.
+    """
+    job = job_manager.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+    return job
+
+
 @router.get("/{workflow_id}", response_model=WorkflowResponse)
 async def get_workflow(
     workflow_id: str,
@@ -414,23 +433,6 @@ async def submit_async_workflow(
     }
 
 
-@router.get("/jobs")
-async def list_jobs(limit: int = 50):
-    """
-    List recent workflow execution jobs and their runtime statuses.
-    """
-    return job_manager.list_jobs(limit=limit)
-
-
-@router.get("/jobs/{job_id}")
-async def get_job_status(job_id: str):
-    """
-    Poll the status, logs, step snapshots, and results for an async workflow job.
-    """
-    job = job_manager.get_job(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
-    return job
 
 
 @router.post("/trigger/{webhook_path}")
@@ -511,6 +513,17 @@ async def get_execution_inference_schema(execution_id: str):
     )
 
 
+@router.post("/predict", response_model=PredictionResponse)
+async def predict_latest(
+    execution_id: str = Query(..., description="The execution ID of the trained pipeline"),
+    payload: PredictionRequest = Body(...)
+):
+    """
+    Convenience endpoint for live predictions passing execution_id as a query parameter.
+    """
+    return await predict_with_execution(execution_id=execution_id, payload=payload)
+
+
 @router.post("/{execution_id}/predict", response_model=PredictionResponse)
 async def predict_with_execution(
     execution_id: str,
@@ -534,16 +547,5 @@ async def predict_with_execution(
             detail=f"Prediction failed: {response.error_message}"
         )
     return response
-
-
-@router.post("/predict", response_model=PredictionResponse)
-async def predict_latest(
-    execution_id: str = Query(..., description="The execution ID of the trained pipeline"),
-    payload: PredictionRequest = Body(...)
-):
-    """
-    Convenience endpoint for live predictions passing execution_id as a query parameter.
-    """
-    return await predict_with_execution(execution_id=execution_id, payload=payload)
 
 

@@ -10,6 +10,8 @@ class RecipeRegistry:
         self._aliases: Dict[str, str] = {
             "classification_evaluator": "model_evaluator",
             "regression_evaluator": "model_evaluator",
+            "model_governance_card": "mlflow_tracker",
+            "governance_card": "mlflow_tracker",
         }
 
     def register(self, recipe: BaseRecipe):

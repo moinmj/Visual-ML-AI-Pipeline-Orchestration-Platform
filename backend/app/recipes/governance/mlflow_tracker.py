@@ -68,8 +68,8 @@ class MLflowTrackerRecipe(BaseRecipe):
         if not MLFLOW_AVAILABLE:
             raise ValueError("mlflow is not installed. Please run 'pip install mlflow'.")
 
-        model = inputs.get("model")
-        metrics = inputs.get("metrics") or {}
+        model = inputs.get("model") or (context.get("model") if isinstance(context, dict) else None)
+        metrics = inputs.get("metrics") or (context.get("metrics") if isinstance(context, dict) else None) or {}
 
         exp_name = config.get("experiment_name", "Enterprise_ML_Pipelines")
         model_name = config.get("registered_model_name", "Production_Champion_Model")
@@ -115,8 +115,10 @@ class MLflowTrackerRecipe(BaseRecipe):
             "metrics_logged": len(metrics)
         }
 
-        return {
+        ret = {
             "governance_record": governance_record,
-            "metrics": metrics,
-            "model": model
+            "metrics": metrics
         }
+        if model is not None:
+            ret["model"] = model
+        return ret
