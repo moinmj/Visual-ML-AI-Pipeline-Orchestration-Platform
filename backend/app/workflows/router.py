@@ -12,6 +12,13 @@ from backend.app.engine.execution.executor import DAGExecutor, WorkflowExecution
 from backend.app.engine.execution.job_manager import job_manager
 from backend.app.workflows.models import Workflow
 from backend.app.workflows.schemas import WorkflowCreate, WorkflowUpdate, WorkflowResponse
+from backend.app.engine.inference import (
+    PipelineInferencer,
+    PredictionRequest,
+    PredictionResponse,
+    InferenceSchemaResponse,
+    FeatureSchemaItem
+)
 
 router = APIRouter(prefix="/workflows", tags=["Workflows & DAG Execution"])
 
@@ -79,6 +86,25 @@ async def list_workflows(
     result = await db.execute(query)
     workflows = result.scalars().all()
     return workflows
+
+
+@router.get("/jobs")
+async def list_jobs(limit: int = 50):
+    """
+    List recent workflow execution jobs and their runtime statuses.
+    """
+    return job_manager.list_jobs(limit=limit)
+
+
+@router.get("/jobs/{job_id}")
+async def get_job_status(job_id: str):
+    """
+    Poll the status, logs, step snapshots, and results for an async workflow job.
+    """
+    job = job_manager.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+    return job
 
 
 @router.get("/{workflow_id}", response_model=WorkflowResponse)
@@ -407,23 +433,6 @@ async def submit_async_workflow(
     }
 
 
-@router.get("/jobs")
-async def list_jobs(limit: int = 50):
-    """
-    List recent workflow execution jobs and their runtime statuses.
-    """
-    return job_manager.list_jobs(limit=limit)
-
-
-@router.get("/jobs/{job_id}")
-async def get_job_status(job_id: str):
-    """
-    Poll the status, logs, step snapshots, and results for an async workflow job.
-    """
-    job = job_manager.get_job(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
-    return job
 
 
 @router.post("/trigger/{webhook_path}")
@@ -457,4 +466,86 @@ async def autowire_workflow_nodes(payload: Dict[str, Any] = Body(...)):
     from backend.app.recommendation.router import autowire_nodes, AutoWireRequest
     nodes = payload.get("nodes", [])
     return await autowire_nodes(AutoWireRequest(nodes=nodes))
+
+
+# -------------------------------------------------------------
+# MODEL INFERENCE & LIVE PREDICTION ENDPOINTS
+# -------------------------------------------------------------
+
+@router.get("/{execution_id}/schema", response_model=InferenceSchemaResponse)
+async def get_execution_inference_schema(execution_id: str):
+    """
+    Retrieve the dynamic input schema, feature boundaries, default values,
+    and sample request payload for a trained pipeline execution.
+    """
+    bundle = job_manager.get_inference_bundle(execution_id)
+    if not bundle:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No live model inference bundle found for execution ID '{execution_id}'. Please execute the pipeline first."
+        )
+
+    feat_items: List[FeatureSchemaItem] = []
+    features_summary = bundle.get("training_feature_summary", {})
+    feature_names = bundle.get("feature_names", [])
+
+    for f_name in feature_names:
+        f_info = features_summary.get(f_name, {})
+        feat_items.append(FeatureSchemaItem(
+            name=f_name,
+            data_type=f_info.get("data_type", "numeric"),
+            min_value=f_info.get("min_value"),
+            max_value=f_info.get("max_value"),
+            median_value=f_info.get("median_value"),
+            mean_value=f_info.get("mean_value"),
+            default_value=f_info.get("default_value", 0.0),
+            allowed_categories=f_info.get("allowed_categories")
+        ))
+
+    return InferenceSchemaResponse(
+        execution_id=execution_id,
+        task_type=bundle.get("task_type", "classification"),
+        target_column=bundle.get("target_column"),
+        target_classes=bundle.get("target_classes", []),
+        features=feat_items,
+        sample_payload=bundle.get("sample_row", {}),
+        time_series_meta=bundle.get("forecasting_summary")
+    )
+
+
+@router.post("/predict", response_model=PredictionResponse)
+async def predict_latest(
+    execution_id: str = Query(..., description="The execution ID of the trained pipeline"),
+    payload: PredictionRequest = Body(...)
+):
+    """
+    Convenience endpoint for live predictions passing execution_id as a query parameter.
+    """
+    return await predict_with_execution(execution_id=execution_id, payload=payload)
+
+
+@router.post("/{execution_id}/predict", response_model=PredictionResponse)
+async def predict_with_execution(
+    execution_id: str,
+    payload: PredictionRequest = Body(...)
+):
+    """
+    Execute live model inference using the trained pipeline artifacts from a specific execution run.
+    Supports single feature dictionaries, batch CSV records, or time-series forecast horizon / date ranges.
+    """
+    bundle = job_manager.get_inference_bundle(execution_id)
+    if not bundle:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No live model inference bundle found for execution ID '{execution_id}'. Please execute the pipeline first."
+        )
+
+    response = PipelineInferencer.predict(bundle=bundle, request=payload)
+    if response.status == "FAILED":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Prediction failed: {response.error_message}"
+        )
+    return response
+
 

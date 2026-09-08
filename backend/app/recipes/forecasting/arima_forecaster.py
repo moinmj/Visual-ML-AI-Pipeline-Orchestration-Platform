@@ -196,5 +196,6 @@ class ARIMAForecasterRecipe(BaseRecipe):
             "dataframe": full_forecast_df,
             "metrics": metrics,
             "forecasting_summary": metrics,
-            "model": fitted_model
+            "model": fitted_model,
+            "task_type": "time_series_forecasting"
         }

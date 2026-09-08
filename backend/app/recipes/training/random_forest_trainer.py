@@ -147,6 +147,15 @@ class RandomForestTrainerRecipe(BaseRecipe):
             "feature_names": feature_names
         }
 
+        upstream_classes = inputs.get("target_classes") or (context.get("target_classes") if isinstance(context, dict) else None)
+        if upstream_classes:
+            output["target_classes"] = upstream_classes
+            if "target_encoder" in inputs:
+                output["target_encoder"] = inputs["target_encoder"]
+        elif task_type == "classification" and "le" in locals():
+            output["target_classes"] = [str(c) for c in le.classes_]
+            output["target_encoder"] = le
+
         if X_test is not None:
             output["X_test"] = X_test
         if y_test is not None:

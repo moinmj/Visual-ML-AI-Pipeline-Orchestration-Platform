@@ -67,27 +67,32 @@ class MissingValueImputerRecipe(BaseRecipe):
             df[cols_to_process] = df[cols_to_process].ffill()
         elif strategy == "bfill":
             df[cols_to_process] = df[cols_to_process].bfill()
-        elif strategy in ["mean", "median"]:
+        imputer_stats = {}
+        if strategy in ["mean", "median"]:
             for col in cols_to_process:
                 if pd.api.types.is_numeric_dtype(df[col]):
                     val = df[col].median() if strategy == "median" else df[col].mean()
                     if pd.isna(val):
                         val = 0
                     df[col] = df[col].fillna(val)
+                    imputer_stats[col] = float(val)
                 else:
                     mode_val = df[col].mode()
                     fill = mode_val[0] if not mode_val.empty else "Missing"
                     df[col] = df[col].fillna(fill)
+                    imputer_stats[col] = str(fill)
         elif strategy == "mode":
             for col in cols_to_process:
                 mode_val = df[col].mode()
                 fill = mode_val[0] if not mode_val.empty else (0 if pd.api.types.is_numeric_dtype(df[col]) else "Missing")
                 df[col] = df[col].fillna(fill)
+                imputer_stats[col] = float(fill) if isinstance(fill, (int, float, np.number)) else str(fill)
         elif strategy == "constant":
             for col in cols_to_process:
                 df[col] = df[col].fillna(fill_val)
+                imputer_stats[col] = fill_val
 
-        return {"dataframe": df}
+        return {"dataframe": df, "imputer_stats": imputer_stats}
 
     def to_code(self, config: Dict[str, Any]) -> str:
         strat = config.get("strategy", "median")

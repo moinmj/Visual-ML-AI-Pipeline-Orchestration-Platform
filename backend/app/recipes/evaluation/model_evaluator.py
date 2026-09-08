@@ -211,7 +211,10 @@ class ModelEvaluatorRecipe(BaseRecipe):
                 "mape": mape
             })
 
-        return {
+        ret = {
             "metrics": metrics,
             "predictions_sample": [float(p) if isinstance(p, (np.floating, float)) else str(p) for p in predictions[:15]]
         }
+        if model is not None:
+            ret["model"] = model
+        return ret

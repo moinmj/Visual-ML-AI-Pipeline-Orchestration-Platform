@@ -5,9 +5,9 @@
 ---
 
 ## 📍 Current Status
-* **Active Phase:** Full Specification Realization (AI Recommendation Engine, Node Code-View & Complete Task Families Completed)
-* **Status Date:** August 24, 2026
-* **Current Milestone:** Backend Foundation, Data Profiler Engine, 17 Modular Recipes, DAG Engine, MLflow Model Governance, AI Recommendation Engine, Node-Level Code-View (`to_code()`), and Streamlit Whiteboard Studio are 100% complete and verified with 19/19 passing automated tests.
+* **Active Phase:** Phase 7 Real-Time Inference & Model Serving
+* **Status Date:** September 7, 2026
+* **Current Milestone:** Universal Model Inference Engine (`PipelineInferencer`), Real-Time REST API Serving Endpoints (`/api/v1/workflows/{execution_id}/predict` and `/schema`), Streamlit Interactive Prediction Dialog (`@st.dialog`) & In-Page Sandbox, and Dynamic Schema Discovery are 100% complete and verified with 29/29 passing automated tests.
 
 ---
 
@@ -21,23 +21,33 @@
 | **Dataset REST APIs** | ✅ Completed | Upload, preview, profiling, and metadata endpoints under `/api/v1/datasets`. |
 | **AI Recommendation Engine (Sec 8)** | ✅ Completed | Analyzes dataset profiling metrics to diagnose problem type (Classification, Regression, Forecasting, Anomaly Detection), recommends optimal preprocessing chains, and ranks algorithms with architectural rationale. |
 | **Node Code-View (`to_code()`) (Sec 9)** | ✅ Completed | All recipes expose standard `to_code(config)` method rendering reproducible Python code snippets in the node inspector. |
-| **Recipe Engine & Catalog** | ✅ Completed | `BaseRecipe`, `RecipeRegistry`, and 17 recipes across 7 categories (Ingestion, Preprocessing, Splitting, Training, Anomaly Detection, Time-Series Forecasting, Model Governance, and Evaluation). |
+| **Recipe Engine & Catalog** | ✅ Completed | `BaseRecipe`, `RecipeRegistry`, and 20+ recipes across Ingestion, Preprocessing, NLP, Splitting, Training, Anomaly Detection, Time-Series Forecasting, Model Governance, and Evaluation. |
 | **Gradient Boosting Triumvirate** | ✅ Completed | Full enterprise support for **XGBoost**, **LightGBM**, and **CatBoost** with auto-categorical fallbacks and column sanitization. |
 | **Time-Series Forecasting** | ✅ Completed | **Meta Prophet**, **ARIMA / SARIMAX**, and **Lag Feature Engineering** with confidence bands. |
 | **Model Governance Layer** | ✅ Completed | **MLflow Model Registry** tracking parameters, metrics, artifact logging, and stage promotions (`Production` / `Staging`). |
 | **DAG Workflow Engine** | ✅ Completed | Cycle detection (Kahn's algorithm), topological sorting, node artifact passing, and fault-tolerant in-memory execution. |
+| **Universal Inference Engine** | ✅ Completed | `PipelineInferencer` supporting sub-millisecond classification label decoding (e.g. `Iris-setosa`), regression, custom horizon/date-range forecasting, outlier risk scoring, and batch CSV scoring. |
+| **Inference REST Endpoints** | ✅ Completed | `POST /api/v1/workflows/{execution_id}/predict`, `GET /api/v1/workflows/{execution_id}/schema`, and `POST /api/v1/workflows/predict`. |
+| **Interactive Prediction Studio & Dialog** | ✅ Completed | Native Streamlit `@st.dialog` modal popup & in-page sandbox with "🎲 Load Random Test Sample", dynamic bounds, Plotly probability distribution bars, and cURL generator. |
 | **Visual Whiteboard Prototype** | ✅ Completed | Interactive Streamlit + React Flow (`streamlit-flow`) canvas with 1-click **AI Recommend**, ML, Forecasting, and Anomaly templates, Plotly diagnostics, and MLflow audit cards. |
 
 ---
 
 ## 📝 Recent Changes & Decisions Made
-* **AI Recommendation Layer:** Built `AIRecommender` ([backend/app/recommendation/recommender.py](file:///c:/Data%20Science/Projects/Visual%20MLAI%20Pipeline%20Orchestration%20Platform/backend/app/recommendation/recommender.py)) to automatically synthesize dataset characteristics into a structured DAG.
-* **1-Click AI Whiteboard Pipeline:** Added `🧠 AI Recommend` button to top action bar that builds, wires, and runs the optimal pipeline based on dataset profiling.
-* **Node Code-View:** Added `to_code()` template renderer to recipes, enabling a clean toggle between Parameters Form and Python Code in the UI inspector.
-* **Automated Verification:** 19/19 automated unit and integration tests passing (`backend/tests`).
+* **Universal Pipeline Inference Engine:** Implemented `PipelineInferencer` ([backend/app/engine/inference/pipeline_inferencer.py](file:///c:/Data%20Science/Projects/Visual%20MLAI%20Pipeline%20Orchestration%20Platform/backend/app/engine/inference/pipeline_inferencer.py)) providing unified inference across tabular classification, regression, time-series forecasting, anomaly detection, and NLP.
+* **Preserved Inference Bundles:** `DAGExecutor` automatically captures and registers live fitted models, scalers, imputers, vectorizers, and target class mappings in `job_manager` keyed by `execution_id`.
+* **Dynamic Target Label Decoding:** Trainers and train-test splitters preserve target class mappings so predictions decode numeric outputs (0, 1, 2) back to human-readable names (e.g., `Iris-setosa`).
+* **Interactive Prediction Dialog & Sandbox:** Added `@st.dialog("🔮 Interactive Model Prediction Studio")` and in-page sandbox in Streamlit with 1-click test sampling, batch CSV scoring, and live REST API cURL generation.
+* **Groq LLM Pipeline Architect:** Added `LLMRecommender` ([backend/app/recommendation/llm_recommender.py](file:///c:/Data%20Science/Projects/Visual%20MLAI%20Pipeline%20Orchestration%20Platform/backend/app/recommendation/llm_recommender.py)) powered by Groq (`openai/gpt-oss-120b`) to synthesize tailored end-to-end visual ML pipelines from natural language prompts, with resilient fallback to deterministic heuristics.
+* **Evaluator Recipe Resolution & Aliasing:** Fixed recipe ID mismatch (`classification_evaluator` -> `model_evaluator`) and added backward-compatible alias resolution in `RecipeRegistry`.
+* **Authentication & Multi-Tenant Data Layer Integration:** Successfully merged `origin/Authentication` into `development` and `ml-ai-pipeline` without breaking any existing features. Added JWT authentication (`backend/app/auth/`), enterprise security primitives (`backend/app/core/security.py`), multi-tenant data catalog and warehouse services (`backend/app/tenant_data/`), and tenant session management (`backend/app/infrastructure/database/tenant_session.py`).
+* **Consolidated Settings & .env:** Configured unified Pydantic settings combining Groq LLM recommender, ML platform parameters, JWT authentication, Fernet encryption, and tenant data sources (Druid, Iceberg, SFTP, Twilio, Azure Graph).
+* **Automated Verification:** 32/32 automated unit and integration tests passing (`pytest backend/tests/`).
+* **Strict Git Discipline:** Backend synchronized and pushed to `development` and `ml-ai-pipeline` on both `origin` and `personal` remotes. Frontend repository (`FE_POC`) kept strictly local on machine without committing/pushing.
 
 ---
 
 ## 🎯 Next Immediate Tasks
-1. **Pre-trained Batch Inference Recipe:** Add `PretrainedModelInferenceRecipe` to run inference using registered MLflow model URIs without retraining.
-2. **Webhook & Cron Trigger Engine:** Add automated trigger execution scheduling.
+1. **Frontend Developer Hand-off:** Frontend developer will review local UI integration in `FE_POC` and connect to backend APIs.
+2. **Webhook & Cron Trigger Engine:** Enhance automated scheduled trigger pipelines.
+

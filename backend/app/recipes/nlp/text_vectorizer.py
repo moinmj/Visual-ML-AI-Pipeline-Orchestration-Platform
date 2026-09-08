@@ -143,6 +143,8 @@ class TextVectorizerRecipe(BaseRecipe):
 
         return {
             "dataframe": out_df,
+            "vectorizer": vectorizer,
+            "text_column": target_col,
             "metrics": {
                 "method_applied": method,
                 "target_column": target_col,

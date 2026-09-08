@@ -390,7 +390,7 @@ class AIRecommender:
 
             # 5. Model Evaluator
             eval_id = "node_eval"
-            eval_recipe = "regression_evaluator" if task == "regression" else "classification_evaluator"
+            eval_recipe = "model_evaluator"
             nodes.append({
                 "id": eval_id,
                 "recipe_id": eval_recipe,
