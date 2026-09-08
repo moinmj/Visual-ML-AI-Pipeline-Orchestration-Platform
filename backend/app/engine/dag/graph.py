@@ -101,6 +101,18 @@ class WorkflowGraph(BaseModel):
                             f"Fix: Insert a '✂️ Train / Test Splitter' between data preparation and this trainer."
                         )
 
+        # 3b. Node Configuration & Required Schema Validation
+        for node in self.nodes:
+            try:
+                recipe = recipe_registry.get(node.recipe_id)
+            except Exception:
+                continue
+
+            cfg = node.config or {}
+            cfg_errors = recipe.validate_config(cfg)
+            for ce in cfg_errors:
+                errors.append(f"❌ Configuration Error for '{node.id}' [{recipe.name}]: {ce}")
+
         # 4. ML Best Practice Checks & Recommendations
         all_recipe_ids = {n.recipe_id for n in self.nodes}
         for node in self.nodes:

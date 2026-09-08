@@ -20,6 +20,7 @@ from backend.app.engine.inference import (
     InferenceSchemaResponse,
     FeatureSchemaItem
 )
+from backend.app.core.security import get_current_user, require_role, require_permission
 
 router = APIRouter(prefix="/workflows", tags=["Workflows & DAG Execution"])
 
@@ -28,7 +29,12 @@ router = APIRouter(prefix="/workflows", tags=["Workflows & DAG Execution"])
 # WORKFLOW PERSISTENCE & WORKBOOK RETRIEVAL ENDPOINTS
 # -------------------------------------------------------------
 
-@router.post("/", response_model=WorkflowResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/",
+    response_model=WorkflowResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_role("Tenant Admin", "Data Scientist", "ML Engineer"))]
+)
 async def save_workflow(
     payload: WorkflowCreate,
     db: AsyncSession = Depends(get_db)
@@ -129,7 +135,11 @@ async def get_workflow(
     return wf
 
 
-@router.put("/{workflow_id}", response_model=WorkflowResponse)
+@router.put(
+    "/{workflow_id}",
+    response_model=WorkflowResponse,
+    dependencies=[Depends(require_role("Tenant Admin", "Data Scientist", "ML Engineer"))]
+)
 async def upsert_workflow(
     workflow_id: str,
     payload: WorkflowCreate,
@@ -183,7 +193,11 @@ async def upsert_workflow(
     return wf
 
 
-@router.delete("/{workflow_id}", status_code=status.HTTP_200_OK)
+@router.delete(
+    "/{workflow_id}",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_role("Tenant Admin", "Data Scientist"))]
+)
 async def delete_workflow(
     workflow_id: str,
     db: AsyncSession = Depends(get_db)
@@ -209,7 +223,11 @@ async def delete_workflow(
     }
 
 
-@router.post("/{workflow_id}/restore", response_model=WorkflowResponse)
+@router.post(
+    "/{workflow_id}/restore",
+    response_model=WorkflowResponse,
+    dependencies=[Depends(require_role("Tenant Admin", "Data Scientist"))]
+)
 async def restore_workflow(
     workflow_id: str,
     db: AsyncSession = Depends(get_db)
@@ -280,7 +298,11 @@ def db_workflow_to_graph(wf: Workflow) -> WorkflowGraph:
     return WorkflowGraph(nodes=nodes, edges=edges)
 
 
-@router.post("/validate", response_model=Dict[str, Any])
+@router.post(
+    "/validate",
+    response_model=Dict[str, Any],
+    dependencies=[Depends(get_current_user)]
+)
 async def validate_workflow(workflow: WorkflowGraph):
     """
     Validate a workflow graph for cycle detection, valid node connectivity, schema requirements, and best-practice recommendations.
@@ -294,7 +316,11 @@ async def validate_workflow(workflow: WorkflowGraph):
     }
 
 
-@router.post("/{workflow_id}/validate", response_model=Dict[str, Any])
+@router.post(
+    "/{workflow_id}/validate",
+    response_model=Dict[str, Any],
+    dependencies=[Depends(get_current_user)]
+)
 async def validate_workflow_by_id(
     workflow_id: str,
     db: AsyncSession = Depends(get_db)
@@ -322,7 +348,11 @@ async def validate_workflow_by_id(
     }
 
 
-@router.post("/execute", response_model=WorkflowExecutionResult)
+@router.post(
+    "/execute",
+    response_model=WorkflowExecutionResult,
+    dependencies=[Depends(require_role("Tenant Admin", "Data Scientist", "ML Engineer"))]
+)
 async def execute_workflow(
     workflow: WorkflowGraph,
     include_node_outputs: bool = Query(False, description="Opt-in to include full raw data of every node (default: false for lean response)"),
@@ -393,7 +423,11 @@ async def execute_workflow(
     return result
 
 
-@router.post("/{workflow_id}/execute", response_model=WorkflowExecutionResult)
+@router.post(
+    "/{workflow_id}/execute",
+    response_model=WorkflowExecutionResult,
+    dependencies=[Depends(require_role("Tenant Admin", "Data Scientist", "ML Engineer"))]
+)
 async def execute_workflow_by_id(
     workflow_id: str,
     workflow: Optional[WorkflowGraph] = None,
@@ -450,7 +484,10 @@ async def execute_workflow_by_id(
     return exec_result
 
 
-@router.post("/async-execute")
+@router.post(
+    "/async-execute",
+    dependencies=[Depends(require_role("Tenant Admin", "Data Scientist", "ML Engineer"))]
+)
 async def submit_async_workflow(
     workflow: WorkflowGraph,
     include_node_outputs: bool = Query(False, description="Opt-in to include full raw data of every node")

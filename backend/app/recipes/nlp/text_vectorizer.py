@@ -52,8 +52,15 @@ class TextVectorizerRecipe(BaseRecipe):
                     "description": "Drop raw text string column so output dataframe is ready for ML training."
                 }
             },
-            "required": ["method"]
+            "required": ["method", "column"]
         }
+
+    def validate_config(self, config: Dict[str, Any]) -> List[str]:
+        errors = []
+        col = config.get("column")
+        if not col or not str(col).strip() or str(col).strip() in ["-- Select Column --", "(None)"]:
+            errors.append("Target text column 'column' is required for Text Vectorizer and cannot be empty.")
+        return errors
 
     def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
         df: pd.DataFrame = inputs.get("dataframe")
@@ -75,12 +82,22 @@ class TextVectorizerRecipe(BaseRecipe):
         else:
             ngram_tuple = (1, 1)
 
-        # Find target column
-        if not target_col or target_col not in df.columns:
-            text_candidates = [c for c in df.columns if df[c].dtype == "object" or str(df[c].dtype) == "string"]
-            if not text_candidates:
-                return {"dataframe": df, "metrics": {"warning": "No text column found for vectorization."}}
-            target_col = text_candidates[0]
+        # Validate target column
+        if not target_col or not str(target_col).strip() or str(target_col).strip() in ["-- Select Column --", "(None)"]:
+            raise ValueError(
+                "Target text column 'column' is required for Text Vectorizer, but was left empty. "
+                "Please configure a valid text column to vectorize."
+            )
+        target_col = str(target_col).strip()
+        if target_col not in df.columns:
+            matching = [c for c in df.columns if c.lower() == target_col.lower()]
+            if matching:
+                target_col = matching[0]
+            else:
+                raise ValueError(
+                    f"Specified text column '{target_col}' was not found in dataset columns: {list(df.columns)}. "
+                    "Please select an existing column."
+                )
 
         corpus = df[target_col].fillna("").astype(str).tolist()
 
