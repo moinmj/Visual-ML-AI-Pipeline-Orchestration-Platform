@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Body, Query
+from fastapi.encoders import jsonable_encoder
 from typing import Dict, Any, List, Optional, Union
 import uuid
 import pandas as pd
@@ -51,6 +52,8 @@ async def save_workflow(
             wf.edges = payload.edges
         if payload.node_configs is not None:
             wf.node_configs = payload.node_configs
+        if payload.last_execution is not None:
+            wf.last_execution = jsonable_encoder(payload.last_execution)
         wf.updated_at = datetime.now(timezone.utc)
     else:
         # Create new
@@ -60,7 +63,8 @@ async def save_workflow(
             description=payload.description,
             nodes=payload.nodes,
             edges=payload.edges,
-            node_configs=payload.node_configs
+            node_configs=payload.node_configs,
+            last_execution=jsonable_encoder(payload.last_execution) if payload.last_execution is not None else None
         )
         db.add(wf)
 
@@ -155,6 +159,8 @@ async def upsert_workflow(
             wf.edges = payload.edges
         if payload.node_configs is not None:
             wf.node_configs = payload.node_configs
+        if payload.last_execution is not None:
+            wf.last_execution = jsonable_encoder(payload.last_execution)
         wf.is_active = True
         wf.deleted_at = None
         wf.updated_at = datetime.now(timezone.utc)
@@ -167,6 +173,7 @@ async def upsert_workflow(
             nodes=payload.nodes or [],
             edges=payload.edges or [],
             node_configs=payload.node_configs or {},
+            last_execution=jsonable_encoder(payload.last_execution) if payload.last_execution is not None else None,
             is_active=True
         )
         db.add(wf)
@@ -366,6 +373,23 @@ async def execute_workflow(
     )
     if target_id:
         result.workflow_id = target_id
+        res_wf = await db.execute(select(Workflow).where(Workflow.id == target_id))
+        wf_rec = res_wf.scalar_one_or_none()
+        if wf_rec:
+            wf_rec.last_execution = jsonable_encoder({
+                "execution_id": result.execution_id,
+                "status": result.status,
+                "total_duration_ms": result.total_duration_ms,
+                "final_metrics": result.final_metrics,
+                "anomaly_summary": result.anomaly_summary,
+                "forecasting_summary": result.forecasting_summary,
+                "governance_summary": result.governance_summary,
+                "node_results": result.node_results,
+                "execution_logs": result.logs,
+                "step_snapshots": result.step_snapshots,
+                "inference_schema": getattr(result, "inference_schema", None),
+            })
+            await db.commit()
     return result
 
 
@@ -409,6 +433,20 @@ async def execute_workflow_by_id(
         include_node_outputs=include_node_outputs
     )
     exec_result.workflow_id = workflow_id
+    wf.last_execution = jsonable_encoder({
+        "execution_id": exec_result.execution_id,
+        "status": exec_result.status,
+        "total_duration_ms": exec_result.total_duration_ms,
+        "final_metrics": exec_result.final_metrics,
+        "anomaly_summary": exec_result.anomaly_summary,
+        "forecasting_summary": exec_result.forecasting_summary,
+        "governance_summary": exec_result.governance_summary,
+        "node_results": exec_result.node_results,
+        "execution_logs": exec_result.logs,
+        "step_snapshots": exec_result.step_snapshots,
+        "inference_schema": getattr(exec_result, "inference_schema", None),
+    })
+    await db.commit()
     return exec_result
 
 
