@@ -34,6 +34,7 @@ The platform enables technical and non-technical practitioners to visually build
 |  | - Data Profiler: Automated schema inference, distributions, health checks         |  |
 |  | - Execution Engine: Deterministic context, artifact passing, state tracking       |  |
 |  | - ML Engine: Feature transformation, Scikit-learn, XGBoost, Model evaluation       |  |
+|  | - Inference Engine: Live sub-millisecond predictions, dynamic schema, batch scoring|  |
 |  +-----------------------------------------------------------------------------------+  |
 +-----------------------------------------------------------------------------------------+
                                |                         |
@@ -77,3 +78,25 @@ The platform enables technical and non-technical practitioners to visually build
 ### Unstructured / GenAI (Phase 2):
 * PDF, DOCX, TXT, OCR.
 * Text chunking, vector embeddings, similarity retrieval, and LLM inference.
+
+---
+
+## 5. Universal Model Inference & Real-Time Serving Layer
+
+The platform features an enterprise-grade inference engine (`PipelineInferencer`) that bridges pipeline training with real-time consumer applications:
+
+1. **Artifact Preservation & In-Memory Registry:**
+   Upon pipeline execution, `DAGExecutor` bundles the live fitted model, preprocessing transformers (imputers, encoders, scalers, vectorizers), feature schemas, and target label decoders into an `InferenceBundle` registered with `PipelineJobManager` by `execution_id`.
+
+2. **Multi-Task Dynamic Inference:**
+   - **Supervised Classification:** Preprocesses raw inputs, executes inference, decodes numeric class predictions back to original labels (e.g. `Iris-setosa`), and returns confidence scores and per-class probability distributions.
+   - **Supervised Regression:** Preprocesses inputs and outputs predicted target values with feature metadata.
+   - **Time-Series Forecasting:** Accepts custom horizon periods or date ranges (`start_date` to `end_date`), producing future trajectories with 95% confidence intervals.
+   - **Anomaly Detection:** Scores single transactions or records, outputting an outlier verdict (`NORMAL_RECORD` vs `ANOMALOUS_OUTLIER`), risk score (0.0 to 1.0), and risk level (`LOW`, `MEDIUM`, `HIGH`, `CRITICAL`).
+   - **Batch CSV Scoring:** Accepts bulk record lists, scoring all rows simultaneously with downloadable results.
+
+3. **Production REST API Endpoints:**
+   - `POST /api/v1/workflows/{execution_id}/predict`: Live model inference on arbitrary JSON record(s) or forecast intervals.
+   - `GET /api/v1/workflows/{execution_id}/schema`: Dynamic discovery of required features, data types, min/max bounds, allowed categories, and sample payload.
+   - `POST /api/v1/workflows/predict`: Query-parameter convenience endpoint for external API gateways.
+

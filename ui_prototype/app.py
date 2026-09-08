@@ -29,6 +29,9 @@ from backend.app.recommendation.recommender import AIRecommender
 import backend.app.engine.execution.executor as executor_mod
 importlib.reload(executor_mod)
 from backend.app.engine.execution.executor import DAGExecutor
+from backend.app.engine.execution.job_manager import job_manager
+from backend.app.engine.inference.pipeline_inferencer import PipelineInferencer
+from backend.app.engine.inference.schemas import PredictionRequest
 
 from backend.app.profiling.profiler import DataProfiler
 from backend.app.recipes.base.registry import recipe_registry
@@ -162,6 +165,10 @@ RECIPE_CATEGORY_MAP = {
         {"id": "missing_value_imputer", "name": "Missing Value Imputer (Mean/Median/Mode)", "icon": "🧹", "default_config": {"strategy": "median"}},
         {"id": "feature_scaler", "name": "Feature Scaler (StandardScaler/MinMax)", "icon": "⚖️", "default_config": {"method": "standard"}},
         {"id": "categorical_encoder", "name": "Categorical Encoder (One-Hot/Label)", "icon": "🔤", "default_config": {"method": "one_hot"}}
+    ],
+    "🔤 NLP & Text Processing": [
+        {"id": "text_preprocessor", "name": "Text Preprocessor (Stemming/Lemmatization)", "icon": "🧹", "default_config": {"lowercase": True, "strip_html_urls": True, "remove_stopwords": True, "normalization": "lemmatization"}},
+        {"id": "text_vectorizer", "name": "Text Vectorizer (TF-IDF / Word2Vec / Count)", "icon": "🔤", "default_config": {"method": "tfidf", "max_features": 50, "drop_original": True}}
     ],
     "✂️ Splitting": [
         {"id": "train_test_split", "name": "Train / Test Splitter", "icon": "✂️", "default_config": {"target_column": "Churn", "test_size": 0.2}}
@@ -398,25 +405,69 @@ with st.sidebar.expander("⚡ 1-Click Pre-Flight Validator", expanded=False):
 # -------------------------------------------------------------
 # HELPER: SANITIZE NODE CONFIGS & EXECUTE VIA DAG EXECUTOR
 # -------------------------------------------------------------
+def get_incomplete_pipeline_nodes() -> List[Dict[str, Any]]:
+    """
+    Checks all canvas nodes for unconfigured required schema properties.
+    Returns list of dicts: [{'node_id': ..., 'label': ..., 'recipe_name': ..., 'missing_fields': [...]}]
+    """
+    incomplete = []
+    flow_state = st.session_state.get("flow_state")
+    current_nodes = flow_state.nodes if flow_state else []
+    node_configs = st.session_state.get("node_configs", {})
+
+    for n in current_nodes:
+        cfg_entry = node_configs.get(n.id, {})
+        r_id = cfg_entry.get("recipe_id")
+        recipe_obj = recipe_registry.get(r_id) if r_id else None
+        if not recipe_obj:
+            continue
+
+        schema = recipe_obj.get_schema()
+        required_fields = schema.get("required", [])
+        cfg = cfg_entry.get("config", {})
+
+        missing = []
+        for rf in required_fields:
+            if r_id == "csv_loader" and rf == "dataset_id" and st.session_state.get("active_df") is not None:
+                continue
+            val = cfg.get(rf)
+            if val is None or val == "" or str(val).strip() in ["-- Select Column --", "(None)"]:
+                field_title = schema.get("properties", {}).get(rf, {}).get("title", rf)
+                missing.append(field_title)
+
+        if missing:
+            node_label = n.data.get("content", n.id) if hasattr(n, "data") and isinstance(n.data, dict) else n.id
+            incomplete.append({
+                "node_id": n.id,
+                "label": node_label,
+                "recipe_name": recipe_obj.name,
+                "missing_fields": missing
+            })
+
+    return incomplete
+
+
 def sanitize_node_configs_for_active_dataset():
-    """Sanitizes node parameters when active dataset columns change."""
+    """Sanitizes node parameters when active dataset columns change without destructively wiping saved columns."""
     df = st.session_state.get("active_df")
     if df is None:
         return
     cols = list(df.columns)
+    saved_cols = list(st.session_state.get("saved_dataset_columns", []))
+    all_known_cols = set(cols + saved_cols)
+
     for n_id, cfg_data in st.session_state.get("node_configs", {}).items():
         cfg = cfg_data.get("config", {})
-        if "target_column" in cfg and cfg["target_column"] not in cols:
-            cfg["target_column"] = cols[-1]
-            st.info(f"ℹ️ Auto-aligned target column for `{n_id}` to `{cols[-1]}`.")
-        if "date_column" in cfg and cfg["date_column"] not in cols:
-            date_candidates = [c for c in cols if "date" in c.lower() or "time" in c.lower()]
-            cfg["date_column"] = date_candidates[0] if date_candidates else cols[0]
+        # Do NOT destructively overwrite target_column with cols[-1] if user has not picked one yet or if it was saved
         if "columns" in cfg:
-            if isinstance(cfg["columns"], str):
-                cfg["columns"] = [c.strip() for c in cfg["columns"].split(",") if c.strip() in cols]
-            elif isinstance(cfg["columns"], list):
-                cfg["columns"] = [c for c in cfg["columns"] if c in cols]
+            if isinstance(cfg["columns"], str) and cfg["columns"].strip():
+                valid = [c.strip() for c in cfg["columns"].split(",") if c.strip() in all_known_cols]
+                if valid:
+                    cfg["columns"] = valid
+            elif isinstance(cfg["columns"], list) and cfg["columns"]:
+                valid = [c for c in cfg["columns"] if c in all_known_cols]
+                if valid:
+                    cfg["columns"] = valid
 
 
 def execute_pipeline():
@@ -425,6 +476,14 @@ def execute_pipeline():
 
     if not canvas_nodes:
         st.warning("⚠️ The canvas is empty. Please add nodes or load a template first.")
+        return
+
+    # 1. Enforce Required Fields Pre-Flight Check
+    incomplete = get_incomplete_pipeline_nodes()
+    if incomplete:
+        st.error("### ❌ Cannot Execute Pipeline: Required Fields Missing")
+        for item in incomplete:
+            st.markdown(f"> ⚠️ **Node `{item['node_id']}` ({item['recipe_name']})** requires: **`{', '.join(item['missing_fields'])}`** to be selected before running.")
         return
 
     sanitize_node_configs_for_active_dataset()
@@ -469,6 +528,7 @@ def execute_pipeline():
     exec_latency = (time.time() - t_exec_start) * 1000.0
 
     st.session_state["last_execution"] = {
+        "execution_id": exec_result.execution_id,
         "status": exec_result.status,
         "final_metrics": exec_result.final_metrics,
         "anomaly_summary": exec_result.anomaly_summary,
@@ -476,8 +536,11 @@ def execute_pipeline():
         "governance_summary": exec_result.governance_summary,
         "execution_logs": exec_result.logs,
         "node_outputs": exec_result.node_outputs,
-        "step_snapshots": exec_result.step_snapshots
+        "step_snapshots": exec_result.step_snapshots,
+        "inference_schema": exec_result.inference_schema
     }
+    st.session_state["inference_bundle"] = job_manager.get_inference_bundle(exec_result.execution_id)
+    st.session_state["inference_schema"] = exec_result.inference_schema
 
     # Record Telemetry for Workflow Execution API
     record_api_telemetry(
@@ -503,6 +566,299 @@ def execute_pipeline():
         for log in exec_result.logs:
             if "❌" in log:
                 st.markdown(f"> {log}")
+
+
+def render_prediction_studio(bundle: Optional[Dict[str, Any]], schema: Optional[Dict[str, Any]], in_dialog: bool = False):
+    """
+    Renders the complete, interactive model prediction studio supporting
+    classification, regression, forecasting, anomaly detection, and batch CSV scoring.
+    """
+    if not bundle or not bundle.get("model"):
+        st.info("ℹ️ No trained model found. Please construct and run your pipeline first to test live predictions.")
+        return
+
+    exec_id = bundle.get("execution_id", "latest")
+    task_type = bundle.get("task_type") or (schema.get("task_type") if schema else "classification")
+    if bundle.get("forecasting_summary") or hasattr(bundle.get("model"), "make_future_dataframe") or hasattr(bundle.get("model"), "get_forecast"):
+        task_type = "time_series_forecasting"
+    elif bundle.get("anomaly_summary") or type(bundle.get("model")).__name__ in ["IsolationForest", "EllipticEnvelope"]:
+        task_type = "anomaly_detection"
+
+    prefix = "dlg_" if in_dialog else "page_"
+
+    # =========================================================
+    # 1. TABULAR CLASSIFICATION & REGRESSION
+    # =========================================================
+    if task_type in ["classification", "regression"]:
+        p_tab1, p_tab2, p_tab3 = st.tabs([
+            "🎛️ Interactive Prediction",
+            "📁 Batch CSV Scoring",
+            "📡 REST API & cURL Command"
+        ])
+
+        with p_tab1:
+            features = schema.get("features", []) if schema else []
+            fn_list = bundle.get("feature_names", [f["name"] for f in features])
+            sample_row = bundle.get("sample_row", {})
+
+            # Quick action buttons
+            q_col1, q_col2, _ = st.columns([2.5, 2.5, 5])
+            with q_col1:
+                if st.button("🎲 Load Random Test Sample", key=f"{prefix}btn_load_sample", use_container_width=True):
+                    X_test = bundle.get("X_test")
+                    if X_test is not None and isinstance(X_test, pd.DataFrame) and not X_test.empty:
+                        rand_row = X_test.sample(1).to_dict(orient="records")[0]
+                    else:
+                        rand_row = sample_row
+                    for fn in fn_list:
+                        if fn in rand_row:
+                            st.session_state[f"{prefix}input_{fn}"] = rand_row[fn]
+                    st.rerun()
+
+            with q_col2:
+                if st.button("🧹 Reset to Medians", key=f"{prefix}btn_reset_sample", use_container_width=True):
+                    for fn in fn_list:
+                        k = f"{prefix}input_{fn}"
+                        if k in st.session_state:
+                            del st.session_state[k]
+                    st.rerun()
+
+            st.markdown("##### 📝 Input Feature Values:")
+            user_inputs = {}
+            f_cols = st.columns(2)
+
+            feat_meta_dict = {f["name"]: f for f in features} if features else {}
+
+            for idx, fn in enumerate(fn_list):
+                col = f_cols[idx % 2]
+                f_meta = feat_meta_dict.get(fn, {})
+                d_type = f_meta.get("data_type", "numeric")
+                widget_key = f"{prefix}input_{fn}"
+
+                if d_type == "categorical" and f_meta.get("allowed_categories"):
+                    cats = f_meta["allowed_categories"]
+                    def_idx = 0
+                    if widget_key in st.session_state and str(st.session_state[widget_key]) in cats:
+                        def_idx = cats.index(str(st.session_state[widget_key]))
+                    user_inputs[fn] = col.selectbox(fn, cats, index=def_idx, key=widget_key)
+                else:
+                    def_val = float(f_meta.get("default_value", 0.0))
+                    min_val = float(f_meta.get("min_value", -1000000.0))
+                    max_val = float(f_meta.get("max_value", 1000000.0))
+                    if min_val >= max_val:
+                        min_val = def_val - 100.0
+                        max_val = def_val + 100.0
+                    
+                    cur_val = float(st.session_state.get(widget_key, def_val))
+                    step = 0.1 if isinstance(def_val, float) else 1.0
+                    user_inputs[fn] = col.number_input(
+                        f"{fn}",
+                        value=cur_val,
+                        step=step,
+                        key=widget_key
+                    )
+
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("⚡ Run Instant Prediction", type="primary", use_container_width=True, key=f"{prefix}btn_run_pred"):
+                with st.spinner("Executing model prediction..."):
+                    pred_res = PipelineInferencer.predict(bundle, PredictionRequest(inputs=user_inputs))
+
+                if pred_res.status == "SUCCESS":
+                    if pred_res.task_type == "classification":
+                        c_card1, c_card2, c_card3 = st.columns(3)
+                        c_card1.metric("Predicted Target Class", f"🎯 {pred_res.prediction}")
+                        c_card2.metric("Prediction Confidence", f"{pred_res.confidence:.1f}%")
+                        c_card3.metric("Inference Latency", f"{pred_res.inference_latency_ms}ms")
+
+                        if pred_res.probabilities:
+                            prob_df = pd.DataFrame(
+                                list(pred_res.probabilities.items()),
+                                columns=["Class", "Probability"]
+                            ).sort_values(by="Probability", ascending=True)
+                            prob_df["Likelihood (%)"] = prob_df["Probability"] * 100.0
+
+                            fig_prob = px.bar(
+                                prob_df,
+                                x="Likelihood (%)",
+                                y="Class",
+                                orientation="h",
+                                text=prob_df["Likelihood (%)"].apply(lambda p: f"{p:.1f}%"),
+                                color="Likelihood (%)",
+                                color_continuous_scale="Blues",
+                                title="Per-Class Prediction Likelihood Distribution"
+                            )
+                            fig_prob.update_layout(height=260, margin=dict(l=20, r=20, t=35, b=20), xaxis_title="Likelihood (%)", yaxis_title="")
+                            st.plotly_chart(fig_prob, use_container_width=True)
+
+                    else:
+                        r_card1, r_card2 = st.columns(2)
+                        r_card1.metric("Predicted Value", f"📈 {pred_res.prediction}")
+                        r_card2.metric("Inference Latency", f"{pred_res.inference_latency_ms}ms")
+
+                    with st.expander("🔍 Inspected Input Payload (JSON)", expanded=False):
+                        st.json(user_inputs)
+                else:
+                    st.error(f"❌ Prediction Failed: {pred_res.error_message}")
+
+        with p_tab2:
+            st.markdown("##### 📁 Batch CSV Dataset Scoring")
+            st.caption("Upload an unlabelled CSV file to score all observations simultaneously.")
+            up_file = st.file_uploader("Upload CSV file", type=["csv"], key=f"{prefix}csv_uploader")
+            if up_file is not None:
+                try:
+                    df_up = pd.read_csv(up_file)
+                    st.write(f"Loaded **{len(df_up):,}** rows and **{len(df_up.columns)}** columns.")
+                    st.dataframe(df_up.head(5), use_container_width=True)
+
+                    if st.button("⚡ Score Entire Batch Dataset", type="primary", key=f"{prefix}btn_score_batch"):
+                        with st.spinner("Scoring batch dataset..."):
+                            batch_res = PipelineInferencer.predict(
+                                bundle,
+                                PredictionRequest(inputs=df_up.to_dict(orient="records"))
+                            )
+                        if batch_res.status == "SUCCESS" and batch_res.batch_predictions:
+                            scored_df = pd.DataFrame(batch_res.batch_predictions)
+                            st.success(f"🎉 Successfully scored {len(scored_df):,} records in {batch_res.inference_latency_ms}ms!")
+                            st.dataframe(scored_df.head(50), use_container_width=True)
+
+                            st.download_button(
+                                "📥 Download Scored Dataset (CSV)",
+                                data=scored_df.to_csv(index=False),
+                                file_name=f"scored_predictions_{exec_id}.csv",
+                                mime="text/csv",
+                                key=f"{prefix}btn_dl_batch"
+                            )
+                        else:
+                            st.error(f"❌ Batch scoring failed: {batch_res.error_message}")
+                except Exception as e:
+                    st.error(f"Error parsing CSV file: {str(e)}")
+
+        with p_tab3:
+            st.markdown("##### 📡 Production REST API Endpoint")
+            st.caption("External frontend developers, microservices, and automated cron jobs can invoke live predictions via this endpoint.")
+            
+            api_url = f"http://localhost:8000/api/v1/workflows/{exec_id}/predict"
+            sample_body = {"inputs": user_inputs if 'user_inputs' in locals() and user_inputs else sample_row}
+            body_json = json.dumps(sample_body, indent=2)
+
+            st.markdown(f"**Endpoint:** `POST {api_url}`")
+            st.code(body_json, language="json")
+
+            curl_str = f"""curl -X POST {api_url} \\
+  -H "Content-Type: application/json" \\
+  -d '{json.dumps(sample_body)}'"""
+            st.markdown("##### 💻 Ready-to-Run cURL Terminal Command:")
+            st.code(curl_str, language="bash")
+
+    # =========================================================
+    # 2. TIME-SERIES FORECASTING
+    # =========================================================
+    elif task_type == "time_series_forecasting":
+        st.markdown("##### 📈 Future Trajectory & Horizon Forecasting")
+        st.caption("Generate time-series projections with confidence bands for arbitrary forecast intervals.")
+
+        fc_c1, fc_c2, fc_c3 = st.columns(3)
+        h_val = fc_c1.slider("Forecast Horizon (Steps)", min_value=1, max_value=180, value=30, key=f"{prefix}fc_h")
+        freq_opt = fc_c2.selectbox("Frequency", ["Daily (D)", "Weekly (W)", "Monthly (M)", "Hourly (H)"], index=0, key=f"{prefix}fc_freq")
+        freq_code = freq_opt.split("(")[-1].replace(")", "")
+        custom_range = fc_c3.checkbox("Custom Date Range", value=False, key=f"{prefix}fc_custom")
+
+        s_date, e_date = None, None
+        if custom_range:
+            dr_c1, dr_c2 = st.columns(2)
+            s_date = str(dr_c1.date_input("Start Date", value=datetime.date.today(), key=f"{prefix}s_date"))
+            e_date = str(dr_c2.date_input("End Date", value=datetime.date.today() + datetime.timedelta(days=30), key=f"{prefix}e_date"))
+
+        if st.button("📈 Generate Forecast Predictions", type="primary", use_container_width=True, key=f"{prefix}btn_fc_run"):
+            with st.spinner("Generating future forecast trajectory..."):
+                fc_req = PredictionRequest(
+                    forecast_horizon=h_val,
+                    freq=freq_code,
+                    start_date=s_date,
+                    end_date=e_date
+                )
+                fc_res = PipelineInferencer.predict(bundle, fc_req)
+
+            if fc_res.status == "SUCCESS" and fc_res.forecast_records:
+                st.success(f"🎉 Generated {len(fc_res.forecast_records)} forecast intervals in {fc_res.inference_latency_ms}ms!")
+                f_df = pd.DataFrame(fc_res.forecast_records)
+
+                m_col1, m_col2, m_col3 = st.columns(3)
+                m_col1.metric("Projected End Value", f"{fc_res.projected_end_value:,.2f}" if fc_res.projected_end_value is not None else "N/A")
+                m_col2.metric("Projected Change", f"{fc_res.projected_change_pct:+.2f}%" if fc_res.projected_change_pct is not None else "N/A")
+                m_col3.metric("Projected Trend", str(fc_res.trend).upper())
+
+                fig_fc = go.Figure()
+                fig_fc.add_trace(go.Scatter(x=f_df["ds"], y=f_df["yhat"], mode="lines+markers", name="Forecast", line=dict(color="#3B82F6", width=2.5)))
+                if "yhat_lower" in f_df.columns and "yhat_upper" in f_df.columns:
+                    fig_fc.add_trace(go.Scatter(x=f_df["ds"], y=f_df["yhat_upper"], mode="lines", line=dict(width=0), showlegend=False))
+                    fig_fc.add_trace(go.Scatter(x=f_df["ds"], y=f_df["yhat_lower"], mode="lines", line=dict(width=0), fill="tonexty", fillcolor="rgba(59, 130, 246, 0.2)", name="95% Confidence Interval"))
+
+                fig_fc.update_layout(title="Future Forecast Trajectory with Confidence Intervals", xaxis_title="Timeline", yaxis_title="Predicted Value", height=400)
+                st.plotly_chart(fig_fc, use_container_width=True)
+
+                st.download_button(
+                    "📥 Download Forecast (CSV)",
+                    data=f_df.to_csv(index=False),
+                    file_name=f"future_forecast_{exec_id}.csv",
+                    mime="text/csv",
+                    key=f"{prefix}btn_dl_fc"
+                )
+            else:
+                st.error(f"❌ Forecasting failed: {fc_res.error_message}")
+
+    # =========================================================
+    # 3. ANOMALY DETECTION
+    # =========================================================
+    elif task_type == "anomaly_detection":
+        st.markdown("##### 🚨 Anomaly Detection & Outlier Risk Scoring")
+        st.caption("Score observations to determine if they represent abnormal deviations from normal historical patterns.")
+
+        features = schema.get("features", []) if schema else []
+        fn_list = bundle.get("feature_names", [f["name"] for f in features])
+        sample_row = bundle.get("sample_row", {})
+
+        user_inputs = {}
+        anom_cols = st.columns(2)
+        for idx, fn in enumerate(fn_list):
+            c = anom_cols[idx % 2]
+            def_v = float(sample_row.get(fn, 0.0))
+            user_inputs[fn] = c.number_input(fn, value=def_v, step=0.1, key=f"{prefix}anom_{fn}")
+
+        if st.button("🚨 Check Outlier Risk", type="primary", use_container_width=True, key=f"{prefix}btn_anom_run"):
+            with st.spinner("Scoring outlier risk..."):
+                anom_res = PipelineInferencer.predict(bundle, PredictionRequest(inputs=user_inputs))
+
+            if anom_res.status == "SUCCESS":
+                badge_color = "#EF4444" if anom_res.is_anomaly == 1 else "#10B981"
+                verdict_text = "🚨 HIGH-RISK ANOMALY DETECTED" if anom_res.is_anomaly == 1 else "🟢 NORMAL TRANSACTION / RECORD"
+                
+                st.markdown(f"""
+                <div style="background: linear-gradient(135deg, #1E293B, #0F172A); padding: 18px 24px; border-radius: 12px; border: 1px solid {badge_color}; margin-bottom: 16px;">
+                    <div style="font-size: 0.85rem; color: #94A3B8; text-transform: uppercase;">Anomaly Detection Verdict</div>
+                    <div style="font-size: 1.6rem; font-weight: 700; color: {badge_color}; margin-top: 4px;">{verdict_text}</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                a1, a2, a3 = st.columns(3)
+                a1.metric("Outlier Score", f"{anom_res.anomaly_score:.4f}")
+                a2.metric("Risk Level", str(anom_res.risk_level))
+                a3.metric("Latency", f"{anom_res.inference_latency_ms}ms")
+            else:
+                st.error(f"❌ Scoring failed: {anom_res.error_message}")
+
+
+if hasattr(st, "dialog"):
+    @st.dialog("🔮 Interactive Model Prediction Studio", width="large")
+    def show_prediction_dialog():
+        bundle = st.session_state.get("inference_bundle")
+        schema = st.session_state.get("inference_schema")
+        render_prediction_studio(bundle, schema, in_dialog=True)
+else:
+    def show_prediction_dialog():
+        bundle = st.session_state.get("inference_bundle")
+        schema = st.session_state.get("inference_schema")
+        render_prediction_studio(bundle, schema, in_dialog=False)
 
 
 def create_flow_node(node_id: str, pos: tuple, content: str) -> StreamlitFlowNode:
@@ -755,14 +1111,27 @@ def load_anomaly_template(force_preset: bool = False):
 # -------------------------------------------------------------
 def save_workflow_to_backend(name: str, description: str = "") -> dict:
     """Saves current active canvas workflow and node configs to backend REST API/DB."""
+    active_df = st.session_state.get("active_df")
+    saved_cols = list(st.session_state.get("saved_dataset_columns", []))
+    active_cols = list(active_df.columns) if active_df is not None else saved_cols
+    
+    dataset_metadata = {
+        "dataset_name": st.session_state.get("active_dataset_name", ""),
+        "columns": active_cols,
+        "row_count": len(active_df) if active_df is not None else 0
+    }
+
     nodes_payload = []
     for n in st.session_state["flow_state"].nodes:
         pos = get_node_position(n)
         content = n.data.get("content", n.id) if hasattr(n, "data") and isinstance(n.data, dict) else n.id
+        n_cfg = st.session_state.get("node_configs", {}).get(n.id, {})
         nodes_payload.append({
             "id": n.id,
             "position": pos,
-            "content": content
+            "content": content,
+            "recipe_id": n_cfg.get("recipe_id", ""),
+            "config": n_cfg.get("config", {})
         })
 
     edges_payload = [
@@ -770,12 +1139,15 @@ def save_workflow_to_backend(name: str, description: str = "") -> dict:
         for e in st.session_state["flow_state"].edges
     ]
 
+    persisted_configs = dict(st.session_state.get("node_configs", {}))
+    persisted_configs["_dataset_metadata"] = dataset_metadata
+
     body = {
         "name": name,
         "description": description,
         "nodes": nodes_payload,
         "edges": edges_payload,
-        "node_configs": st.session_state.get("node_configs", {})
+        "node_configs": persisted_configs
     }
 
     try:
@@ -785,6 +1157,8 @@ def save_workflow_to_backend(name: str, description: str = "") -> dict:
             saved_json = res.json()
             record_api_telemetry("💾 Save Workflow API", "/api/v1/workflows/", "POST", body, saved_json, res.status_code, 2.1)
             return saved_json
+    except Exception:
+        pass
     except Exception:
         pass
 
@@ -804,7 +1178,7 @@ def save_workflow_to_backend(name: str, description: str = "") -> dict:
                 description=description,
                 nodes=nodes_payload,
                 edges=edges_payload,
-                node_configs=st.session_state.get("node_configs", {})
+                node_configs=persisted_configs
             )
             session.add(wf)
             await session.commit()
@@ -943,12 +1317,42 @@ def restore_saved_workflow(wf_data: dict):
     t_nodes = []
     t_edges = []
     
+    # Restore saved configs and extract dataset metadata
+    saved_configs = dict(wf_data.get("node_configs", {}))
+    ds_meta = saved_configs.pop("_dataset_metadata", {})
+    if ds_meta and isinstance(ds_meta, dict):
+        if ds_meta.get("columns"):
+            st.session_state["saved_dataset_columns"] = ds_meta["columns"]
+        if ds_meta.get("dataset_name"):
+            st.session_state["saved_dataset_name"] = ds_meta["dataset_name"]
+            if not st.session_state.get("active_dataset_name"):
+                st.session_state["active_dataset_name"] = ds_meta["dataset_name"]
+
+    # Clear stale widget keys to prevent Streamlit widget state collision
+    for k in list(st.session_state.keys()):
+        if k.startswith("cfg_") or k.startswith("lbl_") or k.startswith("vmode_"):
+            del st.session_state[k]
+
+    # Pre-populate widget session state keys so UI widgets immediately reflect saved parameters
+    for nid, node_entry in saved_configs.items():
+        if isinstance(node_entry, dict) and "config" in node_entry and isinstance(node_entry["config"], dict):
+            for prop_name, prop_val in node_entry["config"].items():
+                st.session_state[f"cfg_{nid}_{prop_name}"] = prop_val
+
     # Restore Nodes
     for nd in wf_data.get("nodes", []):
         nid = nd["id"]
         pos = nd.get("position", (100, 100))
         content = nd.get("content", nid)
         t_nodes.append(create_flow_node(nid, pos, content))
+        
+        # If node had inline config and was missing from saved_configs, backfill it
+        if nid not in saved_configs and ("recipe_id" in nd or "config" in nd):
+            saved_configs[nid] = {
+                "recipe_id": nd.get("recipe_id", ""),
+                "label": content,
+                "config": nd.get("config", {})
+            }
 
     # Restore Edges
     for ed in wf_data.get("edges", []):
@@ -956,7 +1360,7 @@ def restore_saved_workflow(wf_data: dict):
         t_edges.append(StreamlitFlowEdge(id=eid, source=ed["source"], target=ed["target"], animated=True))
 
     st.session_state["flow_state"] = StreamlitFlowState(nodes=t_nodes, edges=t_edges)
-    st.session_state["node_configs"] = wf_data.get("node_configs", {})
+    st.session_state["node_configs"] = saved_configs
     st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
     st.session_state["active_saved_workflow_name"] = wf_data.get("name", "Saved Workflow")
 
@@ -1018,6 +1422,13 @@ if app_mode == "🎨 Pipeline Whiteboard":
     with bar_col6:
         if st.button("🔗 Auto-Wire", use_container_width=True):
             curr_nodes = st.session_state["flow_state"].nodes
+            incomplete = get_incomplete_pipeline_nodes()
+            if incomplete:
+                st.session_state["autowire_validation_error"] = incomplete
+                st.rerun()
+            else:
+                st.session_state.pop("autowire_validation_error", None)
+
             if len(curr_nodes) < 2:
                 st.warning("⚠️ Auto-Wire requires at least 2 nodes on the canvas. Add components first.")
             else:
@@ -1025,21 +1436,23 @@ if app_mode == "🎨 Pipeline Whiteboard":
                     cfg = st.session_state.get("node_configs", {}).get(nid, {})
                     return cfg.get("recipe_id", "")
 
-                def get_category_order(nid: str) -> int:
+                def get_category_order(nid: str) -> float:
                     r_id = get_recipe_type(nid)
                     if r_id in ["cron_trigger", "webhook_trigger"]:
-                        return 0
+                        return 0.0
                     if r_id in ["csv_loader"]:
-                        return 1
+                        return 1.0
+                    if r_id in ["text_preprocessor", "text_vectorizer"]:
+                        return 1.5
                     if r_id in ["missing_value_imputer", "feature_scaler", "categorical_encoder", "statistical_guardrail", "lag_feature_engineering", "duplicate_remover", "category_sanitizer", "correlation_filter", "variance_filter"]:
-                        return 2
+                        return 2.0
                     if r_id in ["train_test_split"]:
-                        return 3
+                        return 3.0
                     if r_id in ["xgboost_trainer", "lightgbm_trainer", "catboost_trainer", "random_forest_trainer", "linear_trainer", "isolation_forest", "prophet_forecaster", "arima_forecaster"]:
-                        return 4
+                        return 4.0
                     if r_id in ["model_evaluator", "mlflow_tracker"]:
-                        return 5
-                    return 2
+                        return 5.0
+                    return 2.0
 
                 # Categorize nodes
                 triggers = [n for n in curr_nodes if get_category_order(n.id) == 0]
@@ -1343,8 +1756,7 @@ if app_mode == "🎨 Pipeline Whiteboard":
                 
                 init_cfg = dict(chosen_meta["default_config"])
                 if "target_column" in init_cfg:
-                    cols = list(st.session_state["active_df"].columns)
-                    init_cfg["target_column"] = cols[-1]
+                    init_cfg["target_column"] = ""
 
                 st.session_state["node_configs"][node_id] = {
                     "recipe_id": chosen_meta["id"],
@@ -1369,6 +1781,23 @@ if app_mode == "🎨 Pipeline Whiteboard":
     # ---------------------------------------------------------
     # STEP 2 & 3: CANVAS + CONNECTOR + INSPECTOR
     # ---------------------------------------------------------
+    if "autowire_validation_error" in st.session_state and st.session_state["autowire_validation_error"]:
+        err_items = st.session_state["autowire_validation_error"]
+        st.error("### ⚠️ Auto-Wire Halted: Incomplete Node Configurations Detected!")
+        st.markdown(
+            "Auto-Wire cannot automatically connect nodes while required configuration fields are missing or unset. "
+            "Please configure the following required fields in the Inspector panel before auto-wiring:"
+        )
+        for item in err_items:
+            missing_str = ", ".join(f"`{f}`" for f in item["missing_fields"])
+            st.warning(f"👉 **{item['label']}** (`{item['node_id']}`): Missing required parameter(s): **{missing_str}**")
+        
+        c_dismiss, _ = st.columns([1, 4])
+        with c_dismiss:
+            if st.button("✕ Dismiss Warning", key="dismiss_autowire_err"):
+                del st.session_state["autowire_validation_error"]
+                st.rerun()
+
     canvas_col, right_col = st.columns([3, 1])
 
     with canvas_col:
@@ -1594,6 +2023,11 @@ if app_mode == "🎨 Pipeline Whiteboard":
                 current_config = dict(node_cfg.get("config", {}))
 
                 active_cols = list(st.session_state["active_df"].columns) if "active_df" in st.session_state and st.session_state["active_df"] is not None else []
+                saved_cols = list(st.session_state.get("saved_dataset_columns", []))
+                available_cols = []
+                for c in active_cols + saved_cols:
+                    if c not in available_cols:
+                        available_cols.append(c)
 
                 for prop_name, prop_meta in props.items():
                     title = prop_meta.get("title", prop_name)
@@ -1603,22 +2037,48 @@ if app_mode == "🎨 Pipeline Whiteboard":
 
                     # Smart column selectors: array of columns vs single column
                     if prop_type == "array" or prop_name in ["columns", "feature_columns", "categorical_columns", "numerical_columns"]:
+                        multiselect_options = list(available_cols)
                         if isinstance(curr_val, str):
-                            curr_list = [c.strip() for c in curr_val.split(",") if c.strip() in active_cols] if curr_val else []
+                            curr_list = [c.strip() for c in curr_val.split(",") if c.strip()]
                         elif isinstance(curr_val, (list, tuple)):
-                            curr_list = [c for c in curr_val if c in active_cols]
+                            curr_list = [str(c) for c in curr_val]
                         else:
                             curr_list = []
+                        # Ensure any saved columns are in the options list so they don't disappear
+                        for c in curr_list:
+                            if c not in multiselect_options:
+                                multiselect_options.append(c)
                         new_val = st.multiselect(
                             title,
-                            options=active_cols,
+                            options=multiselect_options,
                             default=curr_list,
                             key=f"cfg_{selected_node_id}_{prop_name}",
                             help=prop_meta.get("description", "Select specific columns or leave empty to apply across all columns.")
                         )
-                    elif ("column" in prop_name.lower() or prop_name.endswith("_col")) and active_cols:
-                        col_idx = active_cols.index(curr_val) if curr_val in active_cols else len(active_cols) - 1
-                        new_val = st.selectbox(title, active_cols, index=col_idx, key=f"cfg_{selected_node_id}_{prop_name}")
+                    elif ("column" in prop_name.lower() or prop_name.endswith("_col")):
+                        is_required = prop_name in schema.get("required", []) or prop_name == "target_column"
+                        col_options = list(available_cols)
+                        if curr_val and str(curr_val).strip() and str(curr_val) not in col_options and str(curr_val) not in ["-- Select Column --", "(None)"]:
+                            col_options.append(str(curr_val))
+                        
+                        if is_required:
+                            options = ["-- Select Column --"] + col_options
+                            if curr_val and str(curr_val) in options:
+                                col_idx = options.index(str(curr_val))
+                            else:
+                                col_idx = 0
+                        else:
+                            options = ["(None)"] + col_options
+                            if curr_val and str(curr_val) in options:
+                                col_idx = options.index(str(curr_val))
+                            else:
+                                col_idx = 0
+
+                        selected_opt = st.selectbox(title, options, index=col_idx, key=f"cfg_{selected_node_id}_{prop_name}")
+                        if selected_opt in ["-- Select Column --", "(None)"]:
+                            new_val = ""
+                        else:
+                            new_val = selected_opt
                     elif "enum" in prop_meta:
                         options = prop_meta["enum"]
                         opt_idx = options.index(curr_val) if curr_val in options else 0
@@ -1983,7 +2443,28 @@ if app_mode == "🎨 Pipeline Whiteboard":
                 st.write(log)
 
         # -----------------------------------------------------
-        # 5. LIVE REST API CONTRACT & CURL GENERATOR
+        # 5. INTERACTIVE MODEL PREDICTION STUDIO & DIALOG
+        # -----------------------------------------------------
+        st.markdown("---")
+        st.markdown("### 🔮 Interactive Model Prediction Studio & Sandbox")
+        st.caption("Ask for live predictions on new observations, time ranges, or test records using your trained pipeline model.")
+
+        bundle = st.session_state.get("inference_bundle")
+        schema = st.session_state.get("inference_schema")
+
+        if bundle and bundle.get("model"):
+            col_dlg1, col_dlg2 = st.columns([3.5, 6.5])
+            with col_dlg1:
+                if st.button("🔮 Open Live Prediction Dialog (Modal Window)", type="primary", use_container_width=True, key="btn_open_dialog_modal_hero"):
+                    show_prediction_dialog()
+
+            with st.expander("⚡ In-Page Prediction Sandbox", expanded=True):
+                render_prediction_studio(bundle, schema, in_dialog=False)
+        else:
+            st.info("ℹ️ Pipeline has executed. If a predictive model was trained, its live prediction sandbox will appear here.")
+
+        # -----------------------------------------------------
+        # 6. LIVE REST API CONTRACT & CURL GENERATOR
         # -----------------------------------------------------
         with st.expander("📡 Live REST API Contract & cURL Generator (n8n / Postman Integration)", expanded=False):
             st.markdown("##### 📦 Active DAG Execution Payload (`POST /api/v1/workflows/execute`):")

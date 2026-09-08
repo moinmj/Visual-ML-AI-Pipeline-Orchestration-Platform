@@ -12,6 +12,13 @@ from backend.app.engine.execution.executor import DAGExecutor, WorkflowExecution
 from backend.app.engine.execution.job_manager import job_manager
 from backend.app.workflows.models import Workflow
 from backend.app.workflows.schemas import WorkflowCreate, WorkflowUpdate, WorkflowResponse
+from backend.app.engine.inference import (
+    PipelineInferencer,
+    PredictionRequest,
+    PredictionResponse,
+    InferenceSchemaResponse,
+    FeatureSchemaItem
+)
 
 router = APIRouter(prefix="/workflows", tags=["Workflows & DAG Execution"])
 
@@ -198,12 +205,54 @@ async def restore_workflow(
     await db.commit()
     await db.refresh(wf)
     return wf
-    return {"status": "DELETED", "message": f"Workflow workbook '{workflow_id}' deleted successfully."}
 
 
 # -------------------------------------------------------------
 # DAG VALIDATION & EXECUTION ENDPOINTS
 # -------------------------------------------------------------
+
+def workflow_graph_to_db_payload(workflow: WorkflowGraph) -> tuple:
+    """Helper to convert WorkflowGraph instance to DB nodes, edges, and node_configs."""
+    nodes_payload = []
+    node_configs = {}
+    for n in workflow.nodes:
+        nodes_payload.append({
+            "id": n.id,
+            "recipe_id": n.recipe_id,
+            "label": n.label or n.id,
+            "content": n.label or n.id,
+            "config": n.config
+        })
+        node_configs[n.id] = {
+            "recipe_id": n.recipe_id,
+            "label": n.label or n.id,
+            "config": n.config
+        }
+    edges_payload = [
+        {"id": f"e_{e.source}_{e.target}", "source": e.source, "target": e.target}
+        for e in workflow.edges
+    ]
+    return nodes_payload, edges_payload, node_configs
+
+
+def db_workflow_to_graph(wf: Workflow) -> WorkflowGraph:
+    """Helper to convert a stored DB Workflow model into an executable WorkflowGraph."""
+    from backend.app.engine.dag.graph import WorkflowNode, WorkflowEdge
+    nodes = []
+    saved_configs = wf.node_configs or {}
+    for nd in wf.nodes or []:
+        nid = nd["id"]
+        n_cfg = saved_configs.get(nid, {})
+        recipe_id = nd.get("recipe_id") or n_cfg.get("recipe_id", "csv_loader")
+        config = nd.get("config") or n_cfg.get("config", {})
+        label = nd.get("label") or nd.get("content") or n_cfg.get("label", nid)
+        nodes.append(WorkflowNode(id=nid, recipe_id=recipe_id, config=config, label=label))
+    edges = [
+        WorkflowEdge(source=ed["source"], target=ed["target"])
+        for ed in wf.edges or []
+    ]
+    return WorkflowGraph(nodes=nodes, edges=edges)
+
 
 @router.post("/validate", response_model=Dict[str, Any])
 async def validate_workflow(workflow: WorkflowGraph):
@@ -219,22 +268,129 @@ async def validate_workflow(workflow: WorkflowGraph):
     }
 
 
+@router.post("/{workflow_id}/validate", response_model=Dict[str, Any])
+async def validate_workflow_by_id(
+    workflow_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Validate an existing saved pipeline workbook by ID directly from the database.
+    """
+    result = await db.execute(select(Workflow).where(Workflow.id == workflow_id))
+    wf = result.scalar_one_or_none()
+    if not wf:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Workflow workbook '{workflow_id}' not found."
+        )
+
+    graph = db_workflow_to_graph(wf)
+    diag = graph.get_diagnostics()
+    return {
+        "workflow_id": workflow_id,
+        "name": wf.name,
+        "valid": diag["is_valid"],
+        "errors": diag["errors"],
+        "warnings": diag["warnings"],
+        "recommendations": diag["recommendations"]
+    }
+
+
 @router.post("/execute", response_model=WorkflowExecutionResult)
 async def execute_workflow(
     workflow: WorkflowGraph,
-    include_node_outputs: bool = Query(False, description="Opt-in to include full raw data of every node (default: false for lean response)")
+    include_node_outputs: bool = Query(False, description="Opt-in to include full raw data of every node (default: false for lean response)"),
+    auto_save: bool = Query(False, description="Automatically upsert/save current workflow to DB before executing"),
+    workflow_id: Optional[str] = Query(None, description="Optional workflow ID to link/update in database"),
+    workflow_name: Optional[str] = Query(None, description="Optional workflow title if auto-saving to DB"),
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Execute a full workflow DAG end-to-end synchronously.
-    Returns lean response by default (node_results, step_snapshots 5-row previews, final_metrics, logs).
+    Supports auto-saving: if auto_save=True or workflow_id is provided, saves/upserts the workflow
+    into the database in the same call, eliminating separate save requests.
     """
+    target_id = workflow_id
+    if auto_save or target_id:
+        target_id = target_id or str(uuid.uuid4())
+        nodes_payload, edges_payload, node_configs = workflow_graph_to_db_payload(workflow)
+        
+        result = await db.execute(select(Workflow).where(Workflow.id == target_id))
+        wf = result.scalar_one_or_none()
+        if wf:
+            if workflow_name:
+                wf.name = workflow_name
+            wf.nodes = nodes_payload
+            wf.edges = edges_payload
+            wf.node_configs = node_configs
+            wf.is_active = True
+            wf.deleted_at = None
+            wf.updated_at = datetime.now(timezone.utc)
+        else:
+            wf = Workflow(
+                id=target_id,
+                name=workflow_name or "Auto-Saved Pipeline",
+                description="Auto-saved during execution run",
+                nodes=nodes_payload,
+                edges=edges_payload,
+                node_configs=node_configs,
+                is_active=True
+            )
+            db.add(wf)
+        await db.commit()
+
     execution_id = str(uuid.uuid4())
     result = DAGExecutor.execute_workflow(
         execution_id=execution_id,
         workflow=workflow,
         include_node_outputs=include_node_outputs
     )
+    if target_id:
+        result.workflow_id = target_id
     return result
+
+
+@router.post("/{workflow_id}/execute", response_model=WorkflowExecutionResult)
+async def execute_workflow_by_id(
+    workflow_id: str,
+    workflow: Optional[WorkflowGraph] = None,
+    include_node_outputs: bool = Query(False, description="Opt-in to include full raw data of every node"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Execute an existing workflow directly by ID.
+    If an updated workflow graph body is provided, it auto-updates the saved record in the database first.
+    If no body is passed, it executes the saved configuration from the database.
+    """
+    result = await db.execute(select(Workflow).where(Workflow.id == workflow_id))
+    wf = result.scalar_one_or_none()
+    if not wf:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Workflow workbook '{workflow_id}' not found."
+        )
+
+    if workflow is not None:
+        nodes_payload, edges_payload, node_configs = workflow_graph_to_db_payload(workflow)
+        wf.nodes = nodes_payload
+        wf.edges = edges_payload
+        wf.node_configs = node_configs
+        wf.is_active = True
+        wf.deleted_at = None
+        wf.updated_at = datetime.now(timezone.utc)
+        await db.commit()
+        graph_to_execute = workflow
+    else:
+        graph_to_execute = db_workflow_to_graph(wf)
+
+    execution_id = str(uuid.uuid4())
+    exec_result = DAGExecutor.execute_workflow(
+        execution_id=execution_id,
+        workflow=graph_to_execute,
+        include_node_outputs=include_node_outputs
+    )
+    exec_result.workflow_id = workflow_id
+    return exec_result
 
 
 @router.post("/async-execute")
@@ -308,4 +464,86 @@ async def autowire_workflow_nodes(payload: Dict[str, Any] = Body(...)):
     from backend.app.recommendation.router import autowire_nodes, AutoWireRequest
     nodes = payload.get("nodes", [])
     return await autowire_nodes(AutoWireRequest(nodes=nodes))
+
+
+# -------------------------------------------------------------
+# MODEL INFERENCE & LIVE PREDICTION ENDPOINTS
+# -------------------------------------------------------------
+
+@router.get("/{execution_id}/schema", response_model=InferenceSchemaResponse)
+async def get_execution_inference_schema(execution_id: str):
+    """
+    Retrieve the dynamic input schema, feature boundaries, default values,
+    and sample request payload for a trained pipeline execution.
+    """
+    bundle = job_manager.get_inference_bundle(execution_id)
+    if not bundle:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No live model inference bundle found for execution ID '{execution_id}'. Please execute the pipeline first."
+        )
+
+    feat_items: List[FeatureSchemaItem] = []
+    features_summary = bundle.get("training_feature_summary", {})
+    feature_names = bundle.get("feature_names", [])
+
+    for f_name in feature_names:
+        f_info = features_summary.get(f_name, {})
+        feat_items.append(FeatureSchemaItem(
+            name=f_name,
+            data_type=f_info.get("data_type", "numeric"),
+            min_value=f_info.get("min_value"),
+            max_value=f_info.get("max_value"),
+            median_value=f_info.get("median_value"),
+            mean_value=f_info.get("mean_value"),
+            default_value=f_info.get("default_value", 0.0),
+            allowed_categories=f_info.get("allowed_categories")
+        ))
+
+    return InferenceSchemaResponse(
+        execution_id=execution_id,
+        task_type=bundle.get("task_type", "classification"),
+        target_column=bundle.get("target_column"),
+        target_classes=bundle.get("target_classes", []),
+        features=feat_items,
+        sample_payload=bundle.get("sample_row", {}),
+        time_series_meta=bundle.get("forecasting_summary")
+    )
+
+
+@router.post("/{execution_id}/predict", response_model=PredictionResponse)
+async def predict_with_execution(
+    execution_id: str,
+    payload: PredictionRequest = Body(...)
+):
+    """
+    Execute live model inference using the trained pipeline artifacts from a specific execution run.
+    Supports single feature dictionaries, batch CSV records, or time-series forecast horizon / date ranges.
+    """
+    bundle = job_manager.get_inference_bundle(execution_id)
+    if not bundle:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No live model inference bundle found for execution ID '{execution_id}'. Please execute the pipeline first."
+        )
+
+    response = PipelineInferencer.predict(bundle=bundle, request=payload)
+    if response.status == "FAILED":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Prediction failed: {response.error_message}"
+        )
+    return response
+
+
+@router.post("/predict", response_model=PredictionResponse)
+async def predict_latest(
+    execution_id: str = Query(..., description="The execution ID of the trained pipeline"),
+    payload: PredictionRequest = Body(...)
+):
+    """
+    Convenience endpoint for live predictions passing execution_id as a query parameter.
+    """
+    return await predict_with_execution(execution_id=execution_id, payload=payload)
+
 

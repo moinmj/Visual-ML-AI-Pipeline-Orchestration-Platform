@@ -63,9 +63,13 @@ class TrainTestSplitRecipe(BaseRecipe):
         y = df[target_col]
 
         # If y is categorical / string or continuous float in classification, cast or encode
+        target_classes = None
+        target_encoder = None
         if not pd.api.types.is_numeric_dtype(y):
             le = LabelEncoder()
             y = pd.Series(le.fit_transform(y.astype(str)), index=y.index, name=target_col)
+            target_classes = [str(c) for c in le.classes_]
+            target_encoder = le
         elif pd.api.types.is_float_dtype(y) and y.nunique() <= 10:
             # Discrete float classes like 0.0, 1.0 -> cast to integer
             y = y.astype(int)
@@ -76,7 +80,7 @@ class TrainTestSplitRecipe(BaseRecipe):
             X, y, test_size=test_size, random_state=random_state, stratify=strat
         )
 
-        return {
+        res = {
             "X_train": X_train,
             "X_test": X_test,
             "y_train": y_train,
@@ -84,3 +88,7 @@ class TrainTestSplitRecipe(BaseRecipe):
             "feature_names": list(X.columns),
             "target_column": target_col
         }
+        if target_classes:
+            res["target_classes"] = target_classes
+            res["target_encoder"] = target_encoder
+        return res

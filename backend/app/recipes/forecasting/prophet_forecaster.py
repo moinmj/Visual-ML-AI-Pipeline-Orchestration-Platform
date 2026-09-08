@@ -172,7 +172,8 @@ class ProphetForecasterRecipe(BaseRecipe):
             "dataframe": result_df,
             "metrics": metrics,
             "forecasting_summary": metrics,
-            "model": model
+            "model": model,
+            "task_type": "time_series_forecasting"
         }
 
     def to_code(self, config: Dict[str, Any]) -> str:
