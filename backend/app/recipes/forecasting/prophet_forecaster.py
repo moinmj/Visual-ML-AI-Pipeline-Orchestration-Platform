@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 from backend.app.recipes.base.recipe import BaseRecipe
 
 try:
