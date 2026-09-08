@@ -15,6 +15,7 @@ class Workflow(Base):
     nodes = Column(JSON, nullable=False, default=list)
     edges = Column(JSON, nullable=False, default=list)
     node_configs = Column(JSON, nullable=False, default=dict)
+    last_execution = Column(JSON, nullable=True)
 
     # Soft Delete & Governance
     is_active = Column(Boolean, nullable=False, default=True)

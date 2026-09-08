@@ -1147,7 +1147,8 @@ def save_workflow_to_backend(name: str, description: str = "") -> dict:
         "description": description,
         "nodes": nodes_payload,
         "edges": edges_payload,
-        "node_configs": persisted_configs
+        "node_configs": persisted_configs,
+        "last_execution": st.session_state.get("last_execution")
     }
 
     try:
@@ -1178,7 +1179,8 @@ def save_workflow_to_backend(name: str, description: str = "") -> dict:
                 description=description,
                 nodes=nodes_payload,
                 edges=edges_payload,
-                node_configs=persisted_configs
+                node_configs=persisted_configs,
+                last_execution=st.session_state.get("last_execution")
             )
             session.add(wf)
             await session.commit()
@@ -1363,6 +1365,19 @@ def restore_saved_workflow(wf_data: dict):
     st.session_state["node_configs"] = saved_configs
     st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
     st.session_state["active_saved_workflow_name"] = wf_data.get("name", "Saved Workflow")
+
+    # Restore Execution Results & Diagnostics if present
+    last_exec = wf_data.get("last_execution")
+    if last_exec and isinstance(last_exec, dict):
+        st.session_state["last_execution"] = last_exec
+        if "inference_schema" in last_exec and last_exec["inference_schema"]:
+            st.session_state["inference_schema"] = last_exec["inference_schema"]
+            if "execution_id" in last_exec:
+                st.session_state["inference_bundle"] = job_manager.get_inference_bundle(last_exec["execution_id"])
+    else:
+        st.session_state.pop("last_execution", None)
+        st.session_state.pop("inference_bundle", None)
+        st.session_state.pop("inference_schema", None)
 
     record_api_telemetry(
         action_name=f"📂 Restore Workflow: {wf_data.get('name')}",
