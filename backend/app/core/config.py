@@ -36,9 +36,12 @@ class Settings(BaseSettings):
     # Tokens are expected to be issued by an identity provider (or the
     # dev-only /api/v1/auth/dev-token endpoint) and carry: sub, tenant_id,
     # roles (list[str]) and permissions (list[str]) claims.
-    JWT_SECRET_KEY: str = "CHANGE_ME"
+    JWT_SECRET_KEY: str = "Z73MyQ5WFZNjAQYkIGqjxBR55xAMv7r/v/qv/dMhl121zVQYbC3Y3Hhx"
     JWT_ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    FERNET_KEY: Optional[str] = "Rc4YoP_92ZxBPiwTRsprsTUA__aqFDBqZPCz7sLFR_g="
+    RESET_TOKEN_EXPIRE_HOURS: int = 24
 
     # Tenant Data Source Settings
     # Connection string for the warehouse that physically hosts each
@@ -53,6 +56,14 @@ class Settings(BaseSettings):
     P_DATABASE_URL: Optional[str] = None
     TENANT_DB_AUTO_CREATE: bool = False
 
+    # External Warehouse & Connectors
+    ICEBERG_WAREHOUSE: Optional[str] = None
+    LANDING_FOLDER: Optional[str] = None
+    AIRFLOW_BASE_URL: Optional[str] = None
+    DRUID_HOST: Optional[str] = None
+    DRUID_ROUTER_PORT: Optional[int] = 8888
+    DRUID_OVERLORD_PORT: Optional[int] = 8081
+    DRUID_COORDINATOR_PORT: Optional[int] = 8081
 
     model_config = {
         "env_file": ".env",
