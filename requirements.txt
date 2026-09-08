@@ -8,6 +8,12 @@ python-dotenv>=1.0.1
 aiofiles>=23.2.1
 httpx>=0.27.0
 
+# Authentication
+python-jose[cryptography]>=3.3.0
+
+# Druid connectivity (SOURCE_DATABASE_URL=druid://<broker-host>:<broker-port>/druid/v2/sql/)
+pydruid>=0.6.9
+
 # Database & ORM
 sqlalchemy>=2.0.30
 alembic>=1.13.1

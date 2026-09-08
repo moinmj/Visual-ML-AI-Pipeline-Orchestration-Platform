@@ -15,10 +15,12 @@ from backend.app.core.config import settings
 from backend.app.core.logging import setup_logging, logger
 from backend.app.core.exceptions import PlatformException
 from backend.app.infrastructure.database.session import init_db
+from backend.app.infrastructure.database.tenant_session import init_tenant_db
 
 # Import models to register tables with SQLAlchemy Base
 import backend.app.datasets.models
 import backend.app.workflows.models
+import backend.app.tenant_data.models
 
 # Import routers
 from backend.app.datasets.router import router as datasets_router
@@ -26,6 +28,8 @@ from backend.app.recipes.router import router as recipes_router
 from backend.app.workflows.router import router as workflows_router
 from backend.app.recommendation.router import router as recommendation_router
 from backend.app.templates.router import router as templates_router
+from backend.app.auth.router import router as auth_router
+from backend.app.tenant_data.router import router as tenant_data_router
 
 
 @asynccontextmanager
@@ -35,6 +39,10 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing platform database...")
     await init_db()
     logger.info("Platform database initialized successfully.")
+    if settings.TENANT_DB_AUTO_CREATE:
+        logger.info("Initializing tenant metadata database...")
+        await init_tenant_db()
+        logger.info("Tenant metadata database initialized successfully.")
     yield
     # Shutdown
     logger.info("Platform shutting down.")
@@ -97,3 +105,5 @@ app.include_router(recipes_router, prefix=settings.API_V1_STR)
 app.include_router(workflows_router, prefix=settings.API_V1_STR)
 app.include_router(recommendation_router, prefix=settings.API_V1_STR)
 app.include_router(templates_router, prefix=settings.API_V1_STR)
+app.include_router(auth_router, prefix=settings.API_V1_STR)
+app.include_router(tenant_data_router, prefix=settings.API_V1_STR)

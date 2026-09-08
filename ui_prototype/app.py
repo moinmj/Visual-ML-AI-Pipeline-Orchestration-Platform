@@ -36,6 +36,11 @@ from backend.app.recipes import register_all_recipes
 register_all_recipes()
 
 from backend.app.engine.dag.graph import WorkflowGraph, WorkflowNode, WorkflowEdge
+from backend.app.tenant_data.client import (
+    fetch_tenant_environments,
+    fetch_tenant_models,
+    ingest_tenant_model,
+)
 
 st.set_page_config(
     page_title="Visual AI/ML Pipeline Studio",
@@ -1506,7 +1511,7 @@ if app_mode == "🎨 Pipeline Whiteboard":
                 # SPECIAL HANDLER FOR INGESTION NODES
                 if recipe_obj.category == "ingestion":
                     st.markdown("##### 📁 Ingestion Data Source:")
-                    data_source_mode = st.radio("Source Mode", ["Use Active Dataset", "Upload New File", "Choose Preset Sample"], index=0, key=f"src_mode_{selected_node_id}")
+                    data_source_mode = st.radio("Source Mode", ["Use Active Dataset", "Upload New File", "Choose Preset Sample", "🏢 Tenant Model Source"], index=0, key=f"src_mode_{selected_node_id}")
                     
                     if data_source_mode == "Choose Preset Sample":
                         preset_name = st.selectbox("Preset Dataset", ["Customer Churn (Classification)", "Daily Retail Sales (Time-Series)", "Credit Transactions (Anomaly Injection)", "Titanic Survival", "Iris Flower"], key=f"preset_{selected_node_id}")
@@ -1534,6 +1539,53 @@ if app_mode == "🎨 Pipeline Whiteboard":
                                 st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
                                 st.success(f"Ingested '{f_name}'!")
                                 st.rerun()
+
+                    elif data_source_mode == "🏢 Tenant Model Source":
+                        tenant_id_val = int(st.number_input("Tenant ID", min_value=1, value=1, step=1, key=f"wb_tenant_{selected_node_id}"))
+                        envs_cache_k = f"envs_cache_{tenant_id_val}"
+                        if envs_cache_k not in st.session_state or st.button("🔄 Refresh Environments", key=f"refr_{selected_node_id}"):
+                            try:
+                                st.session_state[envs_cache_k] = fetch_tenant_environments(tenant_id=tenant_id_val)
+                            except Exception as e:
+                                st.error(f"Error fetching environments: {e}")
+                                st.session_state[envs_cache_k] = []
+                        wb_envs = st.session_state.get(envs_cache_k, [])
+                        if wb_envs:
+                            wb_env_opts = {f"{e['name']} (ID: {e['environment_id']})": e for e in wb_envs}
+                            wb_sel_env_label = st.selectbox("Select Environment", list(wb_env_opts.keys()), key=f"wb_env_{selected_node_id}")
+                            wb_sel_env = wb_env_opts[wb_sel_env_label]
+                            wb_models = wb_sel_env.get("models", [])
+                            if wb_models:
+                                wb_model_opts = {f"{m['name']} (ID: {m['id']})": m for m in wb_models}
+                                wb_sel_model_label = st.selectbox("Select Model", list(wb_model_opts.keys()), key=f"wb_mod_{selected_node_id}")
+                                wb_sel_model = wb_model_opts[wb_sel_model_label]
+                                wb_limit = st.selectbox("Row Limit", ["1000", "5000", "10000", "All Rows"], index=0, key=f"wb_limit_{selected_node_id}")
+                                wb_row_limit = None if wb_limit == "All Rows" else int(wb_limit)
+
+                                if st.button("📥 Apply Model Table to Pipeline", key=f"btn_apply_model_{selected_node_id}"):
+                                    with st.spinner("Extracting model table and ingesting..."):
+                                        try:
+                                            df, meta = ingest_tenant_model(
+                                                tenant_id=tenant_id_val,
+                                                environment_id=wb_sel_env["environment_id"],
+                                                model_id=wb_sel_model["id"],
+                                                row_limit=wb_row_limit,
+                                            )
+                                            st.session_state["active_df"] = df
+                                            st.session_state["active_dataset_name"] = meta["dataset_name"]
+                                            for n in st.session_state["flow_state"].nodes:
+                                                if n.id == selected_node_id:
+                                                    n.data = {"content": f"🏢 {wb_sel_model['name'][:14]}"}
+                                            sanitize_node_configs_for_active_dataset()
+                                            st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
+                                            st.success(f"Ingested {meta['row_count']} rows from model '{wb_sel_model['name']}'!")
+                                            st.rerun()
+                                        except Exception as e:
+                                            st.error(f"Failed to ingest model table: {e}")
+                            else:
+                                st.info("No active models in this environment.")
+                        else:
+                            st.warning(f"No environments found for tenant {tenant_id_val}.")
                     else:
                         st.info(f"Using Active Dataset: **{st.session_state.get('active_dataset_name', 'Customer Churn')}** ({len(st.session_state['active_df'])} rows)")
 
@@ -1972,9 +2024,121 @@ elif app_mode == "📊 Dataset Studio & Profiler":
     st.markdown('<div class="main-header">📊 Dataset Studio & Automated Profiler</div>', unsafe_allow_html=True)
     st.markdown('<div class="sub-header">Upload your dataset to inspect preview rows and automatic statistical profiles.</div>', unsafe_allow_html=True)
 
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        uploaded_file = st.file_uploader("Upload CSV, Excel or JSON dataset", type=["csv", "xlsx", "json"])
+    ingest_tab1, ingest_tab2, ingest_tab3 = st.tabs([
+        "🏢 Multi-Tenant Model Source (External DB / Druid)",
+        "📁 Upload Local File (CSV / Excel / JSON)",
+        "📦 Choose Preset Sample",
+    ])
+
+    with ingest_tab1:
+        st.markdown(
+            """
+            <div style="background-color: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 8px; padding: 14px; margin-bottom: 14px;">
+                <b style="color: #1E293B;">🏢 Tenant & Model Warehouse Ingestion</b>
+                <p style="font-size: 0.85rem; color: #64748B; margin-bottom: 0;">
+                    Select an Environment and Model registered under your tenant. The platform will automatically extract the physical fact/dimension table from Postgres / Druid, save it as a parquet dataset, and profile it for your ML pipeline.
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        col_t1, col_t2 = st.columns([1, 2])
+        with col_t1:
+            tenant_id = int(st.number_input("Tenant ID", min_value=1, value=1, step=1, key="studio_tenant_id"))
+            fetch_btn = st.button("🔄 Refresh Environments", key="refresh_envs_btn")
+
+        envs_cache_key = f"envs_cache_{tenant_id}"
+        if fetch_btn or envs_cache_key not in st.session_state:
+            with st.spinner(f"Fetching environments for Tenant {tenant_id}..."):
+                try:
+                    st.session_state[envs_cache_key] = fetch_tenant_environments(tenant_id=tenant_id)
+                except Exception as e:
+                    st.error(f"Failed to fetch environments for tenant {tenant_id}: {e}")
+                    st.session_state[envs_cache_key] = []
+
+        envs = st.session_state.get(envs_cache_key, [])
+
+        if not envs:
+            st.warning(f"No active environments found for Tenant {tenant_id}.")
+        else:
+            with col_t2:
+                env_options = {f"{e['name']} (ID: {e['environment_id']})": e for e in envs}
+                selected_env_label = st.selectbox("Select Environment", list(env_options.keys()), key="studio_env_select")
+                selected_env = env_options[selected_env_label]
+
+            models = selected_env.get("models", [])
+            if not models:
+                st.info(f"Environment '{selected_env['name']}' has no active models.")
+            else:
+                col_m1, col_m2 = st.columns([2, 1])
+                with col_m1:
+                    model_options = {f"{m['name']} (ID: {m['id']})": m for m in models}
+                    selected_model_label = st.selectbox("Select Model", list(model_options.keys()), key="studio_model_select")
+                    selected_model = model_options[selected_model_label]
+
+                with col_m2:
+                    row_limit_choice = st.selectbox("Row Limit", ["1000", "5000", "10000", "50000", "All Rows"], index=0, key="studio_row_limit")
+                    row_limit = None if row_limit_choice == "All Rows" else int(row_limit_choice)
+
+                # Show model details
+                with st.expander(f"ℹ️ Model Details & Schema: {selected_model['name']}", expanded=True):
+                    ds_name = selected_model.get("druid_datasource_name") or "None"
+                    st.markdown(f"**Physical Warehouse Table / Datasource:** `{ds_name}`")
+                    if selected_model.get("description"):
+                        st.markdown(f"**Description:** {selected_model['description']}")
+                    
+                    meas = selected_model.get("measures", [])
+                    dims = selected_model.get("dimensions", [])
+                    col_det1, col_det2 = st.columns(2)
+                    with col_det1:
+                        st.markdown(f"**Measures ({len(meas)}):**")
+                        for m in meas:
+                            st.write(f"- `{m.get('name')}` ({m.get('aggregation_type')}) -> source col: `{m.get('source_column')}`")
+                    with col_det2:
+                        st.markdown(f"**Dimensions ({len(dims)}):**")
+                        for d in dims:
+                            st.write(f"- `{d.get('dimension_name')}` (key: `{d.get('key_column')}`, cols: {d.get('columns')})")
+
+                if st.button("🚀 Ingest Model Table into Studio & Pipeline", type="primary", key="btn_ingest_tenant_model"):
+                    t_s0 = time.time()
+                    with st.spinner(f"Extracting table for '{selected_model['name']}' from warehouse..."):
+                        try:
+                            df, meta = ingest_tenant_model(
+                                tenant_id=tenant_id,
+                                environment_id=selected_env["environment_id"],
+                                model_id=selected_model["id"],
+                                row_limit=row_limit,
+                            )
+                            st.session_state["active_df"] = df
+                            st.session_state["active_dataset_name"] = meta["dataset_name"]
+                            sanitize_node_configs_for_active_dataset()
+
+                            record_api_telemetry(
+                                action_name=f"🏢 Ingest Model: {selected_model['name']}",
+                                endpoint=f"/api/v1/tenant-data/environments/{selected_env['environment_id']}/models/{selected_model['id']}/ingest",
+                                method="POST",
+                                request_payload={
+                                    "tenant_id": tenant_id,
+                                    "environment_id": selected_env["environment_id"],
+                                    "model_id": selected_model["id"],
+                                    "row_limit": row_limit,
+                                },
+                                response_payload={
+                                    "dataset_name": meta["dataset_name"],
+                                    "rows": meta["row_count"],
+                                    "columns": meta["column_count"],
+                                },
+                                status_code=201,
+                                duration_ms=(time.time() - t_s0) * 1000.0,
+                            )
+                            st.success(f"Successfully ingested {meta['row_count']} rows and {meta['column_count']} columns from '{selected_model['name']}'!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error ingesting model table: {e}")
+
+    with ingest_tab2:
+        uploaded_file = st.file_uploader("Upload CSV, Excel or JSON dataset", type=["csv", "xlsx", "json"], key="uploader_studio_tab")
         if uploaded_file is not None:
             parsed_df, file_name = parse_uploaded_dataset(uploaded_file)
             if parsed_df is not None:
@@ -1983,9 +2147,9 @@ elif app_mode == "📊 Dataset Studio & Profiler":
                 sanitize_node_configs_for_active_dataset()
                 st.success(f"Loaded '{file_name}' successfully!")
 
-    with col2:
-        preset = st.selectbox("Choose Preset Sample", ["Customer Churn (Classification)", "Daily Retail Sales (Time-Series)", "Credit Transactions (Anomaly Injection)", "Titanic Survival", "Iris Flower"])
-        if st.button("Load Selected Sample"):
+    with ingest_tab3:
+        preset = st.selectbox("Choose Preset Sample", ["Customer Churn (Classification)", "Daily Retail Sales (Time-Series)", "Credit Transactions (Anomaly Injection)", "Titanic Survival", "Iris Flower"], key="preset_studio_tab")
+        if st.button("Load Selected Sample", key="btn_load_sample_tab"):
             t_s0 = time.time()
             st.session_state["active_df"] = get_preset_dataset(preset)
             st.session_state["active_dataset_name"] = preset

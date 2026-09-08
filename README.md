@@ -111,6 +111,12 @@ uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 Interactive OpenAPI Swagger docs available at **[http://localhost:8000/docs](http://localhost:8000/docs)**.
 
+If `P_DATABASE_URL` is configured, that database must contain the tenant metadata
+tables (`tenant_environments`, `tenant_models`, and related tables). For a new
+development database only, set `TENANT_DB_AUTO_CREATE=true` before starting the
+server. Keep it `false` in production and provision the schema through the
+service that owns the tenant database.
+
 ### 4. Run Automated Test Suite
 ```bash
 pytest backend/tests -v
