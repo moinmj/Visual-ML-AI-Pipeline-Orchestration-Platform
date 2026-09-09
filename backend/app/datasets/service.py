@@ -90,11 +90,26 @@ class DatasetService:
         dataset = await DatasetService.get_dataset(db, dataset_id)
         df = storage_manager.read_dataframe(dataset.storage_path)
         preview_df = df.head(limit).replace({float("nan"): None, float("inf"): None, float("-inf"): None})
-        
+
+        from backend.app.profiling.profiler import DataProfiler
+        column_types: Dict[str, str] = {}
+        columns_schema: List[Dict[str, str]] = []
+        for col in df.columns:
+            inferred = DataProfiler._infer_column_type(df[col])
+            raw_dtype = str(df[col].dtype)
+            column_types[str(col)] = inferred
+            columns_schema.append({
+                "name": str(col),
+                "data_type": inferred,
+                "raw_type": raw_dtype
+            })
+
         return {
             "id": dataset.id,
             "name": dataset.name,
             "columns": list(df.columns),
+            "column_types": column_types,
+            "columns_schema": columns_schema,
             "total_rows": int(len(df)),
             "preview_rows": preview_df.to_dict(orient="records")
         }
