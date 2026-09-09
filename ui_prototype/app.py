@@ -2044,6 +2044,22 @@ if app_mode == "🎨 Pipeline Whiteboard":
                     if c not in available_cols:
                         available_cols.append(c)
 
+                active_df_obj = st.session_state.get("active_df")
+                col_type_map = {}
+                if active_df_obj is not None and isinstance(active_df_obj, pd.DataFrame):
+                    from backend.app.profiling.profiler import DataProfiler
+                    for col_name in active_df_obj.columns:
+                        col_type_map[str(col_name)] = DataProfiler._infer_column_type(active_df_obj[col_name])
+
+                def format_col_option(opt):
+                    if not opt or opt in ["-- Select Column --", "(None)"]:
+                        return str(opt)
+                    ctype = col_type_map.get(str(opt))
+                    if ctype:
+                        icon = {"numeric": "🔢", "categorical": "🔤", "datetime": "📅", "boolean": "🔘", "text": "📝"}.get(ctype, "📄")
+                        return f"{icon} {opt}  [{ctype}]"
+                    return str(opt)
+
                 for prop_name, prop_meta in props.items():
                     title = prop_meta.get("title", prop_name)
                     default_val = prop_meta.get("default", None)
@@ -2067,6 +2083,7 @@ if app_mode == "🎨 Pipeline Whiteboard":
                             title,
                             options=multiselect_options,
                             default=curr_list,
+                            format_func=format_col_option,
                             key=f"cfg_{selected_node_id}_{prop_name}",
                             help=prop_meta.get("description", "Select specific columns or leave empty to apply across all columns.")
                         )
@@ -2089,7 +2106,7 @@ if app_mode == "🎨 Pipeline Whiteboard":
                             else:
                                 col_idx = 0
 
-                        selected_opt = st.selectbox(title, options, index=col_idx, key=f"cfg_{selected_node_id}_{prop_name}")
+                        selected_opt = st.selectbox(title, options, index=col_idx, format_func=format_col_option, key=f"cfg_{selected_node_id}_{prop_name}")
                         if selected_opt in ["-- Select Column --", "(None)"]:
                             new_val = ""
                         else:
