@@ -42,13 +42,19 @@ async def get_dataset(dataset_id: str, db: AsyncSession = Depends(get_db)):
 @router.get("/{dataset_id}/preview", response_model=DatasetPreviewResponse)
 async def get_dataset_preview(
     dataset_id: str,
-    limit: int = Query(10, ge=1, le=100),
+    limit: int = Query(10, ge=1, le=1000, description="Number of rows to return per page"),
+    offset: int = Query(0, ge=0, description="Row offset index for pagination"),
+    page: Optional[int] = Query(None, ge=1, description="Optional 1-indexed page number (e.g. page=2 with limit=100 sets offset=100)"),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Preview the top N rows of the dataset.
+    Preview rows of the dataset with full pagination support (limit, offset, and page).
     """
-    return await dataset_service.get_preview(db, dataset_id, limit=limit)
+    actual_offset = offset
+    if page is not None and offset == 0:
+        actual_offset = (page - 1) * limit
+
+    return await dataset_service.get_preview(db, dataset_id, limit=limit, offset=actual_offset)
 
 
 @router.get("/{dataset_id}/profile", response_model=DatasetProfileResponse)

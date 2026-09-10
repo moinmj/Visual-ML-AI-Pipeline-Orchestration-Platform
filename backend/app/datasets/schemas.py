@@ -42,6 +42,8 @@ class DatasetPreviewResponse(BaseModel):
     column_types: Dict[str, str] = Field(default_factory=dict, description="Dictionary mapping each column name to its inferred data type")
     columns_schema: List[ColumnSchemaItem] = Field(default_factory=list, description="List of columns with rich type descriptors")
     total_rows: int
+    limit: int = Field(10, description="Page size limit applied to rows")
+    offset: int = Field(0, description="Row start offset for pagination")
     preview_rows: List[Dict[str, Any]]
 
 
