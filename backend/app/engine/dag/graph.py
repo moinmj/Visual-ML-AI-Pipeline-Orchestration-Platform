@@ -20,6 +20,10 @@ class WorkflowEdge(BaseModel):
 
 
 class WorkflowGraph(BaseModel):
+    id: Optional[str] = None
+    name: Optional[str] = None
+    dataset_id: Optional[str] = None
+    dataset_name: Optional[str] = None
     nodes: List[WorkflowNode]
     edges: List[WorkflowEdge]
 
