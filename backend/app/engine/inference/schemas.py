@@ -5,7 +5,8 @@ from typing import Dict, Any, List, Optional, Union
 class PredictionRequest(BaseModel):
     """
     Standard request payload for live model predictions.
-    Supports single records, batch records, or time-series forecast specifications.
+    Supports single records, batch records, time-series forecast specifications,
+    future period projections, or natural language AI queries.
     """
     inputs: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = Field(
         default=None,
@@ -14,6 +15,18 @@ class PredictionRequest(BaseModel):
     forecast_horizon: Optional[int] = Field(
         default=None,
         description="Number of future intervals to forecast for time-series models."
+    )
+    future_periods: Optional[int] = Field(
+        default=None,
+        description="Number of future intervals or steps to project forward for tabular models."
+    )
+    target_year: Optional[int] = Field(
+        default=None,
+        description="Specific target future year to project towards (e.g., 2025)."
+    )
+    natural_language_query: Optional[str] = Field(
+        default=None,
+        description="Natural language prompt for AI-driven prediction (e.g. 'Predict for 2025 with high humidity')."
     )
     start_date: Optional[str] = Field(
         default=None,
@@ -25,7 +38,7 @@ class PredictionRequest(BaseModel):
     )
     freq: Optional[str] = Field(
         default=None,
-        description="Frequency code for forecasting (e.g., 'D', 'W', 'M', 'H')."
+        description="Frequency code for forecasting (e.g., 'D', 'W', 'M', 'H', 'Y')."
     )
     text_input: Optional[str] = Field(
         default=None,
@@ -60,15 +73,20 @@ class PredictionResponse(BaseModel):
     confidence: Optional[float] = Field(default=None, description="Confidence score percentage (0-100%) for classification")
     probabilities: Optional[Dict[str, float]] = Field(default=None, description="Per-class probability distribution")
     
+    # AI Natural Language Query Outputs
+    ai_explanation: Optional[str] = Field(default=None, description="Natural language conversational explanation synthesized by LLM")
+    inferred_inputs: Optional[Dict[str, Any]] = Field(default=None, description="Feature inputs extracted/inferred by AI from prompt")
+
     # Anomaly Detection Outputs
     is_anomaly: Optional[int] = Field(default=None, description="1 if anomalous, 0 if normal")
     anomaly_score: Optional[float] = Field(default=None, description="Continuous outlier score (0.0 to 1.0)")
     verdict: Optional[str] = Field(default=None, description="Human-friendly risk verdict")
     risk_level: Optional[str] = Field(default=None, description="LOW, MEDIUM, HIGH, or CRITICAL")
     
-    # Time-Series Forecasting Outputs
+    # Time-Series & Future Projection Outputs
     forecast_horizon: Optional[int] = Field(default=None, description="Number of forecasted intervals")
     forecast_records: Optional[List[Dict[str, Any]]] = Field(default=None, description="List of {ds, yhat, yhat_lower, yhat_upper} records")
+    trajectory: Optional[List[Dict[str, Any]]] = Field(default=None, description="Chronological trajectory records for line charts")
     projected_end_value: Optional[float] = Field(default=None, description="Projected final trajectory value")
     projected_change_pct: Optional[float] = Field(default=None, description="Projected percentage growth or decline")
     trend: Optional[str] = Field(default=None, description="Upward, Downward, or Neutral")
@@ -95,7 +113,7 @@ class FeatureSchemaItem(BaseModel):
 
 class InferenceSchemaResponse(BaseModel):
     """
-    Schema describing required inputs, types, valid ranges, and sample payload for a trained pipeline.
+    Schema describing required inputs, types, valid ranges, temporal metadata, and sample payload for a trained pipeline.
     """
     execution_id: str
     task_type: str
@@ -104,3 +122,7 @@ class InferenceSchemaResponse(BaseModel):
     features: List[FeatureSchemaItem] = Field(default_factory=list)
     sample_payload: Dict[str, Any] = Field(default_factory=dict)
     time_series_meta: Optional[Dict[str, Any]] = None
+    has_temporal_feature: bool = Field(default=False, description="True if dataset contains temporal/date/year features.")
+    temporal_column: Optional[str] = Field(default=None, description="Name of the detected date/time/year column.")
+    min_year: Optional[int] = Field(default=None, description="Minimum year found in training data.")
+    max_year: Optional[int] = Field(default=None, description="Maximum year found in training data.")

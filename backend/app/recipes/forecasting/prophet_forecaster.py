@@ -73,17 +73,27 @@ class ProphetForecasterRecipe(BaseRecipe):
         date_col = config.get("date_column") or inputs.get("date_column")
         valid_ds = None
 
+        def _safe_parse_datetime(series: pd.Series) -> Optional[pd.Series]:
+            if pd.api.types.is_numeric_dtype(series):
+                num_s = pd.to_numeric(series, errors="coerce").dropna()
+                if len(num_s) >= 5 and num_s.between(1800, 2200).all():
+                    res = pd.to_datetime(series.astype(str) + "-01-01", errors="coerce")
+                    if res.notna().sum() >= 5:
+                        return res
+            res = pd.to_datetime(series, errors="coerce")
+            if res.notna().sum() >= 5:
+                return res
+            return None
+
         if date_col and date_col in df.columns:
-            converted = pd.to_datetime(df[date_col], errors="coerce")
-            if converted.notna().sum() >= 5:
-                valid_ds = converted
+            valid_ds = _safe_parse_datetime(df[date_col])
 
         if valid_ds is None:
             # Search for any valid datetime column across dataframe
             for col in df.columns:
-                converted = pd.to_datetime(df[col], errors="coerce")
-                if converted.notna().sum() >= 5:
-                    valid_ds = converted
+                cand = _safe_parse_datetime(df[col])
+                if cand is not None:
+                    valid_ds = cand
                     date_col = col
                     break
 

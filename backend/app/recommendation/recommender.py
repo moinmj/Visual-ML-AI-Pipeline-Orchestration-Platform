@@ -126,6 +126,21 @@ class AIRecommender:
                     "tier": "Tier-1 Categorical",
                     "reason": "Native handling of high-cardinality categorical features without one-hot expansion."
                 })
+            if date_cols:
+                recommended_models.append({
+                    "recipe_id": "prophet_forecaster",
+                    "name": "🔮 Meta Prophet Forecaster",
+                    "score": 9.3,
+                    "tier": "Tier-1 Time Series",
+                    "reason": "Detected timestamp column; Meta Prophet natively captures trend, changepoints, and seasonality."
+                })
+                recommended_models.append({
+                    "recipe_id": "arima_forecaster",
+                    "name": "📊 ARIMA / SARIMAX",
+                    "score": 8.6,
+                    "tier": "Tier-1 Statistical",
+                    "reason": "Rigorous classical statistical time-series baseline."
+                })
             else:
                 recommended_models.append({
                     "recipe_id": "random_forest_trainer",
@@ -146,9 +161,23 @@ class AIRecommender:
             recommended_models.append({
                 "recipe_id": "arima_forecaster",
                 "name": "📊 ARIMA / SARIMAX",
-                "score": 8.5,
+                "score": 8.8,
                 "tier": "Tier-1 Statistical",
                 "reason": "Rigorous classical statistical baseline with lag and error differencing."
+            })
+            recommended_models.append({
+                "recipe_id": "xgboost_trainer",
+                "name": "⚡ XGBoost Regressor (Temporal)",
+                "score": 9.3,
+                "tier": "Tier-1 Gradient Boosting",
+                "reason": "Tree-based gradient boosting on temporal feature lags; captures non-linear tabular interactions alongside time."
+            })
+            recommended_models.append({
+                "recipe_id": "lightgbm_trainer",
+                "name": "🚀 LightGBM Regressor (Temporal)",
+                "score": 9.1,
+                "tier": "Tier-1 High Speed",
+                "reason": "Ultra-fast histogram gradient boosting with native categorical and temporal handling."
             })
 
         else: # Anomaly Detection

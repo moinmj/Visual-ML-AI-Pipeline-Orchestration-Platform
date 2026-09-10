@@ -211,6 +211,85 @@ class ModelEvaluatorRecipe(BaseRecipe):
                 "mape": mape
             })
 
+            # Check for temporal / date / year column to generate chronological Actual vs Predicted trajectory
+            trajectory = []
+            time_col = None
+            time_sort_key = None
+            formatted_dates = None
+
+            if isinstance(X_test, pd.DataFrame):
+                year_cols = [c for c in X_test.columns if "year" in c.lower()]
+                month_cols = [c for c in X_test.columns if "month" in c.lower()]
+                day_cols = [c for c in X_test.columns if "day" in c.lower()]
+                candidates = [c for c in X_test.columns if any(k in c.lower() for k in ["date", "time", "year", "timestamp", "period", "ds", "month"])]
+
+                if year_cols and month_cols:
+                    # Construct clean compound date representation and sort keys
+                    time_col = year_cols[0]
+                    y_s = pd.to_numeric(X_test[year_cols[0]], errors="coerce").fillna(2000).astype(int)
+                    m_s = pd.to_numeric(X_test[month_cols[0]], errors="coerce").fillna(1).astype(int)
+                    if day_cols:
+                        d_s = pd.to_numeric(X_test[day_cols[0]], errors="coerce").fillna(1).astype(int)
+                        formatted_dates = [f"{y}-{m:02d}-{d:02d}" for y, m, d in zip(y_s, m_s, d_s)]
+                        time_sort_key = [y * 10000 + m * 100 + d for y, m, d in zip(y_s, m_s, d_s)]
+                    else:
+                        formatted_dates = [f"{y}-{m:02d}" for y, m in zip(y_s, m_s)]
+                        time_sort_key = [y * 100 + m for y, m in zip(y_s, m_s)]
+                elif candidates:
+                    time_col = candidates[0]
+                    t_vals = X_test[time_col]
+                    formatted_dates = [str(v) for v in t_vals.values]
+                    # Attempt robust sorting key
+                    try:
+                        parsed_dt = pd.to_datetime(t_vals, errors="coerce")
+                        if parsed_dt.notna().sum() > len(parsed_dt) * 0.5:
+                            time_sort_key = parsed_dt.values
+                        else:
+                            time_sort_key = pd.to_numeric(t_vals, errors="coerce").fillna(0).values
+                    except Exception:
+                        time_sort_key = list(range(len(t_vals)))
+                elif isinstance(X_test.index, pd.DatetimeIndex):
+                    time_col = "__index__"
+                    formatted_dates = [str(v) for v in X_test.index.values]
+                    time_sort_key = X_test.index.values
+
+            y_actuals = y_test.values if hasattr(y_test, "values") else list(y_test)
+            preds_list = predictions.values if hasattr(predictions, "values") else list(predictions)
+
+            if len(y_actuals) > 0:
+                if not formatted_dates:
+                    formatted_dates = [f"Step {i+1}" for i in range(len(y_actuals))]
+                    time_sort_key = list(range(len(y_actuals)))
+
+                # Sort chronologically if sort keys exist
+                if time_sort_key is not None and len(time_sort_key) == len(y_actuals):
+                    order = np.argsort(time_sort_key)
+                    sorted_dates = [formatted_dates[i] for i in order]
+                    sorted_actuals = [y_actuals[i] for i in order]
+                    sorted_preds = [preds_list[i] for i in order]
+                    combined = list(zip(sorted_dates, sorted_actuals, sorted_preds))
+                else:
+                    combined = list(zip(formatted_dates, y_actuals, preds_list))
+
+                step = max(1, len(combined) // 200)
+                sampled = combined[::step]
+
+                for ds_val, act_val, pred_val in sampled:
+                    act_f = float(act_val) if pd.notna(act_val) else 0.0
+                    pred_f = float(round(float(pred_val), 4)) if pd.notna(pred_val) else 0.0
+                    trajectory.append({
+                        "ds": str(ds_val),
+                        "actual": act_f,
+                        "yhat": pred_f,
+                        "residual": float(round(act_f - pred_f, 4))
+                    })
+
+                metrics["trajectory"] = trajectory
+                metrics["actual_vs_predicted_time_series"] = trajectory
+                if time_col:
+                    metrics["temporal_column"] = time_col
+                    metrics["is_temporal"] = True
+
         ret = {
             "metrics": metrics,
             "predictions_sample": [float(p) if isinstance(p, (np.floating, float)) else str(p) for p in predictions[:15]]
