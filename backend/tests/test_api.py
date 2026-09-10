@@ -156,3 +156,83 @@ async def test_upload_dataset_and_execute_custom_pipeline():
         assert "custom_col_y" in csv_snapshot["columns"]
         assert "custom_target" in csv_snapshot["columns"]
         assert csv_snapshot["row_count"] == 5
+
+
+@pytest.mark.asyncio
+async def test_run_then_save_workflow_preserves_last_execution():
+    await init_db()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. User runs an unsaved pipeline on the canvas
+        dag_payload = {
+            "nodes": [
+                {"id": "node_csv", "recipe_id": "csv_loader", "config": {}},
+                {"id": "node_scaler", "recipe_id": "feature_scaler", "config": {"method": "standard"}}
+            ],
+            "edges": [
+                {"source": "node_csv", "target": "node_scaler"}
+            ]
+        }
+        exec_resp = await client.post("/api/v1/workflows/execute", json=dag_payload)
+        assert exec_resp.status_code == 200
+        exec_data = exec_resp.json()
+        assert exec_data["status"] == "SUCCESS"
+        assert exec_data["execution_id"] is not None
+        assert exec_data["workflow_id"] is not None
+
+        # 2. User then clicks "Save Workflow", passing last_execution in the save payload
+        save_payload = {
+            "name": "My Saved Pipeline With Reports",
+            "description": "Saved after successful run",
+            "nodes": dag_payload["nodes"],
+            "edges": dag_payload["edges"],
+            "node_configs": {
+                "node_csv": {"recipe_id": "csv_loader", "config": {}},
+                "node_scaler": {"recipe_id": "feature_scaler", "config": {"method": "standard"}}
+            },
+            "last_execution": exec_data
+        }
+        save_resp = await client.post("/api/v1/workflows/", json=save_payload)
+        assert save_resp.status_code == 201
+        saved_wf = save_resp.json()
+        saved_id = saved_wf["id"]
+        assert saved_wf["name"] == "My Saved Pipeline With Reports"
+        assert saved_wf["last_execution"] is not None
+        assert saved_wf["last_execution"]["execution_id"] == exec_data["execution_id"]
+        assert saved_wf["last_execution"]["status"] == "SUCCESS"
+
+        # 3. Retrieve workflow by ID and verify last_execution is intact
+        get_resp = await client.get(f"/api/v1/workflows/{saved_id}")
+        assert get_resp.status_code == 200
+        retrieved_wf = get_resp.json()
+        assert retrieved_wf["last_execution"] is not None
+        assert retrieved_wf["last_execution"]["execution_id"] == exec_data["execution_id"]
+
+        # 4. User updates workflow using ID without passing last_execution (must NOT wipe existing reports)
+        update_payload = {
+            "id": saved_id,
+            "name": "My Renamed Pipeline",
+            "nodes": dag_payload["nodes"],
+            "edges": dag_payload["edges"]
+        }
+        update_resp = await client.post("/api/v1/workflows/", json=update_payload)
+        assert update_resp.status_code == 201
+        updated_wf = update_resp.json()
+        assert updated_wf["name"] == "My Renamed Pipeline"
+        assert updated_wf["last_execution"] is not None
+        assert updated_wf["last_execution"]["execution_id"] == exec_data["execution_id"]
+
+        # 5. Test dedicated save-execution endpoint
+        save_exec_resp = await client.post(
+            f"/api/v1/workflows/{saved_id}/save-execution",
+            json={
+                "execution_id": "custom-exec-999",
+                "status": "SUCCESS",
+                "total_duration_ms": 250.5,
+                "final_metrics": {"accuracy": 0.99, "task_type": "classification"}
+            }
+        )
+        assert save_exec_resp.status_code == 200
+        exec_saved_wf = save_exec_resp.json()
+        assert exec_saved_wf["last_execution"]["execution_id"] == "custom-exec-999"
+        assert exec_saved_wf["last_execution"]["final_metrics"]["accuracy"] == 0.99
