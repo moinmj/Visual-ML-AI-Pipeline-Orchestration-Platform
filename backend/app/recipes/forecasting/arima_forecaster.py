@@ -91,10 +91,14 @@ class ARIMAForecasterRecipe(BaseRecipe):
         # 1. Validate and resolve target column
         target_col = config.get("target_column") or inputs.get("target_column")
         if not target_col or not str(target_col).strip() or str(target_col).strip() in ["-- Select Column --", "(None)"]:
-            raise ValueError(
-                "Target variable 'target_column' is required for ARIMA Forecaster, but was left empty. "
-                "Please configure which numeric column to forecast."
-            )
+            num_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+            if num_cols:
+                target_col = num_cols[-1]
+            else:
+                raise ValueError(
+                    "Target variable 'target_column' is required for ARIMA Forecaster, but was left empty. "
+                    "Please configure which numeric column to forecast."
+                )
         target_col = str(target_col).strip()
         if target_col not in df.columns:
             matching = [c for c in df.columns if c.lower() == target_col.lower()]
