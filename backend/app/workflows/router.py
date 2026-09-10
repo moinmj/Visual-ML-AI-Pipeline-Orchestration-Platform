@@ -3,7 +3,7 @@ from fastapi.encoders import jsonable_encoder
 from typing import Dict, Any, List, Optional, Union
 import uuid
 import pandas as pd
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
@@ -69,6 +69,96 @@ async def resolve_workflow_dataset(
     return resolved_id, resolved_name
 
 
+async def resolve_or_normalize_last_execution(
+    db: AsyncSession,
+    last_execution: Optional[Dict[str, Any]] = None,
+    execution_id: Optional[str] = None,
+    existing_wf: Optional[Workflow] = None,
+    dataset_id: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """
+    Resolves, normalizes, and protects last_execution diagnostics and reports:
+    1. If a valid, non-empty last_execution dictionary is supplied, normalizes logs and returns it JSON-safe.
+    2. If execution_id is provided, searches DB workflows and job_manager for the matching execution report.
+    3. If updating an existing workflow and no new execution is provided, preserves the existing last_execution.
+    4. Auto-adoption fallback: If user executed an unsaved canvas workflow and then clicked Save Workflow,
+       locates the recent auto-saved execution run and adopts its reports.
+    """
+    # 1. Normalize provided dictionary if it contains execution content
+    if last_execution and isinstance(last_execution, dict):
+        has_content = any(k in last_execution for k in [
+            "execution_id", "status", "final_metrics", "node_results", "reports", "metrics", "logs", "execution_logs"
+        ])
+        if has_content:
+            norm_exec = dict(last_execution)
+            if "logs" in norm_exec and "execution_logs" not in norm_exec:
+                norm_exec["execution_logs"] = norm_exec["logs"]
+            if "execution_logs" in norm_exec and "logs" not in norm_exec:
+                norm_exec["logs"] = norm_exec["execution_logs"]
+            return jsonable_encoder(norm_exec)
+
+    target_exec_id = execution_id
+    if not target_exec_id and isinstance(last_execution, dict):
+        target_exec_id = last_execution.get("execution_id")
+
+    # 2. Look up by execution_id if provided
+    if target_exec_id:
+        # Check running/recent jobs
+        job = job_manager.get_job(target_exec_id)
+        if job and job.get("results"):
+            res = job["results"]
+            norm_job = {
+                "execution_id": target_exec_id,
+                "status": job.get("status", "SUCCESS"),
+                "total_duration_ms": job.get("duration_ms", 0.0),
+                "final_metrics": res.get("final_metrics") if isinstance(res, dict) else getattr(res, "final_metrics", None),
+                "node_results": res.get("node_results") if isinstance(res, dict) else getattr(res, "node_results", []),
+                "execution_logs": job.get("logs", []),
+                "logs": job.get("logs", []),
+                "step_snapshots": res.get("step_snapshots", {}) if isinstance(res, dict) else getattr(res, "step_snapshots", {}),
+            }
+            return jsonable_encoder(norm_job)
+
+        # Check existing workflows in DB
+        wf_q = select(Workflow).where(Workflow.last_execution.is_not(None)).order_by(Workflow.updated_at.desc()).limit(20)
+        wf_res = await db.execute(wf_q)
+        for cand in wf_res.scalars().all():
+            cand_exec = cand.last_execution
+            if isinstance(cand_exec, dict) and cand_exec.get("execution_id") == target_exec_id:
+                return jsonable_encoder(cand_exec)
+
+    # 3. If updating an existing workflow, preserve existing last_execution
+    if existing_wf and existing_wf.last_execution:
+        return existing_wf.last_execution
+
+    # 4. Auto-adoption: Find recent auto-saved execution run (within last 30 minutes)
+    try:
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=30)
+        auto_q = select(Workflow).where(
+            Workflow.last_execution.is_not(None),
+            Workflow.name.ilike("Auto-Saved Pipeline%"),
+            Workflow.updated_at >= cutoff
+        ).order_by(Workflow.updated_at.desc()).limit(5)
+        auto_res = await db.execute(auto_q)
+        candidates = auto_res.scalars().all()
+        for cand in candidates:
+            # Match by dataset_id if present, or take the latest auto-saved run
+            if dataset_id and cand.dataset_id and cand.dataset_id == dataset_id:
+                adopted = cand.last_execution
+                cand.is_active = False
+                cand.deleted_at = datetime.now(timezone.utc)
+                return jsonable_encoder(adopted)
+            elif not dataset_id:
+                adopted = cand.last_execution
+                cand.is_active = False
+                cand.deleted_at = datetime.now(timezone.utc)
+                return jsonable_encoder(adopted)
+    except Exception:
+        pass
+
+    return None
+
+
 # -------------------------------------------------------------
 # WORKFLOW PERSISTENCE & WORKBOOK RETRIEVAL ENDPOINTS
 # -------------------------------------------------------------
@@ -85,6 +175,7 @@ async def save_workflow(
 ):
     """
     Save / create / upsert a pipeline workbook with exact node configs, parameters, layout, and edges.
+    Seamlessly captures and persists execution reports (last_execution) across new and updated workbooks.
     """
     target_id = payload.id or str(uuid.uuid4())
     result = await db.execute(select(Workflow).where(Workflow.id == target_id))
@@ -96,6 +187,14 @@ async def save_workflow(
         dataset_name=payload.dataset_name,
         nodes=payload.nodes,
         node_configs=payload.node_configs
+    )
+
+    resolved_last_exec = await resolve_or_normalize_last_execution(
+        db=db,
+        last_execution=payload.last_execution,
+        execution_id=payload.execution_id,
+        existing_wf=wf,
+        dataset_id=ds_id
     )
 
     if wf:
@@ -114,8 +213,8 @@ async def save_workflow(
             wf.edges = payload.edges
         if payload.node_configs is not None:
             wf.node_configs = payload.node_configs
-        if payload.last_execution is not None:
-            wf.last_execution = jsonable_encoder(payload.last_execution)
+        if resolved_last_exec is not None:
+            wf.last_execution = resolved_last_exec
         wf.is_active = True
         wf.deleted_at = None
         wf.updated_at = datetime.now(timezone.utc)
@@ -130,7 +229,7 @@ async def save_workflow(
             nodes=payload.nodes,
             edges=payload.edges,
             node_configs=payload.node_configs,
-            last_execution=jsonable_encoder(payload.last_execution) if payload.last_execution is not None else None,
+            last_execution=resolved_last_exec,
             is_active=True
         )
         db.add(wf)
@@ -242,6 +341,14 @@ async def upsert_workflow(
         node_configs=payload.node_configs
     )
 
+    resolved_last_exec = await resolve_or_normalize_last_execution(
+        db=db,
+        last_execution=payload.last_execution,
+        execution_id=payload.execution_id,
+        existing_wf=wf,
+        dataset_id=ds_id
+    )
+
     if wf:
         # Update existing
         if payload.name:
@@ -258,8 +365,8 @@ async def upsert_workflow(
             wf.edges = payload.edges
         if payload.node_configs is not None:
             wf.node_configs = payload.node_configs
-        if payload.last_execution is not None:
-            wf.last_execution = jsonable_encoder(payload.last_execution)
+        if resolved_last_exec is not None:
+            wf.last_execution = resolved_last_exec
         wf.is_active = True
         wf.deleted_at = None
         wf.updated_at = datetime.now(timezone.utc)
@@ -274,11 +381,47 @@ async def upsert_workflow(
             nodes=payload.nodes or [],
             edges=payload.edges or [],
             node_configs=payload.node_configs or {},
-            last_execution=jsonable_encoder(payload.last_execution) if payload.last_execution is not None else None,
+            last_execution=resolved_last_exec,
             is_active=True
         )
         db.add(wf)
 
+    await db.commit()
+    await db.refresh(wf)
+    return wf
+
+
+@router.post(
+    "/{workflow_id}/save-execution",
+    response_model=WorkflowResponse,
+    dependencies=[Depends(require_role("Tenant Admin", "Data Scientist", "ML Engineer"))]
+)
+async def save_workflow_execution_report(
+    workflow_id: str,
+    execution_payload: Dict[str, Any] = Body(..., description="Execution report, metrics, and diagnostics to attach to the workflow"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Directly attach, update, or save execution reports (final_metrics, node_results, confusion matrix, logs)
+    to a specific workflow workbook in the database.
+    """
+    result = await db.execute(select(Workflow).where(Workflow.id == workflow_id))
+    wf = result.scalar_one_or_none()
+    if not wf:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Workflow workbook '{workflow_id}' not found."
+        )
+
+    resolved_exec = await resolve_or_normalize_last_execution(
+        db=db,
+        last_execution=execution_payload,
+        execution_id=execution_payload.get("execution_id"),
+        existing_wf=wf,
+        dataset_id=wf.dataset_id
+    )
+    wf.last_execution = resolved_exec or jsonable_encoder(execution_payload)
+    wf.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(wf)
     return wf
