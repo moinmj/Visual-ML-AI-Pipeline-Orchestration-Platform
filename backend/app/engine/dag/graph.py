@@ -110,7 +110,18 @@ class WorkflowGraph(BaseModel):
                 has_split_parent = any("split" in p or "train" in p for p in parents)
                 if not has_split_parent and parents:
                     parent_recipes = [node_dict[p].recipe_id for p in parents if p in node_dict]
-                    if not any(r in ["train_test_split"] for r in parent_recipes):
+                    valid_train_providers = {"train_test_split", "class_imbalance_resampler"}
+                    has_train_data_output = False
+                    for r_id in parent_recipes:
+                        try:
+                            prec = recipe_registry.get(r_id)
+                            if "train_data" in getattr(prec, "output_types", []):
+                                has_train_data_output = True
+                                break
+                        except Exception:
+                            pass
+
+                    if not any(r in valid_train_providers for r in parent_recipes) and not has_train_data_output:
                         errors.append(
                             f"❌ Incompatible Connection for '{node.id}' [{recipe.name}]: Model trainers expect split partitions (X_train, y_train). "
                             f"Currently connected directly to '{', '.join(parents)}'. "

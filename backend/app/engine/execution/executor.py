@@ -324,10 +324,13 @@ class DAGExecutor:
                             pass
                     elif hasattr(v, "shape"):
                         summary[k] = {"shape": list(v.shape), "type": "Array"}
-                    elif k in ["metrics", "anomaly_summary", "forecasting_summary", "feature_importances"]:
+                    elif k in ["metrics", "anomaly_summary", "forecasting_summary", "feature_importances", "output_summary"]:
                         summary[k] = make_json_safe(v)
                     else:
                         summary[k] = {"type": type(v).__name__}
+
+                if "output_summary" in outputs:
+                    snapshot_info["output_summary"] = make_json_safe(outputs["output_summary"])
 
                 step_snapshots[node.id] = snapshot_info
 

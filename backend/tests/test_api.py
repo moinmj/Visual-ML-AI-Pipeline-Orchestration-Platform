@@ -236,3 +236,90 @@ async def test_run_then_save_workflow_preserves_last_execution():
         exec_saved_wf = save_exec_resp.json()
         assert exec_saved_wf["last_execution"]["execution_id"] == "custom-exec-999"
         assert exec_saved_wf["last_execution"]["final_metrics"]["accuracy"] == 0.99
+
+
+@pytest.mark.asyncio
+async def test_class_imbalance_resampler_pipeline():
+    await init_db()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. Verify recipe schema retrieval
+        schema_resp = await client.get("/api/v1/recipes/class_imbalance_resampler/schema")
+        assert schema_resp.status_code == 200
+        schema = schema_resp.json()
+        assert schema["recipe_id"] == "class_imbalance_resampler"
+        assert "strategy" in schema["parameters_schema"]["properties"]
+
+        # 2. Upload an imbalanced dataset (15 samples Class 0, 3 samples Class 1)
+        rows = []
+        for i in range(15):
+            rows.append(f"{i*2.1},{i*1.5},0")
+        for i in range(3):
+            rows.append(f"{(i+20)*3.5},{(i+20)*2.1},1")
+        csv_content = "feature1,feature2,fraud_label\n" + "\n".join(rows) + "\n"
+
+        files = {"file": ("imbalanced_fraud.csv", csv_content.encode("utf-8"), "text/csv")}
+        upload_resp = await client.post("/api/v1/datasets/upload", files=files, data={"name": "Imbalanced Fraud Dataset"})
+        assert upload_resp.status_code == 201
+        dataset_id = upload_resp.json()["id"]
+
+        # 3. Build end-to-end DAG with SMOTE Resampler post-split
+        dag_payload = {
+            "nodes": [
+                {
+                    "id": "node_csv",
+                    "recipe_id": "csv_loader",
+                    "label": "CSV Ingest",
+                    "config": {"dataset_id": dataset_id}
+                },
+                {
+                    "id": "node_split",
+                    "recipe_id": "train_test_split",
+                    "label": "Train/Test Split",
+                    "config": {"target_column": "fraud_label", "test_size": 0.25, "random_state": 42}
+                },
+                {
+                    "id": "node_smote",
+                    "recipe_id": "class_imbalance_resampler",
+                    "label": "SMOTE Resampler",
+                    "config": {"strategy": "smote", "sampling_ratio": 1.0, "k_neighbors": 2, "random_state": 42}
+                },
+                {
+                    "id": "node_model",
+                    "recipe_id": "random_forest_trainer",
+                    "label": "Random Forest",
+                    "config": {"task_type": "classification", "n_estimators": 10, "random_state": 42}
+                },
+                {
+                    "id": "node_eval",
+                    "recipe_id": "model_evaluator",
+                    "label": "Evaluator",
+                    "config": {}
+                }
+            ],
+            "edges": [
+                {"source": "node_csv", "target": "node_split"},
+                {"source": "node_split", "target": "node_smote"},
+                {"source": "node_smote", "target": "node_model"},
+                {"source": "node_model", "target": "node_eval"}
+            ]
+        }
+
+        exec_resp = await client.post("/api/v1/workflows/execute", json=dag_payload)
+        assert exec_resp.status_code == 200
+        data = exec_resp.json()
+        assert data["status"] == "SUCCESS"
+
+        # 4. Verify step snapshot diagnostics from SMOTE node
+        smote_snap = data["step_snapshots"]["node_smote"]
+        assert "output_summary" in smote_snap
+        summary = smote_snap["output_summary"]
+        assert summary["strategy"] == "smote"
+        assert summary["samples_delta"] > 0
+        assert summary["resampled_samples"] > summary["original_samples"]
+
+        # 5. Verify final metrics produced by Model Evaluator
+        assert data["final_metrics"] is not None
+        assert "accuracy" in data["final_metrics"]
+        assert data["final_metrics"]["task_type"] == "classification"
+

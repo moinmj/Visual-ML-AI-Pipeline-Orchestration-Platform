@@ -5,7 +5,7 @@ from backend.app.recipes.base.recipe import BaseRecipe
 
 class CSVLoaderRecipe(BaseRecipe):
     recipe_id = "csv_loader"
-    name = "CSV Dataset Loader"
+    name = "Data Ingestion"
     version = "1.0.0"
     category = "ingestion"
     description = "Loads a tabular dataset from storage into the pipeline as a DataFrame."
