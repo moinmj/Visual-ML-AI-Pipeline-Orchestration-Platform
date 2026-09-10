@@ -11,10 +11,15 @@ class Workflow(Base):
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
 
+    # Associated Dataset
+    dataset_id = Column(String(36), nullable=True)
+    dataset_name = Column(String(255), nullable=True)
+
     # Full Graph Payload
     nodes = Column(JSON, nullable=False, default=list)
     edges = Column(JSON, nullable=False, default=list)
     node_configs = Column(JSON, nullable=False, default=dict)
+    last_execution = Column(JSON, nullable=True)
 
     # Soft Delete & Governance
     is_active = Column(Boolean, nullable=False, default=True)

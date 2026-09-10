@@ -20,6 +20,12 @@ class WorkflowEdge(BaseModel):
 
 
 class WorkflowGraph(BaseModel):
+    id: Optional[str] = None
+    workflow_id: Optional[str] = None
+    pipeline_id: Optional[str] = None
+    name: Optional[str] = None
+    dataset_id: Optional[str] = None
+    dataset_name: Optional[str] = None
     nodes: List[WorkflowNode]
     edges: List[WorkflowEdge]
 
@@ -61,16 +67,27 @@ class WorkflowGraph(BaseModel):
             adj[edge.source].append(edge.target)
             in_degree[edge.target] += 1
 
+        node_dict = {n.id: n for n in self.nodes}
         queue = deque([node_id for node_id, deg in in_degree.items() if deg == 0])
+        ordered_nodes = []
+        visited_ids = set()
         visited_count = 0
 
         while queue:
             curr = queue.popleft()
             visited_count += 1
+            visited_ids.add(curr)
+            if curr in node_dict:
+                ordered_nodes.append(node_dict[curr])
             for neighbor in adj[curr]:
                 in_degree[neighbor] -= 1
                 if in_degree[neighbor] == 0:
                     queue.append(neighbor)
+
+        # Append any remaining unvisited nodes (in case of cycles or disconnected components)
+        for n in self.nodes:
+            if n.id not in visited_ids:
+                ordered_nodes.append(n)
 
         if visited_count != len(self.nodes):
             errors.append("❌ Cycle detected in workflow graph. Workflows must be Directed Acyclic Graphs (DAGs) without circular loops.")
@@ -80,8 +97,7 @@ class WorkflowGraph(BaseModel):
         for edge in self.edges:
             parent_map[edge.target].append(edge.source)
 
-        node_dict = {n.id: n for n in self.nodes}
-        for node in self.nodes:
+        for node in ordered_nodes:
             try:
                 recipe = recipe_registry.get(node.recipe_id)
             except Exception:
@@ -100,6 +116,18 @@ class WorkflowGraph(BaseModel):
                             f"Currently connected directly to '{', '.join(parents)}'. "
                             f"Fix: Insert a '✂️ Train / Test Splitter' between data preparation and this trainer."
                         )
+
+        # 3b. Node Configuration & Required Schema Validation in sequential pipeline order (upstream -> downstream)
+        for node in ordered_nodes:
+            try:
+                recipe = recipe_registry.get(node.recipe_id)
+            except Exception:
+                continue
+
+            cfg = node.config or {}
+            cfg_errors = recipe.validate_config(cfg)
+            for ce in cfg_errors:
+                errors.append(f"❌ Configuration Error for '{node.id}' [{recipe.name}]: {ce}")
 
         # 4. ML Best Practice Checks & Recommendations
         all_recipe_ids = {n.recipe_id for n in self.nodes}

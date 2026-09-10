@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 from backend.app.recipes.base.recipe import BaseRecipe
 
 try:
@@ -53,8 +53,16 @@ class ProphetForecasterRecipe(BaseRecipe):
                     "enum": ["additive", "multiplicative"],
                     "default": "additive"
                 }
-            }
+            },
+            "required": ["target_column"]
         }
+
+    def validate_config(self, config: Dict[str, Any]) -> List[str]:
+        errors = []
+        target_col = config.get("target_column")
+        if not target_col or not str(target_col).strip() or str(target_col).strip() in ["-- Select Column --", "(None)"]:
+            errors.append("Target variable 'target_column' is required for Prophet Forecaster and cannot be empty.")
+        return errors
 
     def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
         if not PROPHET_AVAILABLE:
@@ -69,7 +77,25 @@ class ProphetForecasterRecipe(BaseRecipe):
 
         df = df.copy()
 
-        # Identify date column or resolve valid datetime series
+        # 1. Validate and resolve target column
+        target_col = config.get("target_column") or inputs.get("target_column")
+        if not target_col or not str(target_col).strip() or str(target_col).strip() in ["-- Select Column --", "(None)"]:
+            raise ValueError(
+                "Target variable 'target_column' is required for Prophet Forecaster, but was left empty. "
+                "Please configure which numeric column to forecast."
+            )
+        target_col = str(target_col).strip()
+        if target_col not in df.columns:
+            matching = [c for c in df.columns if c.lower() == target_col.lower()]
+            if matching:
+                target_col = matching[0]
+            else:
+                raise ValueError(
+                    f"Specified target column '{target_col}' was not found in dataset columns: {list(df.columns)}. "
+                    "Please select an existing numeric column."
+                )
+
+        # 2. Identify date column or resolve valid datetime series
         date_col = config.get("date_column") or inputs.get("date_column")
         valid_ds = None
 
@@ -85,28 +111,39 @@ class ProphetForecasterRecipe(BaseRecipe):
                 return res
             return None
 
-        if date_col and date_col in df.columns:
-            valid_ds = _safe_parse_datetime(df[date_col])
+        if date_col and str(date_col).strip():
+            date_col = str(date_col).strip()
+            if date_col not in df.columns:
+                matching_date = [c for c in df.columns if c.lower() == date_col.lower()]
+                if matching_date:
+                    date_col = matching_date[0]
+                else:
+                    raise ValueError(
+                        f"Specified date column '{date_col}' was not found in dataset columns: {list(df.columns)}. "
+                        "Please select an existing timestamp column."
+                    )
+            converted = _safe_parse_datetime(df[date_col])
+            if converted is not None and converted.notna().sum() >= 5:
+                valid_ds = converted
+            else:
+                raise ValueError(f"Date column '{date_col}' does not contain at least 5 valid datetime values.")
 
         if valid_ds is None:
-            # Search for any valid datetime column across dataframe
+            # Auto-search for any valid datetime column across dataframe
             for col in df.columns:
+                if col == target_col:
+                    continue
                 cand = _safe_parse_datetime(df[col])
-                if cand is not None:
+                if cand is not None and cand.notna().sum() >= 5:
                     valid_ds = cand
                     date_col = col
                     break
 
         if valid_ds is None:
-            # Fall back to synthetic sequential daily timeline
-            date_col = "ds_synthetic"
-            valid_ds = pd.date_range(end=pd.Timestamp.today().normalize(), periods=len(df), freq="D")
-
-        # Identify target column
-        target_col = config.get("target_column") or inputs.get("target_column")
-        if not target_col or target_col not in df.columns or target_col == date_col:
-            num_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c]) and c != date_col]
-            target_col = num_cols[-1] if num_cols else df.columns[-1]
+            raise ValueError(
+                "No valid date/datetime column found in dataset for Prophet forecasting. "
+                "Please ensure your dataset contains a valid timestamp column and configure 'date_column'."
+            )
 
         horizon = int(config.get("horizon_periods", 14))
         freq_code = config.get("frequency", "D (Daily)").split()[0]

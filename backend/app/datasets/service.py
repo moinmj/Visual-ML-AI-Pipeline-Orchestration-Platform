@@ -86,16 +86,37 @@ class DatasetService:
         return dataset
 
     @staticmethod
-    async def get_preview(db: AsyncSession, dataset_id: str, limit: int = 10) -> Dict[str, Any]:
+    async def get_preview(db: AsyncSession, dataset_id: str, limit: int = 10, offset: int = 0) -> Dict[str, Any]:
         dataset = await DatasetService.get_dataset(db, dataset_id)
         df = storage_manager.read_dataframe(dataset.storage_path)
-        preview_df = df.head(limit).replace({float("nan"): None, float("inf"): None, float("-inf"): None})
-        
+
+        total_rows = int(len(df))
+        start_idx = max(0, offset)
+        end_idx = min(total_rows, start_idx + limit)
+        preview_df = df.iloc[start_idx:end_idx].replace({float("nan"): None, float("inf"): None, float("-inf"): None})
+
+        from backend.app.profiling.profiler import DataProfiler
+        column_types: Dict[str, str] = {}
+        columns_schema: List[Dict[str, str]] = []
+        for col in df.columns:
+            inferred = DataProfiler._infer_column_type(df[col])
+            raw_dtype = str(df[col].dtype)
+            column_types[str(col)] = inferred
+            columns_schema.append({
+                "name": str(col),
+                "data_type": inferred,
+                "raw_type": raw_dtype
+            })
+
         return {
             "id": dataset.id,
             "name": dataset.name,
             "columns": list(df.columns),
-            "total_rows": int(len(df)),
+            "column_types": column_types,
+            "columns_schema": columns_schema,
+            "total_rows": total_rows,
+            "limit": limit,
+            "offset": start_idx,
             "preview_rows": preview_df.to_dict(orient="records")
         }
 

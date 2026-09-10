@@ -29,11 +29,21 @@ class DatasetResponse(DatasetBase):
     }
 
 
+class ColumnSchemaItem(BaseModel):
+    name: str = Field(..., description="Column name")
+    data_type: str = Field(..., description="Inferred semantic data type: numeric, categorical, text, datetime, boolean")
+    raw_type: str = Field(..., description="Underlying Pandas / NumPy dtype (e.g. int64, float64, object)")
+
+
 class DatasetPreviewResponse(BaseModel):
     id: str
     name: str
     columns: List[str]
+    column_types: Dict[str, str] = Field(default_factory=dict, description="Dictionary mapping each column name to its inferred data type")
+    columns_schema: List[ColumnSchemaItem] = Field(default_factory=list, description="List of columns with rich type descriptors")
     total_rows: int
+    limit: int = Field(10, description="Page size limit applied to rows")
+    offset: int = Field(0, description="Row start offset for pagination")
     preview_rows: List[Dict[str, Any]]
 
 

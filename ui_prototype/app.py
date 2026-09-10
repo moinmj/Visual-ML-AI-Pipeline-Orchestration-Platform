@@ -171,7 +171,7 @@ RECIPE_CATEGORY_MAP = {
         {"id": "text_vectorizer", "name": "Text Vectorizer (TF-IDF / Word2Vec / Count)", "icon": "🔤", "default_config": {"method": "tfidf", "max_features": 50, "drop_original": True}}
     ],
     "✂️ Splitting": [
-        {"id": "train_test_split", "name": "Train / Test Splitter", "icon": "✂️", "default_config": {"target_column": "Churn", "test_size": 0.2}}
+        {"id": "train_test_split", "name": "Train / Test Splitter", "icon": "✂️", "default_config": {"target_column": "", "test_size": 0.2}}
     ],
     "🤖 Machine Learning Models": [
         {"id": "xgboost_trainer", "name": "XGBoost Classifier / Regressor", "icon": "⚡", "default_config": {"task_type": "classification", "n_estimators": 100, "max_depth": 6}},
@@ -1147,7 +1147,8 @@ def save_workflow_to_backend(name: str, description: str = "") -> dict:
         "description": description,
         "nodes": nodes_payload,
         "edges": edges_payload,
-        "node_configs": persisted_configs
+        "node_configs": persisted_configs,
+        "last_execution": st.session_state.get("last_execution")
     }
 
     try:
@@ -1178,7 +1179,8 @@ def save_workflow_to_backend(name: str, description: str = "") -> dict:
                 description=description,
                 nodes=nodes_payload,
                 edges=edges_payload,
-                node_configs=persisted_configs
+                node_configs=persisted_configs,
+                last_execution=st.session_state.get("last_execution")
             )
             session.add(wf)
             await session.commit()
@@ -1363,6 +1365,19 @@ def restore_saved_workflow(wf_data: dict):
     st.session_state["node_configs"] = saved_configs
     st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
     st.session_state["active_saved_workflow_name"] = wf_data.get("name", "Saved Workflow")
+
+    # Restore Execution Results & Diagnostics if present
+    last_exec = wf_data.get("last_execution")
+    if last_exec and isinstance(last_exec, dict):
+        st.session_state["last_execution"] = last_exec
+        if "inference_schema" in last_exec and last_exec["inference_schema"]:
+            st.session_state["inference_schema"] = last_exec["inference_schema"]
+            if "execution_id" in last_exec:
+                st.session_state["inference_bundle"] = job_manager.get_inference_bundle(last_exec["execution_id"])
+    else:
+        st.session_state.pop("last_execution", None)
+        st.session_state.pop("inference_bundle", None)
+        st.session_state.pop("inference_schema", None)
 
     record_api_telemetry(
         action_name=f"📂 Restore Workflow: {wf_data.get('name')}",
@@ -2029,6 +2044,22 @@ if app_mode == "🎨 Pipeline Whiteboard":
                     if c not in available_cols:
                         available_cols.append(c)
 
+                active_df_obj = st.session_state.get("active_df")
+                col_type_map = {}
+                if active_df_obj is not None and isinstance(active_df_obj, pd.DataFrame):
+                    from backend.app.profiling.profiler import DataProfiler
+                    for col_name in active_df_obj.columns:
+                        col_type_map[str(col_name)] = DataProfiler._infer_column_type(active_df_obj[col_name])
+
+                def format_col_option(opt):
+                    if not opt or opt in ["-- Select Column --", "(None)"]:
+                        return str(opt)
+                    ctype = col_type_map.get(str(opt))
+                    if ctype:
+                        icon = {"numeric": "🔢", "categorical": "🔤", "datetime": "📅", "boolean": "🔘", "text": "📝"}.get(ctype, "📄")
+                        return f"{icon} {opt}  [{ctype}]"
+                    return str(opt)
+
                 for prop_name, prop_meta in props.items():
                     title = prop_meta.get("title", prop_name)
                     default_val = prop_meta.get("default", None)
@@ -2052,6 +2083,7 @@ if app_mode == "🎨 Pipeline Whiteboard":
                             title,
                             options=multiselect_options,
                             default=curr_list,
+                            format_func=format_col_option,
                             key=f"cfg_{selected_node_id}_{prop_name}",
                             help=prop_meta.get("description", "Select specific columns or leave empty to apply across all columns.")
                         )
@@ -2074,7 +2106,7 @@ if app_mode == "🎨 Pipeline Whiteboard":
                             else:
                                 col_idx = 0
 
-                        selected_opt = st.selectbox(title, options, index=col_idx, key=f"cfg_{selected_node_id}_{prop_name}")
+                        selected_opt = st.selectbox(title, options, index=col_idx, format_func=format_col_option, key=f"cfg_{selected_node_id}_{prop_name}")
                         if selected_opt in ["-- Select Column --", "(None)"]:
                             new_val = ""
                         else:

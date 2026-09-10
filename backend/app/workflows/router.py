@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Body, Query
+from fastapi.encoders import jsonable_encoder
 from typing import Dict, Any, List, Optional, Union
 import uuid
 import pandas as pd
@@ -19,15 +20,65 @@ from backend.app.engine.inference import (
     InferenceSchemaResponse,
     FeatureSchemaItem
 )
+from backend.app.core.security import get_current_user, require_role, require_permission
+
+from backend.app.datasets.models import Dataset
 
 router = APIRouter(prefix="/workflows", tags=["Workflows & DAG Execution"])
+
+
+async def resolve_workflow_dataset(
+    db: AsyncSession,
+    dataset_id: Optional[str] = None,
+    dataset_name: Optional[str] = None,
+    nodes: Optional[List[Dict[str, Any]]] = None,
+    node_configs: Optional[Dict[str, Any]] = None
+) -> tuple[Optional[str], Optional[str]]:
+    """
+    Resolves dataset_id and dataset_name from payload or by inspecting
+    the workflow's ingestion nodes (e.g. csv_loader).
+    """
+    resolved_id = dataset_id
+    resolved_name = dataset_name
+
+    # If dataset_id was not explicitly passed, inspect node configs for csv_loader
+    if not resolved_id:
+        if node_configs and isinstance(node_configs, dict):
+            for n_id, n_data in node_configs.items():
+                cfg = n_data.get("config", {}) if isinstance(n_data, dict) else {}
+                if "dataset_id" in cfg and cfg["dataset_id"]:
+                    resolved_id = str(cfg["dataset_id"])
+                    break
+        if not resolved_id and nodes and isinstance(nodes, list):
+            for n in nodes:
+                cfg = n.get("config", {}) if isinstance(n, dict) else {}
+                if "dataset_id" in cfg and cfg["dataset_id"]:
+                    resolved_id = str(cfg["dataset_id"])
+                    break
+
+    # Look up human-readable dataset_name if we have an ID
+    if resolved_id and not resolved_name:
+        try:
+            ds_res = await db.execute(select(Dataset).where(Dataset.id == resolved_id))
+            ds = ds_res.scalar_one_or_none()
+            if ds:
+                resolved_name = ds.name
+        except Exception:
+            pass
+
+    return resolved_id, resolved_name
 
 
 # -------------------------------------------------------------
 # WORKFLOW PERSISTENCE & WORKBOOK RETRIEVAL ENDPOINTS
 # -------------------------------------------------------------
 
-@router.post("/", response_model=WorkflowResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/",
+    response_model=WorkflowResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_role("Tenant Admin", "Data Scientist", "ML Engineer"))]
+)
 async def save_workflow(
     payload: WorkflowCreate,
     db: AsyncSession = Depends(get_db)
@@ -39,18 +90,34 @@ async def save_workflow(
     result = await db.execute(select(Workflow).where(Workflow.id == target_id))
     wf = result.scalar_one_or_none()
 
+    ds_id, ds_name = await resolve_workflow_dataset(
+        db=db,
+        dataset_id=payload.dataset_id,
+        dataset_name=payload.dataset_name,
+        nodes=payload.nodes,
+        node_configs=payload.node_configs
+    )
+
     if wf:
         # Update existing
         if payload.name:
             wf.name = payload.name
         if payload.description is not None:
             wf.description = payload.description
+        if ds_id is not None:
+            wf.dataset_id = ds_id
+        if ds_name is not None:
+            wf.dataset_name = ds_name
         if payload.nodes is not None:
             wf.nodes = payload.nodes
         if payload.edges is not None:
             wf.edges = payload.edges
         if payload.node_configs is not None:
             wf.node_configs = payload.node_configs
+        if payload.last_execution is not None:
+            wf.last_execution = jsonable_encoder(payload.last_execution)
+        wf.is_active = True
+        wf.deleted_at = None
         wf.updated_at = datetime.now(timezone.utc)
     else:
         # Create new
@@ -58,9 +125,13 @@ async def save_workflow(
             id=target_id,
             name=payload.name,
             description=payload.description,
+            dataset_id=ds_id,
+            dataset_name=ds_name,
             nodes=payload.nodes,
             edges=payload.edges,
-            node_configs=payload.node_configs
+            node_configs=payload.node_configs,
+            last_execution=jsonable_encoder(payload.last_execution) if payload.last_execution is not None else None,
+            is_active=True
         )
         db.add(wf)
 
@@ -113,7 +184,7 @@ async def get_workflow(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Retrieve a specific saved pipeline workbook by ID with full exact configuration and params.
+    Retrieve a specific saved pipeline workbook by ID with full exact configuration, parameters, and saved execution report.
     """
     result = await db.execute(select(Workflow).where(Workflow.id == workflow_id))
     wf = result.scalar_one_or_none()
@@ -122,10 +193,30 @@ async def get_workflow(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Workflow workbook '{workflow_id}' not found."
         )
+
+    # Auto-resolve dataset_id if not explicitly set on older records
+    if not wf.dataset_id:
+        ds_id, ds_name = await resolve_workflow_dataset(
+            db=db,
+            dataset_id=None,
+            dataset_name=None,
+            nodes=wf.nodes or [],
+            node_configs=wf.node_configs or {}
+        )
+        if ds_id:
+            wf.dataset_id = ds_id
+            wf.dataset_name = ds_name
+            await db.commit()
+            await db.refresh(wf)
+
     return wf
 
 
-@router.put("/{workflow_id}", response_model=WorkflowResponse)
+@router.put(
+    "/{workflow_id}",
+    response_model=WorkflowResponse,
+    dependencies=[Depends(require_role("Tenant Admin", "Data Scientist", "ML Engineer"))]
+)
 async def upsert_workflow(
     workflow_id: str,
     payload: WorkflowCreate,
@@ -143,18 +234,32 @@ async def upsert_workflow(
     result = await db.execute(select(Workflow).where(Workflow.id == target_id))
     wf = result.scalar_one_or_none()
 
+    ds_id, ds_name = await resolve_workflow_dataset(
+        db=db,
+        dataset_id=payload.dataset_id,
+        dataset_name=payload.dataset_name,
+        nodes=payload.nodes,
+        node_configs=payload.node_configs
+    )
+
     if wf:
         # Update existing
         if payload.name:
             wf.name = payload.name
         if payload.description is not None:
             wf.description = payload.description
+        if ds_id is not None:
+            wf.dataset_id = ds_id
+        if ds_name is not None:
+            wf.dataset_name = ds_name
         if payload.nodes is not None:
             wf.nodes = payload.nodes
         if payload.edges is not None:
             wf.edges = payload.edges
         if payload.node_configs is not None:
             wf.node_configs = payload.node_configs
+        if payload.last_execution is not None:
+            wf.last_execution = jsonable_encoder(payload.last_execution)
         wf.is_active = True
         wf.deleted_at = None
         wf.updated_at = datetime.now(timezone.utc)
@@ -164,9 +269,12 @@ async def upsert_workflow(
             id=target_id,
             name=payload.name or "Untitled Pipeline",
             description=payload.description,
+            dataset_id=ds_id,
+            dataset_name=ds_name,
             nodes=payload.nodes or [],
             edges=payload.edges or [],
             node_configs=payload.node_configs or {},
+            last_execution=jsonable_encoder(payload.last_execution) if payload.last_execution is not None else None,
             is_active=True
         )
         db.add(wf)
@@ -176,7 +284,11 @@ async def upsert_workflow(
     return wf
 
 
-@router.delete("/{workflow_id}", status_code=status.HTTP_200_OK)
+@router.delete(
+    "/{workflow_id}",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_role("Tenant Admin", "Data Scientist"))]
+)
 async def delete_workflow(
     workflow_id: str,
     db: AsyncSession = Depends(get_db)
@@ -202,7 +314,11 @@ async def delete_workflow(
     }
 
 
-@router.post("/{workflow_id}/restore", response_model=WorkflowResponse)
+@router.post(
+    "/{workflow_id}/restore",
+    response_model=WorkflowResponse,
+    dependencies=[Depends(require_role("Tenant Admin", "Data Scientist"))]
+)
 async def restore_workflow(
     workflow_id: str,
     db: AsyncSession = Depends(get_db)
@@ -273,7 +389,11 @@ def db_workflow_to_graph(wf: Workflow) -> WorkflowGraph:
     return WorkflowGraph(nodes=nodes, edges=edges)
 
 
-@router.post("/validate", response_model=Dict[str, Any])
+@router.post(
+    "/validate",
+    response_model=Dict[str, Any],
+    dependencies=[Depends(get_current_user)]
+)
 async def validate_workflow(workflow: WorkflowGraph):
     """
     Validate a workflow graph for cycle detection, valid node connectivity, schema requirements, and best-practice recommendations.
@@ -287,7 +407,11 @@ async def validate_workflow(workflow: WorkflowGraph):
     }
 
 
-@router.post("/{workflow_id}/validate", response_model=Dict[str, Any])
+@router.post(
+    "/{workflow_id}/validate",
+    response_model=Dict[str, Any],
+    dependencies=[Depends(get_current_user)]
+)
 async def validate_workflow_by_id(
     workflow_id: str,
     db: AsyncSession = Depends(get_db)
@@ -315,30 +439,50 @@ async def validate_workflow_by_id(
     }
 
 
-@router.post("/execute", response_model=WorkflowExecutionResult)
+@router.post(
+    "/execute",
+    response_model=WorkflowExecutionResult,
+    dependencies=[Depends(require_role("Tenant Admin", "Data Scientist", "ML Engineer"))]
+)
 async def execute_workflow(
     workflow: WorkflowGraph,
     include_node_outputs: bool = Query(False, description="Opt-in to include full raw data of every node (default: false for lean response)"),
-    auto_save: bool = Query(False, description="Automatically upsert/save current workflow to DB before executing"),
+    auto_save: bool = Query(True, description="Automatically upsert/save current workflow to DB before executing"),
     workflow_id: Optional[str] = Query(None, description="Optional workflow ID to link/update in database"),
     workflow_name: Optional[str] = Query(None, description="Optional workflow title if auto-saving to DB"),
     db: AsyncSession = Depends(get_db)
 ):
     """
     Execute a full workflow DAG end-to-end synchronously.
-    Supports auto-saving: if auto_save=True or workflow_id is provided, saves/upserts the workflow
-    into the database in the same call, eliminating separate save requests.
+    Supports auto-saving: saves/upserts the workflow, links its active dataset, and persists execution metrics/reports to DB.
     """
-    target_id = workflow_id
+    target_id = (
+        workflow_id
+        or getattr(workflow, "workflow_id", None)
+        or getattr(workflow, "id", None)
+        or getattr(workflow, "pipeline_id", None)
+    )
     if auto_save or target_id:
         target_id = target_id or str(uuid.uuid4())
         nodes_payload, edges_payload, node_configs = workflow_graph_to_db_payload(workflow)
         
+        ds_id, ds_name = await resolve_workflow_dataset(
+            db=db,
+            dataset_id=workflow.dataset_id,
+            dataset_name=workflow.dataset_name,
+            nodes=nodes_payload,
+            node_configs=node_configs
+        )
+
         result = await db.execute(select(Workflow).where(Workflow.id == target_id))
         wf = result.scalar_one_or_none()
         if wf:
-            if workflow_name:
-                wf.name = workflow_name
+            if workflow_name or workflow.name:
+                wf.name = workflow_name or workflow.name
+            if ds_id is not None:
+                wf.dataset_id = ds_id
+            if ds_name is not None:
+                wf.dataset_name = ds_name
             wf.nodes = nodes_payload
             wf.edges = edges_payload
             wf.node_configs = node_configs
@@ -348,8 +492,10 @@ async def execute_workflow(
         else:
             wf = Workflow(
                 id=target_id,
-                name=workflow_name or "Auto-Saved Pipeline",
+                name=workflow.name or workflow_name or "Auto-Saved Pipeline",
                 description="Auto-saved during execution run",
+                dataset_id=ds_id,
+                dataset_name=ds_name,
                 nodes=nodes_payload,
                 edges=edges_payload,
                 node_configs=node_configs,
@@ -366,10 +512,31 @@ async def execute_workflow(
     )
     if target_id:
         result.workflow_id = target_id
+        res_wf = await db.execute(select(Workflow).where(Workflow.id == target_id))
+        wf_rec = res_wf.scalar_one_or_none()
+        if wf_rec:
+            wf_rec.last_execution = jsonable_encoder({
+                "execution_id": result.execution_id,
+                "status": result.status,
+                "total_duration_ms": result.total_duration_ms,
+                "final_metrics": result.final_metrics,
+                "anomaly_summary": result.anomaly_summary,
+                "forecasting_summary": result.forecasting_summary,
+                "governance_summary": result.governance_summary,
+                "node_results": result.node_results,
+                "execution_logs": result.logs,
+                "step_snapshots": result.step_snapshots,
+                "inference_schema": getattr(result, "inference_schema", None),
+            })
+            await db.commit()
     return result
 
 
-@router.post("/{workflow_id}/execute", response_model=WorkflowExecutionResult)
+@router.post(
+    "/{workflow_id}/execute",
+    response_model=WorkflowExecutionResult,
+    dependencies=[Depends(require_role("Tenant Admin", "Data Scientist", "ML Engineer"))]
+)
 async def execute_workflow_by_id(
     workflow_id: str,
     workflow: Optional[WorkflowGraph] = None,
@@ -391,6 +558,17 @@ async def execute_workflow_by_id(
 
     if workflow is not None:
         nodes_payload, edges_payload, node_configs = workflow_graph_to_db_payload(workflow)
+        ds_id, ds_name = await resolve_workflow_dataset(
+            db=db,
+            dataset_id=workflow.dataset_id,
+            dataset_name=workflow.dataset_name,
+            nodes=nodes_payload,
+            node_configs=node_configs
+        )
+        if ds_id is not None:
+            wf.dataset_id = ds_id
+        if ds_name is not None:
+            wf.dataset_name = ds_name
         wf.nodes = nodes_payload
         wf.edges = edges_payload
         wf.node_configs = node_configs
@@ -409,10 +587,27 @@ async def execute_workflow_by_id(
         include_node_outputs=include_node_outputs
     )
     exec_result.workflow_id = workflow_id
+    wf.last_execution = jsonable_encoder({
+        "execution_id": exec_result.execution_id,
+        "status": exec_result.status,
+        "total_duration_ms": exec_result.total_duration_ms,
+        "final_metrics": exec_result.final_metrics,
+        "anomaly_summary": exec_result.anomaly_summary,
+        "forecasting_summary": exec_result.forecasting_summary,
+        "governance_summary": exec_result.governance_summary,
+        "node_results": exec_result.node_results,
+        "execution_logs": exec_result.logs,
+        "step_snapshots": exec_result.step_snapshots,
+        "inference_schema": getattr(exec_result, "inference_schema", None),
+    })
+    await db.commit()
     return exec_result
 
 
-@router.post("/async-execute")
+@router.post(
+    "/async-execute",
+    dependencies=[Depends(require_role("Tenant Admin", "Data Scientist", "ML Engineer"))]
+)
 async def submit_async_workflow(
     workflow: WorkflowGraph,
     include_node_outputs: bool = Query(False, description="Opt-in to include full raw data of every node")

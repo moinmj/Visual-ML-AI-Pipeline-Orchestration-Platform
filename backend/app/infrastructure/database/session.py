@@ -49,3 +49,15 @@ async def init_db():
             await conn.execute(text("ALTER TABLE workflows ADD COLUMN deleted_at DATETIME"))
         except Exception:
             pass
+        try:
+            await conn.execute(text("ALTER TABLE workflows ADD COLUMN last_execution JSON"))
+        except Exception:
+            pass
+        try:
+            await conn.execute(text("ALTER TABLE workflows ADD COLUMN dataset_id VARCHAR(36)"))
+        except Exception:
+            pass
+        try:
+            await conn.execute(text("ALTER TABLE workflows ADD COLUMN dataset_name VARCHAR(255)"))
+        except Exception:
+            pass

@@ -45,15 +45,34 @@ class TrainTestSplitRecipe(BaseRecipe):
             "required": ["target_column"]
         }
 
+    def validate_config(self, config: Dict[str, Any]) -> List[str]:
+        errors = []
+        target_col = config.get("target_column")
+        if not target_col or not str(target_col).strip() or str(target_col).strip() in ["-- Select Column --", "(None)"]:
+            errors.append("Target variable 'target_column' (Y) is required for Train / Test Split and cannot be empty.")
+        return errors
+
     def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
         df: pd.DataFrame = inputs.get("dataframe")
         if df is None:
             raise ValueError("TrainTestSplit expects 'dataframe' in inputs.")
 
         target_col = config.get("target_column")
-        if not target_col or target_col not in df.columns:
-            # Fallback to last column if user didn't specify or name changed
-            target_col = df.columns[-1]
+        if not target_col or not str(target_col).strip() or str(target_col).strip() in ["-- Select Column --", "(None)"]:
+            raise ValueError(
+                "Target variable 'target_column' (Y) is required for Train / Test Split, but was left empty. "
+                "Please configure a valid target column to predict."
+            )
+        target_col = str(target_col).strip()
+        if target_col not in df.columns:
+            matching = [c for c in df.columns if c.lower() == target_col.lower()]
+            if matching:
+                target_col = matching[0]
+            else:
+                raise ValueError(
+                    f"Specified target column '{target_col}' was not found in dataset columns: {list(df.columns)}. "
+                    "Please select an existing column."
+                )
 
         test_size = float(config.get("test_size", 0.2))
         random_state = int(config.get("random_state", 42))
