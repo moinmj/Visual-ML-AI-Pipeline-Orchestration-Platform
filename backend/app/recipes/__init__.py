@@ -9,6 +9,7 @@ from backend.app.recipes.preprocessing.duplicates import (
     CorrelationFilterRecipe,
     VarianceFilterRecipe
 )
+from backend.app.recipes.preprocessing.class_imbalance import ClassImbalanceResamplerRecipe
 from backend.app.recipes.nlp.text_preprocessor import TextPreprocessorRecipe
 from backend.app.recipes.nlp.text_vectorizer import TextVectorizerRecipe
 from backend.app.recipes.splitting.train_test_split import TrainTestSplitRecipe
@@ -39,6 +40,7 @@ def register_all_recipes():
     recipe_registry.register(MissingValueImputerRecipe())
     recipe_registry.register(FeatureScalerRecipe())
     recipe_registry.register(CategoricalEncoderRecipe())
+    recipe_registry.register(ClassImbalanceResamplerRecipe())
     recipe_registry.register(TextPreprocessorRecipe())
     recipe_registry.register(TextVectorizerRecipe())
     recipe_registry.register(TrainTestSplitRecipe())
