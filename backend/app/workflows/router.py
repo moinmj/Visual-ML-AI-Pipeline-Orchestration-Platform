@@ -456,7 +456,12 @@ async def execute_workflow(
     Execute a full workflow DAG end-to-end synchronously.
     Supports auto-saving: saves/upserts the workflow, links its active dataset, and persists execution metrics/reports to DB.
     """
-    target_id = workflow_id or workflow.id
+    target_id = (
+        workflow_id
+        or getattr(workflow, "workflow_id", None)
+        or getattr(workflow, "id", None)
+        or getattr(workflow, "pipeline_id", None)
+    )
     if auto_save or target_id:
         target_id = target_id or str(uuid.uuid4())
         nodes_payload, edges_payload, node_configs = workflow_graph_to_db_payload(workflow)
