@@ -17,6 +17,7 @@ from backend.app.workflows.schemas import (
     WorkflowCreate,
     WorkflowUpdate,
     WorkflowResponse,
+    WorkflowListItemResponse,
     WorkflowExecutionSummaryResponse,
     WorkflowExecutionDetailResponse,
     WorkflowCompareResponse
@@ -299,23 +300,53 @@ async def save_workflow(
     return wf
 
 
-@router.get("/", response_model=List[WorkflowResponse])
+@router.get("/", response_model=List[WorkflowListItemResponse])
 async def list_workflows(
     include_deleted: bool = False,
+    limit: int = Query(50, ge=1, le=200, description="Max workbooks to retrieve per page"),
+    offset: int = Query(0, ge=0, description="Offset index for pagination"),
+    page: Optional[int] = Query(None, ge=1, description="Optional 1-indexed page number (e.g. page=2 with limit=50 sets offset=50)"),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    List all saved pipeline workbooks. By default filters out soft-deleted pipelines.
-    Pass include_deleted=True to retrieve archived/trash items.
+    List all saved pipeline workbooks with lightweight summary metadata and pagination support.
+    Excludes heavy nodes, edges, node_configs, and raw execution payloads.
+    Surfaces top-level execution status, latest metrics, and node counts.
     """
+    actual_offset = offset
+    if page is not None and offset == 0:
+        actual_offset = (page - 1) * limit
+
     query = select(Workflow)
     if not include_deleted:
         query = query.where(Workflow.is_active == True)
     
-    query = query.order_by(Workflow.updated_at.desc())
+    query = query.order_by(Workflow.updated_at.desc()).offset(actual_offset).limit(limit)
     result = await db.execute(query)
     workflows = result.scalars().all()
-    return workflows
+
+    items = []
+    for wf in workflows:
+        last_exec = wf.last_execution if isinstance(wf.last_execution, dict) else {}
+        items.append(
+            WorkflowListItemResponse(
+                id=wf.id,
+                name=wf.name,
+                description=wf.description,
+                dataset_id=wf.dataset_id,
+                dataset_name=wf.dataset_name,
+                is_active=wf.is_active,
+                deleted_at=wf.deleted_at,
+                created_at=wf.created_at,
+                updated_at=wf.updated_at,
+                last_execution_status=last_exec.get("status"),
+                last_execution_id=last_exec.get("execution_id"),
+                last_metrics=last_exec.get("final_metrics") or last_exec.get("metrics"),
+                nodes_count=len(wf.nodes or []),
+                edges_count=len(wf.edges or []),
+            )
+        )
+    return items
 
 
 @router.get("/jobs")

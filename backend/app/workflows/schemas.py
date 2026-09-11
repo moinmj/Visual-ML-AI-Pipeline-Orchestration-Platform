@@ -44,8 +44,29 @@ class WorkflowResponse(BaseModel):
     deleted_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
+    model_config = {"from_attributes": True}
+
+
+class WorkflowListItemResponse(BaseModel):
+    id: str
+    name: str
+    description: Optional[str] = None
+    dataset_id: Optional[str] = None
+    dataset_name: Optional[str] = None
+    is_active: bool = True
+    deleted_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+    last_execution_status: Optional[str] = Field(None, description="Latest run status: SUCCESS, FAILED, or None if never executed")
+    last_execution_id: Optional[str] = Field(None, description="Execution ID of the latest run")
+    last_metrics: Optional[Dict[str, Any]] = Field(None, description="Headline metric scores (e.g. accuracy, f1_score)")
+    nodes_count: int = Field(0, description="Total number of nodes in this pipeline")
+    edges_count: int = Field(0, description="Total number of edge connections in this pipeline")
 
     model_config = {"from_attributes": True}
+
+
+WorkflowSummaryResponse = WorkflowListItemResponse
 
 
 class WorkflowExecutionSummaryResponse(BaseModel):
