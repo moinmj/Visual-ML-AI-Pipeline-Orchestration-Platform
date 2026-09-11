@@ -14,9 +14,9 @@ except (ImportError, OSError, Exception):
 class ProphetForecasterRecipe(BaseRecipe):
     recipe_id = "prophet_forecaster"
     name = "Prophet Time-Series Forecaster"
-    version = "1.0.0"
+    version = "1.1.0"
     category = "forecasting"
-    description = "Meta Prophet additive model for non-linear trends with daily/weekly/yearly seasonality and future prediction bands."
+    description = "Meta Prophet additive model with chronological out-of-sample backtesting, non-linear trends, and daily/weekly/yearly seasonality."
     input_types = ["dataframe"]
     output_types = ["forecast", "metrics", "model"]
 
@@ -52,6 +52,14 @@ class ProphetForecasterRecipe(BaseRecipe):
                     "title": "Seasonality Mode",
                     "enum": ["additive", "multiplicative"],
                     "default": "additive"
+                },
+                "test_size_pct": {
+                    "type": "number",
+                    "title": "Holdout Test Size (%)",
+                    "default": 0.2,
+                    "minimum": 0.05,
+                    "maximum": 0.4,
+                    "description": "Fraction of chronologically latest observations to hold out for out-of-sample evaluation."
                 }
             },
             "required": ["target_column"]
@@ -152,8 +160,9 @@ class ProphetForecasterRecipe(BaseRecipe):
         horizon = int(config.get("horizon_periods", 14))
         freq_code = config.get("frequency", "D (Daily)").split()[0]
         seas_mode = config.get("seasonality_mode", "additive")
+        test_size_pct = float(config.get("test_size_pct", 0.2))
 
-        # Format DataFrame for Prophet (ds and y)
+        # Build clean chronologically sorted dataframe for Prophet
         prophet_df = pd.DataFrame({
             "ds": valid_ds,
             "y": pd.to_numeric(df[target_col], errors="coerce")
@@ -162,7 +171,58 @@ class ProphetForecasterRecipe(BaseRecipe):
         if len(prophet_df) < 5:
             raise ValueError(f"Prophet requires at least 5 valid time-series observations, found {len(prophet_df)}.")
 
-        # Train Prophet
+        # ─────────────────────────────────────────────────────────────
+        # CHRONOLOGICAL OUT-OF-SAMPLE BACKTESTING
+        # Split last `test_size_pct` of observations as unseen holdout.
+        # Fit only on the training slice, predict test dates, compute OOS metrics.
+        # Then refit on FULL data for the final production forecast.
+        # ─────────────────────────────────────────────────────────────
+        n = len(prophet_df)
+        # Minimum 5 test points; if dataset is too small fall back to all-data in-sample
+        min_test_pts = 5
+        split_idx = max(min_test_pts, int(n * (1.0 - test_size_pct)))
+
+        eval_type = "out_of_sample_holdout"
+        train_df = prophet_df.iloc[:split_idx].reset_index(drop=True)
+        test_df  = prophet_df.iloc[split_idx:].reset_index(drop=True)
+
+        if len(test_df) < 2:
+            # Dataset too small for a meaningful holdout — fall back gracefully
+            train_df = prophet_df.copy()
+            test_df  = prophet_df.copy()
+            eval_type = "in_sample_fallback"
+
+        # --- Phase 1: Fit on training slice, evaluate on held-out test ---
+        eval_model = Prophet(
+            seasonality_mode=seas_mode,
+            yearly_seasonality="auto",
+            weekly_seasonality="auto",
+            daily_seasonality="auto"
+        )
+        eval_model.fit(train_df)
+        test_forecast = eval_model.predict(test_df[["ds"]])
+
+        oos_actuals = test_df["y"].values
+        oos_preds   = test_forecast["yhat"].values
+
+        mae  = float(round(np.mean(np.abs(oos_actuals - oos_preds)), 4))
+        rmse = float(round(np.sqrt(np.mean((oos_actuals - oos_preds) ** 2)), 4))
+
+        non_zero_mask = oos_actuals != 0
+        if np.any(non_zero_mask):
+            mape = float(round(
+                np.mean(np.abs((oos_actuals[non_zero_mask] - oos_preds[non_zero_mask]) / oos_actuals[non_zero_mask])) * 100,
+                2
+            ))
+        else:
+            mape = 0.0
+
+        # Coverage: fraction of actuals within the 95% CI
+        lower = test_forecast["yhat_lower"].values
+        upper = test_forecast["yhat_upper"].values
+        coverage_95 = float(round(np.mean((oos_actuals >= lower) & (oos_actuals <= upper)) * 100, 2))
+
+        # --- Phase 2: Refit on FULL data for the production forecast ---
         model = Prophet(
             seasonality_mode=seas_mode,
             yearly_seasonality="auto",
@@ -171,63 +231,77 @@ class ProphetForecasterRecipe(BaseRecipe):
         )
         model.fit(prophet_df)
 
-        # In-sample predictions on actual historical observations
-        in_sample = model.predict(prophet_df[["ds"]])
-        actuals = prophet_df["y"].values
-        fitted_preds = in_sample["yhat"].values
-        
-        mae = float(round(np.mean(np.abs(actuals - fitted_preds)), 4))
-        rmse = float(round(np.sqrt(np.mean((actuals - fitted_preds) ** 2)), 4))
-        
-        non_zero_mask = actuals != 0
-        if np.any(non_zero_mask):
-            mape = float(round(np.mean(np.abs((actuals[non_zero_mask] - fitted_preds[non_zero_mask]) / actuals[non_zero_mask])) * 100, 2))
-        else:
-            mape = 0.0
-
         # Generate Future Dataframe
-        future = model.make_future_dataframe(periods=horizon, freq=freq_code)
+        future   = model.make_future_dataframe(periods=horizon, freq=freq_code)
         forecast = model.predict(future)
 
-        last_date = prophet_df["ds"].max()
+        last_date       = prophet_df["ds"].max()
         is_future_flags = (forecast["ds"] > last_date).astype(int).tolist()
 
         metrics = {
-            "task_type": "time_series_forecasting",
-            "algorithm": "Meta Prophet",
-            "date_column": date_col,
-            "target_column": target_col,
-            "historical_points": len(prophet_df),
-            "forecast_horizon": horizon,
-            "trend_direction": "Upward" if float(forecast["yhat"].iloc[-1]) >= float(forecast["yhat"].iloc[0]) else "Downward",
-            "horizon_periods": horizon,
-            "mae": mae,
-            "rmse": rmse,
-            "mape": mape
+            "task_type":          "time_series_forecasting",
+            "algorithm":          "Meta Prophet",
+            "eval_type":          eval_type,
+            "date_column":        date_col,
+            "target_column":      target_col,
+            "historical_points":  len(prophet_df),
+            "train_size":         len(train_df),
+            "test_size":          len(test_df),
+            "holdout_test_start": str(test_df["ds"].iloc[0].date()) if len(test_df) > 0 else None,
+            "holdout_test_end":   str(test_df["ds"].iloc[-1].date()) if len(test_df) > 0 else None,
+            "forecast_horizon":   horizon,
+            "trend_direction":    "Upward" if float(forecast["yhat"].iloc[-1]) >= float(forecast["yhat"].iloc[0]) else "Downward",
+            "horizon_periods":    horizon,
+            # ── True out-of-sample accuracy metrics ──
+            "mae":                mae,
+            "rmse":               rmse,
+            "mape":               mape,
+            "coverage_95pct":     coverage_95,
+            "evaluation_note":    (
+                f"Metrics computed on chronologically held-out last {len(test_df)} observations "
+                f"({test_size_pct*100:.0f}% of data). "
+                f"Model was retrained on all {len(prophet_df)} points for future forecasting."
+                if eval_type == "out_of_sample_holdout"
+                else "Dataset too small for holdout — metrics are in-sample."
+            )
         }
 
-        # Build clean visualization table
+        # Build clean visualization table (historical + future)
         result_df = pd.DataFrame({
             "ds": forecast["ds"].dt.strftime("%Y-%m-%d") if hasattr(forecast["ds"].dt, "strftime") else forecast["ds"].astype(str),
-            "yhat": np.round(forecast["yhat"], 2),
+            "yhat":       np.round(forecast["yhat"],       2),
             "yhat_lower": np.round(forecast["yhat_lower"], 2),
             "yhat_upper": np.round(forecast["yhat_upper"], 2),
-            "is_future": is_future_flags
+            "is_future":  is_future_flags
         })
 
-        # Embed forecast points directly into metrics/summary for instant lightweight charting
+        # Embed forecast points directly into metrics/summary for lightweight charting
         metrics["forecast_data"] = result_df.to_dict(orient="records")
 
         return {
-            "forecast_df": result_df,
-            "dataframe": result_df,
-            "metrics": metrics,
+            "forecast_df":        result_df,
+            "dataframe":          result_df,
+            "metrics":            metrics,
             "forecasting_summary": metrics,
-            "model": model,
-            "task_type": "time_series_forecasting"
+            "model":              model,
+            "task_type":          "time_series_forecasting"
         }
 
     def to_code(self, config: Dict[str, Any]) -> str:
         horizon = config.get("horizon_periods", 14)
-        seas = config.get("seasonality_mode", "additive")
-        return f"from prophet import Prophet\n\nmodel = Prophet(seasonality_mode='{seas}')\nmodel.fit(df[['ds', 'y']])\nfuture = model.make_future_dataframe(periods={horizon})\nforecast = model.predict(future)"
+        seas    = config.get("seasonality_mode", "additive")
+        return (
+            f"from prophet import Prophet\n\n"
+            f"# Chronological train/test split (80/20)\n"
+            f"n = len(df); split = int(n * 0.8)\n"
+            f"train_df, test_df = df.iloc[:split], df.iloc[split:]\n\n"
+            f"# Evaluate on held-out test set\n"
+            f"eval_model = Prophet(seasonality_mode='{seas}')\n"
+            f"eval_model.fit(train_df[['ds', 'y']])\n"
+            f"oos_preds = eval_model.predict(test_df[['ds']])\n\n"
+            f"# Refit on full data for final forecast\n"
+            f"model = Prophet(seasonality_mode='{seas}')\n"
+            f"model.fit(df[['ds', 'y']])\n"
+            f"future = model.make_future_dataframe(periods={horizon})\n"
+            f"forecast = model.predict(future)"
+        )

@@ -23,7 +23,7 @@ AVAILABLE RECIPES IN THE PLATFORM (You MUST ONLY use these exact recipe_id value
   * "text_preprocessor": Cleans unstructured text. config: {"remove_stopwords": true, "lowercase": true}
   * "text_vectorizer": Vectorizes text. config: {"method": "tfidf"|"count"}
 - Splitting:
-  * "train_test_split": Splits train/test sets. config: {"target_column": "<col_name>", "test_size": 0.2}
+  * "train_test_split": Splits train/test sets. config: {"target_column": "<col_name>", "test_size": 0.2, "time_series_mode": false}. Set time_series_mode=true for any dataset with temporal/year/date features to prevent data leakage.
 - Model Training (Supervised):
   * "xgboost_trainer": config: {"task_type": "classification"|"regression", "n_estimators": 100, "max_depth": 6}
   * "lightgbm_trainer": config: {"task_type": "classification"|"regression", "n_estimators": 100, "max_depth": 6}

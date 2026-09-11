@@ -88,16 +88,52 @@ class ModelEvaluatorRecipe(BaseRecipe):
         cost_fp = float(config.get("cost_false_positive", 0.0))
         cost_fn = float(config.get("cost_false_negative", 0.0))
 
-        # Graceful check for Time-Series models (Prophet/ARIMA) connected into Evaluator
+        # Graceful handler for Time-Series models (Prophet/ARIMA) connected into Evaluator.
+        # The forecasting recipes themselves perform chronological out-of-sample backtesting
+        # and embed the resulting accuracy metrics directly in their output.
+        # We pass those through enriched with an evaluation summary.
         if type(model).__name__ == "Prophet" or "prophet" in str(type(model)).lower() or task_type == "time_series_forecasting":
             metrics = inputs.get("metrics") or inputs.get("forecasting_summary") or {
                 "task_type": "time_series_forecasting",
                 "algorithm": type(model).__name__
             }
+            # Surface evaluation metadata so UI can distinguish OOS vs in-sample
+            eval_type = metrics.get("eval_type", "unknown")
+            eval_note = metrics.get("evaluation_note", "")
+            if not eval_note:
+                if eval_type == "out_of_sample_holdout":
+                    train_sz = metrics.get("train_size", "?")
+                    test_sz  = metrics.get("test_size", "?")
+                    eval_note = (
+                        f"Out-of-sample holdout evaluation: trained on {train_sz} points, "
+                        f"evaluated on chronologically latest {test_sz} unseen observations."
+                    )
+                elif eval_type == "in_sample_fallback":
+                    eval_note = "In-sample fallback: dataset was too small for a holdout split."
+                else:
+                    eval_note = "Evaluation metrics sourced from forecasting recipe output."
+            metrics["evaluation_note"] = eval_note
+            report_lines = [
+                f"Algorithm : {metrics.get('algorithm', 'N/A')}",
+                f"Eval Type : {eval_type}",
+                f"MAE       : {metrics.get('mae', 'N/A')}",
+                f"RMSE      : {metrics.get('rmse', 'N/A')}",
+                f"MAPE      : {metrics.get('mape', 'N/A')}%",
+            ]
+            if "coverage_95pct" in metrics:
+                report_lines.append(f"95% CI Cov: {metrics['coverage_95pct']}%")
+            if "aic" in metrics:
+                report_lines.append(f"AIC       : {metrics['aic']}")
+            if "bic" in metrics:
+                report_lines.append(f"BIC       : {metrics['bic']}")
+            report_lines.append(f"Note      : {eval_note}")
             return {
                 "metrics": metrics,
-                "report": "Time-series forecasting evaluation completed."
+                "report":  "\n".join(report_lines)
             }
+
+        # Capture split_mode from upstream TrainTestSplit recipe for reporting
+        split_mode = inputs.get("split_mode") or (context.get("split_mode") if isinstance(context, dict) else None)
 
         # Ensure X_test non-numeric columns are safely encoded and aligned with model features
         if isinstance(X_test, pd.DataFrame):
@@ -289,6 +325,9 @@ class ModelEvaluatorRecipe(BaseRecipe):
                 if time_col:
                     metrics["temporal_column"] = time_col
                     metrics["is_temporal"] = True
+
+        if split_mode:
+            metrics["split_mode"] = split_mode
 
         ret = {
             "metrics": metrics,

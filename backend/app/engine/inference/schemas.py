@@ -28,6 +28,10 @@ class PredictionRequest(BaseModel):
         default=None,
         description="Natural language prompt for AI-driven prediction (e.g. 'Predict for 2025 with high humidity')."
     )
+    requested_metric: Optional[str] = Field(
+        default=None,
+        description="Requested aggregate metric (e.g. 'average', 'max', 'min', 'end')."
+    )
     start_date: Optional[str] = Field(
         default=None,
         description="Optional start date for custom forecasting range (YYYY-MM-DD)."
@@ -70,6 +74,7 @@ class PredictionResponse(BaseModel):
     # Classification & Regression Outputs
     target_column: Optional[str] = Field(default=None, description="Name of the predicted target variable")
     prediction: Optional[Any] = Field(default=None, description="Decoded class label or continuous numeric target")
+    prediction_label: Optional[str] = Field(default=None, description="Descriptive label for the prediction (e.g. 'Forecasted Average: Tlog')")
     prediction_raw: Optional[Any] = Field(default=None, description="Raw model output before class decoding")
     confidence: Optional[float] = Field(default=None, description="Confidence score percentage (0-100%) for classification")
     probabilities: Optional[Dict[str, float]] = Field(default=None, description="Per-class probability distribution")

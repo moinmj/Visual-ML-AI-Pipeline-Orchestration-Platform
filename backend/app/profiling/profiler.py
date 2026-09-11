@@ -19,8 +19,20 @@ class DataProfiler:
         elif pd.api.types.is_datetime64_any_dtype(series):
             return "datetime"
         else:
-            # Check if strings could be parsed as datetime or categorical
-            # If unique count is small compared to length, it's categorical
+            # Test if string samples can be parsed as datetime (e.g. "2020-01-01", "01/15/2021")
+            sample = series.dropna().head(50)
+            if not sample.empty and (sample.dtype == object or isinstance(sample.iloc[0], str)):
+                # Only attempt datetime parsing if string contains date delimiters or digits
+                first_val = str(sample.iloc[0])
+                if any(c in first_val for c in ["-", "/", ":", " "]) or (len(first_val) == 4 and first_val.isdigit()):
+                    try:
+                        parsed = pd.to_datetime(sample, errors="coerce")
+                        if parsed.notna().sum() / len(sample) >= 0.8:
+                            return "datetime"
+                    except Exception:
+                        pass
+
+            # Check if unique count is small compared to length, it's categorical
             non_null_count = series.dropna().count()
             if non_null_count == 0:
                 return "empty"
