@@ -370,13 +370,20 @@ async def test_list_workflows_lean_response_and_get_workflow_full_response():
         save_resp = await client.post("/api/v1/workflows/", json=save_payload)
         assert save_resp.status_code == 201
 
-        # 2. Test GET /api/v1/workflows/ (List API) -> Must be lean!
+        # 2. Test GET /api/v1/workflows/ (List API) -> Must return paginated envelope with lean data!
         list_resp = await client.get("/api/v1/workflows/")
         assert list_resp.status_code == 200
-        items = list_resp.json()
-        assert isinstance(items, list)
+        paginated_res = list_resp.json()
+        assert isinstance(paginated_res, dict)
+        assert "total_records" in paginated_res
+        assert "skip" in paginated_res
+        assert "limit" in paginated_res
+        assert "current_page" in paginated_res
+        assert "total_pages" in paginated_res
+        assert "data" in paginated_res
+        assert isinstance(paginated_res["data"], list)
 
-        matching = [item for item in items if item.get("id") == wf_id]
+        matching = [item for item in paginated_res["data"] if item.get("id") == wf_id]
         assert len(matching) == 1
         lean_item = matching[0]
 
@@ -404,21 +411,52 @@ async def test_list_workflows_lean_response_and_get_workflow_full_response():
         assert "last_execution" in full_item and full_item["last_execution"]["status"] == "SUCCESS"
         assert full_item["last_execution"]["final_metrics"]["accuracy"] == 0.92
 
-        # 4. Test Pagination parameters (limit, offset, page)
+        # 4. Test Pagination parameters (limit, skip, page)
         pag_resp_1 = await client.get("/api/v1/workflows/?limit=1")
         assert pag_resp_1.status_code == 200
-        items_p1 = pag_resp_1.json()
-        assert len(items_p1) == 1
+        res_p1 = pag_resp_1.json()
+        assert res_p1["limit"] == 1
+        assert res_p1["skip"] == 0
+        assert res_p1["current_page"] == 1
+        assert len(res_p1["data"]) == 1
 
-        pag_resp_2 = await client.get("/api/v1/workflows/?limit=1&offset=1")
+        pag_resp_2 = await client.get("/api/v1/workflows/?limit=1&skip=1")
         assert pag_resp_2.status_code == 200
-        items_p2 = pag_resp_2.json()
-        assert len(items_p2) <= 1
-        if items_p2:
-            assert items_p2[0]["id"] != items_p1[0]["id"]
+        res_p2 = pag_resp_2.json()
+        assert res_p2["skip"] == 1
+        assert res_p2["current_page"] == 2
+        assert len(res_p2["data"]) <= 1
 
         pag_resp_page = await client.get("/api/v1/workflows/?limit=1&page=2")
         assert pag_resp_page.status_code == 200
-        items_page = pag_resp_page.json()
-        assert items_page == items_p2
+        res_page = pag_resp_page.json()
+        assert res_page["data"] == res_p2["data"]
+
+        # 5. Test Search parameter
+        search_resp = await client.get("/api/v1/workflows/?search=Lean List Test")
+        assert search_resp.status_code == 200
+        search_data = search_resp.json()
+        assert search_data["total_records"] >= 1
+        assert any(item["id"] == wf_id for item in search_data["data"])
+
+        # 6. Test Status filters: success, failed, unrun (tested via both ?filters= and ?status=)
+        status_success_resp = await client.get("/api/v1/workflows/?filters=success")
+        assert status_success_resp.status_code == 200
+        success_data = status_success_resp.json()
+        assert all(item["last_execution_status"] == "SUCCESS" for item in success_data["data"])
+
+        status_failed_resp = await client.get("/api/v1/workflows/?filters=failed")
+        assert status_failed_resp.status_code == 200
+        failed_data = status_failed_resp.json()
+        assert all(item["last_execution_status"] in ("FAILED", "ERROR") for item in failed_data["data"])
+
+        status_unrun_resp = await client.get("/api/v1/workflows/?filters=unrun")
+        assert status_unrun_resp.status_code == 200
+        unrun_data = status_unrun_resp.json()
+        assert all(item["last_execution_status"] is None for item in unrun_data["data"])
+
+        # Also verify backward compatible alias ?status=
+        alias_resp = await client.get("/api/v1/workflows/?status=success")
+        assert alias_resp.status_code == 200
+        assert alias_resp.json()["total_records"] == success_data["total_records"]
 
