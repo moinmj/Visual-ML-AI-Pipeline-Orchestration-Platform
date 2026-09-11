@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from datetime import datetime
 
 
@@ -46,3 +46,46 @@ class WorkflowResponse(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class WorkflowExecutionSummaryResponse(BaseModel):
+    id: str
+    workflow_id: str
+    version_number: int
+    run_label: Optional[str] = None
+    status: str
+    total_duration_ms: Optional[float] = 0.0
+    metrics: Optional[Dict[str, Any]] = None
+    nodes_count: int = 0
+    edges_count: int = 0
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class WorkflowExecutionDetailResponse(BaseModel):
+    id: str
+    workflow_id: str
+    version_number: int
+    run_label: Optional[str] = None
+    status: str
+    total_duration_ms: Optional[float] = 0.0
+    snapshot_nodes: List[Dict[str, Any]] = Field(default_factory=list)
+    snapshot_edges: List[Dict[str, Any]] = Field(default_factory=list)
+    snapshot_node_configs: Dict[str, Any] = Field(default_factory=dict)
+    metrics: Optional[Dict[str, Any]] = None
+    reports: Optional[Dict[str, Any]] = None
+    step_snapshots: Optional[Dict[str, Any]] = None
+    logs: Optional[Union[List[str], List[Dict[str, Any]]]] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class WorkflowCompareResponse(BaseModel):
+    workflow_id: str
+    run_a: Dict[str, Any]
+    run_b: Dict[str, Any]
+    metrics_diff: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    config_diff: Dict[str, Any] = Field(default_factory=dict)
+

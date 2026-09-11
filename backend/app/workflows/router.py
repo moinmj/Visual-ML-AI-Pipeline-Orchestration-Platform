@@ -4,6 +4,7 @@ from typing import Dict, Any, List, Optional, Union
 import uuid
 import pandas as pd
 from datetime import datetime, timezone, timedelta
+from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
@@ -11,8 +12,15 @@ from backend.app.infrastructure.database.session import get_db
 from backend.app.engine.dag.graph import WorkflowGraph
 from backend.app.engine.execution.executor import DAGExecutor, WorkflowExecutionResult
 from backend.app.engine.execution.job_manager import job_manager
-from backend.app.workflows.models import Workflow
-from backend.app.workflows.schemas import WorkflowCreate, WorkflowUpdate, WorkflowResponse
+from backend.app.workflows.models import Workflow, WorkflowExecution
+from backend.app.workflows.schemas import (
+    WorkflowCreate,
+    WorkflowUpdate,
+    WorkflowResponse,
+    WorkflowExecutionSummaryResponse,
+    WorkflowExecutionDetailResponse,
+    WorkflowCompareResponse
+)
 from backend.app.engine.inference import (
     PipelineInferencer,
     PredictionRequest,
@@ -157,6 +165,58 @@ async def resolve_or_normalize_last_execution(
         pass
 
     return None
+
+
+async def record_workflow_execution_history(
+    db: AsyncSession,
+    workflow_id: str,
+    execution_id: str,
+    status_str: str,
+    total_duration_ms: float,
+    nodes: List[Dict[str, Any]],
+    edges: List[Dict[str, Any]],
+    node_configs: Dict[str, Any],
+    metrics: Optional[Dict[str, Any]] = None,
+    reports: Optional[Dict[str, Any]] = None,
+    step_snapshots: Optional[Dict[str, Any]] = None,
+    logs: Optional[Any] = None,
+    run_label: Optional[str] = None
+) -> WorkflowExecution:
+    """
+    Persists an immutable historical execution snapshot linking the exact graph configuration
+    (nodes, edges, node_configs) with its execution diagnostics (metrics, reports, step snapshots, logs).
+    """
+    # Check if this execution_id already exists to prevent duplicate entries
+    existing = await db.execute(select(WorkflowExecution).where(WorkflowExecution.id == execution_id))
+    ex_row = existing.scalar_one_or_none()
+    if ex_row:
+        return ex_row
+
+    # Determine next auto-incrementing version number for this workflow
+    max_ver_stmt = select(func.max(WorkflowExecution.version_number)).where(WorkflowExecution.workflow_id == workflow_id)
+    max_ver_res = await db.execute(max_ver_stmt)
+    current_max = max_ver_res.scalar() or 0
+    next_ver = current_max + 1
+
+    exec_record = WorkflowExecution(
+        id=execution_id,
+        workflow_id=workflow_id,
+        version_number=next_ver,
+        run_label=run_label or f"Run #{next_ver}",
+        status=status_str or "SUCCESS",
+        total_duration_ms=total_duration_ms or 0.0,
+        snapshot_nodes=jsonable_encoder(nodes or []),
+        snapshot_edges=jsonable_encoder(edges or []),
+        snapshot_node_configs=jsonable_encoder(node_configs or {}),
+        metrics=jsonable_encoder(metrics or {}),
+        reports=jsonable_encoder(reports or {}),
+        step_snapshots=jsonable_encoder(step_snapshots or {}),
+        logs=jsonable_encoder(logs or [])
+    )
+    db.add(exec_record)
+    await db.commit()
+    await db.refresh(exec_record)
+    return exec_record
 
 
 # -------------------------------------------------------------
@@ -420,10 +480,39 @@ async def save_workflow_execution_report(
         existing_wf=wf,
         dataset_id=wf.dataset_id
     )
-    wf.last_execution = resolved_exec or jsonable_encoder(execution_payload)
+    exec_dict = resolved_exec or dict(execution_payload)
+    wf.last_execution = jsonable_encoder(exec_dict)
     wf.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(wf)
+
+    # Record history snapshot
+    try:
+        e_id = exec_dict.get("execution_id") or str(uuid.uuid4())
+        await record_workflow_execution_history(
+            db=db,
+            workflow_id=workflow_id,
+            execution_id=e_id,
+            status_str=exec_dict.get("status", "SUCCESS"),
+            total_duration_ms=exec_dict.get("total_duration_ms", 0.0),
+            nodes=wf.nodes or [],
+            edges=wf.edges or [],
+            node_configs=wf.node_configs or {},
+            metrics=exec_dict.get("final_metrics") or exec_dict.get("metrics"),
+            reports={
+                "anomaly_summary": exec_dict.get("anomaly_summary"),
+                "forecasting_summary": exec_dict.get("forecasting_summary"),
+                "governance_summary": exec_dict.get("governance_summary"),
+                "node_results": exec_dict.get("node_results"),
+                "inference_schema": exec_dict.get("inference_schema"),
+            },
+            step_snapshots=exec_dict.get("step_snapshots"),
+            logs=exec_dict.get("execution_logs") or exec_dict.get("logs"),
+            run_label=wf.name
+        )
+    except Exception:
+        pass
+
     return wf
 
 
@@ -672,6 +761,32 @@ async def execute_workflow(
                 "inference_schema": getattr(result, "inference_schema", None),
             })
             await db.commit()
+
+            # Record immutable history snapshot
+            try:
+                await record_workflow_execution_history(
+                    db=db,
+                    workflow_id=target_id,
+                    execution_id=result.execution_id,
+                    status_str=result.status,
+                    total_duration_ms=result.total_duration_ms or 0.0,
+                    nodes=wf_rec.nodes or [],
+                    edges=wf_rec.edges or [],
+                    node_configs=wf_rec.node_configs or {},
+                    metrics=result.final_metrics,
+                    reports={
+                        "anomaly_summary": result.anomaly_summary,
+                        "forecasting_summary": result.forecasting_summary,
+                        "governance_summary": result.governance_summary,
+                        "node_results": result.node_results,
+                        "inference_schema": getattr(result, "inference_schema", None),
+                    },
+                    step_snapshots=result.step_snapshots,
+                    logs=result.logs,
+                    run_label=workflow_name or getattr(workflow, "name", None) or wf_rec.name
+                )
+            except Exception:
+                pass
     return result
 
 
@@ -744,6 +859,33 @@ async def execute_workflow_by_id(
         "inference_schema": getattr(exec_result, "inference_schema", None),
     })
     await db.commit()
+
+    # Record immutable history snapshot
+    try:
+        await record_workflow_execution_history(
+            db=db,
+            workflow_id=workflow_id,
+            execution_id=exec_result.execution_id,
+            status_str=exec_result.status,
+            total_duration_ms=exec_result.total_duration_ms or 0.0,
+            nodes=wf.nodes or [],
+            edges=wf.edges or [],
+            node_configs=wf.node_configs or {},
+            metrics=exec_result.final_metrics,
+            reports={
+                "anomaly_summary": exec_result.anomaly_summary,
+                "forecasting_summary": exec_result.forecasting_summary,
+                "governance_summary": exec_result.governance_summary,
+                "node_results": exec_result.node_results,
+                "inference_schema": getattr(exec_result, "inference_schema", None),
+            },
+            step_snapshots=exec_result.step_snapshots,
+            logs=exec_result.logs,
+            run_label=wf.name
+        )
+    except Exception:
+        pass
+
     return exec_result
 
 
@@ -849,6 +991,313 @@ async def get_execution_inference_schema(execution_id: str):
         sample_payload=bundle.get("sample_row", {}),
         time_series_meta=bundle.get("forecasting_summary")
     )
+
+
+# -------------------------------------------------------------
+# WORKFLOW VERSION HISTORY, AUDIT TRAIL & ROLLBACK ENDPOINTS (Option B)
+# -------------------------------------------------------------
+
+@router.get(
+    "/{workflow_id}/history/compare",
+    response_model=WorkflowCompareResponse,
+    dependencies=[Depends(get_current_user)]
+)
+async def compare_workflow_executions(
+    workflow_id: str,
+    run_a: str = Query(..., description="First execution ID to compare"),
+    run_b: str = Query(..., description="Second execution ID to compare"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Endpoint 4: Side-by-Side Execution Diffing.
+    Compares metrics, hyperparameter changes, and graph modifications between two runs.
+    """
+    res_a = await db.execute(select(WorkflowExecution).where(WorkflowExecution.workflow_id == workflow_id, WorkflowExecution.id == run_a))
+    exec_a = res_a.scalar_one_or_none()
+    if not exec_a:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Execution '{run_a}' not found for workflow '{workflow_id}'.")
+
+    res_b = await db.execute(select(WorkflowExecution).where(WorkflowExecution.workflow_id == workflow_id, WorkflowExecution.id == run_b))
+    exec_b = res_b.scalar_one_or_none()
+    if not exec_b:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Execution '{run_b}' not found for workflow '{workflow_id}'.")
+
+    # 1. Compare Metrics
+    metrics_a = exec_a.metrics or {}
+    metrics_b = exec_b.metrics or {}
+    all_metric_keys = sorted(list(set(list(metrics_a.keys()) + list(metrics_b.keys()))))
+    
+    metrics_diff: Dict[str, Dict[str, Any]] = {}
+    lower_is_better_keys = {"loss", "log_loss", "mae", "mse", "rmse", "mean_squared_error", "mean_absolute_error"}
+
+    for k in all_metric_keys:
+        val_a = metrics_a.get(k)
+        val_b = metrics_b.get(k)
+        if isinstance(val_a, (int, float)) and isinstance(val_b, (int, float)):
+            delta = round(float(val_b) - float(val_a), 4)
+            pct_change = round((delta / abs(val_a)) * 100, 2) if val_a != 0 else None
+            higher_is_better = k.lower() not in lower_is_better_keys
+            improved = (delta > 0) if higher_is_better else (delta < 0)
+            metrics_diff[k] = {
+                "val_a": val_a,
+                "val_b": val_b,
+                "delta": delta,
+                "pct_change": pct_change,
+                "improved": improved
+            }
+
+    # 2. Compare Graph Nodes & Configs
+    nodes_a = {n.get("id"): n for n in (exec_a.snapshot_nodes or []) if isinstance(n, dict)}
+    nodes_b = {n.get("id"): n for n in (exec_b.snapshot_nodes or []) if isinstance(n, dict)}
+
+    nodes_added = [
+        {"id": nid, "recipe_id": n.get("recipe_id") or n.get("data", {}).get("recipe_id"), "label": n.get("content") or n.get("label")}
+        for nid, n in nodes_b.items() if nid not in nodes_a
+    ]
+    nodes_removed = [
+        {"id": nid, "recipe_id": n.get("recipe_id") or n.get("data", {}).get("recipe_id"), "label": n.get("content") or n.get("label")}
+        for nid, n in nodes_a.items() if nid not in nodes_b
+    ]
+
+    configs_a = exec_a.snapshot_node_configs or {}
+    configs_b = exec_b.snapshot_node_configs or {}
+    common_node_ids = set(nodes_a.keys()).intersection(set(nodes_b.keys()))
+
+    parameter_changes = []
+    for nid in common_node_ids:
+        cfg_entry_a = configs_a.get(nid, {})
+        cfg_entry_b = configs_b.get(nid, {})
+        params_a = cfg_entry_a.get("config", {}) if isinstance(cfg_entry_a, dict) else {}
+        params_b = cfg_entry_b.get("config", {}) if isinstance(cfg_entry_b, dict) else {}
+        r_id = (cfg_entry_b.get("recipe_id") or cfg_entry_a.get("recipe_id") or 
+                nodes_b[nid].get("recipe_id") or nodes_b[nid].get("data", {}).get("recipe_id"))
+
+        all_param_keys = set(list(params_a.keys()) + list(params_b.keys()))
+        for p in all_param_keys:
+            v_a = params_a.get(p)
+            v_b = params_b.get(p)
+            if v_a != v_b:
+                parameter_changes.append({
+                    "node_id": nid,
+                    "recipe_id": r_id,
+                    "parameter": p,
+                    "val_run_a": v_a,
+                    "val_run_b": v_b
+                })
+
+    config_diff = {
+        "nodes_added": nodes_added,
+        "nodes_removed": nodes_removed,
+        "parameter_changes": parameter_changes,
+        "total_nodes_run_a": len(nodes_a),
+        "total_nodes_run_b": len(nodes_b),
+    }
+
+    return WorkflowCompareResponse(
+        workflow_id=workflow_id,
+        run_a={
+            "id": exec_a.id,
+            "version_number": exec_a.version_number,
+            "run_label": exec_a.run_label,
+            "status": exec_a.status,
+            "created_at": exec_a.created_at.isoformat() if exec_a.created_at else "",
+            "metrics": exec_a.metrics
+        },
+        run_b={
+            "id": exec_b.id,
+            "version_number": exec_b.version_number,
+            "run_label": exec_b.run_label,
+            "status": exec_b.status,
+            "created_at": exec_b.created_at.isoformat() if exec_b.created_at else "",
+            "metrics": exec_b.metrics
+        },
+        metrics_diff=metrics_diff,
+        config_diff=config_diff
+    )
+
+
+@router.get(
+    "/{workflow_id}/history",
+    response_model=List[WorkflowExecutionSummaryResponse],
+    dependencies=[Depends(get_current_user)]
+)
+async def list_workflow_history(
+    workflow_id: str,
+    limit: int = Query(50, ge=1, le=200, description="Max history runs to retrieve"),
+    offset: int = Query(0, ge=0, description="Offset for pagination"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Endpoint 1: Lightweight History Timeline List.
+    Retrieves execution history sorted in descending version order.
+    Includes backward-compatibility auto-synthesis if the workflow has an existing last_execution.
+    """
+    # Verify workflow exists
+    wf_res = await db.execute(select(Workflow).where(Workflow.id == workflow_id))
+    wf = wf_res.scalar_one_or_none()
+    if not wf:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Workflow workbook '{workflow_id}' not found."
+        )
+
+    stmt = (
+        select(WorkflowExecution)
+        .where(WorkflowExecution.workflow_id == workflow_id)
+        .order_by(WorkflowExecution.version_number.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    res = await db.execute(stmt)
+    executions = res.scalars().all()
+
+    # Backward-compatibility fallback: synthesize Run #1 if none exist but last_execution exists
+    if not executions and wf.last_execution and isinstance(wf.last_execution, dict):
+        last_ex = wf.last_execution
+        synth_rec = WorkflowExecution(
+            id=last_ex.get("execution_id") or str(uuid.uuid4()),
+            workflow_id=workflow_id,
+            version_number=1,
+            run_label="Run #1 (Initial Execution)",
+            status=last_ex.get("status", "SUCCESS"),
+            total_duration_ms=last_ex.get("total_duration_ms", 0.0),
+            snapshot_nodes=jsonable_encoder(wf.nodes or []),
+            snapshot_edges=jsonable_encoder(wf.edges or []),
+            snapshot_node_configs=jsonable_encoder(wf.node_configs or {}),
+            metrics=jsonable_encoder(last_ex.get("final_metrics") or last_ex.get("metrics") or {}),
+            reports=jsonable_encoder({
+                "anomaly_summary": last_ex.get("anomaly_summary"),
+                "forecasting_summary": last_ex.get("forecasting_summary"),
+                "governance_summary": last_ex.get("governance_summary"),
+                "node_results": last_ex.get("node_results"),
+                "inference_schema": last_ex.get("inference_schema"),
+            }),
+            step_snapshots=jsonable_encoder(last_ex.get("step_snapshots") or {}),
+            logs=jsonable_encoder(last_ex.get("execution_logs") or last_ex.get("logs") or []),
+        )
+        db.add(synth_rec)
+        await db.commit()
+        await db.refresh(synth_rec)
+        executions = [synth_rec]
+
+    return [
+        WorkflowExecutionSummaryResponse(
+            id=ex.id,
+            workflow_id=ex.workflow_id,
+            version_number=ex.version_number,
+            run_label=ex.run_label,
+            status=ex.status,
+            total_duration_ms=ex.total_duration_ms,
+            metrics=ex.metrics,
+            nodes_count=len(ex.snapshot_nodes or []),
+            edges_count=len(ex.snapshot_edges or []),
+            created_at=ex.created_at
+        )
+        for ex in executions
+    ]
+
+
+@router.get(
+    "/{workflow_id}/history/{execution_id}",
+    response_model=WorkflowExecutionDetailResponse,
+    dependencies=[Depends(get_current_user)]
+)
+async def get_workflow_execution_detail(
+    workflow_id: str,
+    execution_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Endpoint 2: Run Deep-Dive (Full Frozen Snapshot & Diagnostics).
+    Returns complete frozen graph configurations, reports, confusion matrices, and step logs.
+    """
+    stmt = select(WorkflowExecution).where(
+        WorkflowExecution.workflow_id == workflow_id,
+        WorkflowExecution.id == execution_id
+    )
+    res = await db.execute(stmt)
+    ex = res.scalar_one_or_none()
+    if not ex:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Execution '{execution_id}' not found for workflow '{workflow_id}'."
+        )
+
+    return WorkflowExecutionDetailResponse(
+        id=ex.id,
+        workflow_id=ex.workflow_id,
+        version_number=ex.version_number,
+        run_label=ex.run_label,
+        status=ex.status,
+        total_duration_ms=ex.total_duration_ms,
+        snapshot_nodes=ex.snapshot_nodes or [],
+        snapshot_edges=ex.snapshot_edges or [],
+        snapshot_node_configs=ex.snapshot_node_configs or {},
+        metrics=ex.metrics,
+        reports=ex.reports,
+        step_snapshots=ex.step_snapshots,
+        logs=ex.logs,
+        created_at=ex.created_at
+    )
+
+
+@router.post(
+    "/{workflow_id}/history/{execution_id}/rollback",
+    response_model=WorkflowResponse,
+    dependencies=[Depends(require_role("Tenant Admin", "Data Scientist", "ML Engineer"))]
+)
+async def rollback_workflow_to_execution(
+    workflow_id: str,
+    execution_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Endpoint 3: One-Click Rollback / Restore.
+    Restores the workflow's active nodes, edges, node_configs, and last_execution to match this historical run.
+    """
+    res_exec = await db.execute(
+        select(WorkflowExecution).where(
+            WorkflowExecution.workflow_id == workflow_id,
+            WorkflowExecution.id == execution_id
+        )
+    )
+    ex = res_exec.scalar_one_or_none()
+    if not ex:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Execution '{execution_id}' not found for workflow '{workflow_id}'."
+        )
+
+    res_wf = await db.execute(select(Workflow).where(Workflow.id == workflow_id))
+    wf = res_wf.scalar_one_or_none()
+    if not wf:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Workflow '{workflow_id}' not found."
+        )
+
+    # Overwrite canvas with historical snapshot
+    wf.nodes = ex.snapshot_nodes
+    wf.edges = ex.snapshot_edges
+    wf.node_configs = ex.snapshot_node_configs
+
+    # Reconstruct last_execution payload from snapshot
+    restored_last_exec = {
+        "execution_id": ex.id,
+        "status": ex.status,
+        "total_duration_ms": ex.total_duration_ms,
+        "final_metrics": ex.metrics,
+        **(ex.reports or {}),
+        "step_snapshots": ex.step_snapshots,
+        "execution_logs": ex.logs,
+        "rolled_back_from_version": ex.version_number
+    }
+    wf.last_execution = jsonable_encoder(restored_last_exec)
+    wf.updated_at = datetime.now(timezone.utc)
+
+    await db.commit()
+    await db.refresh(wf)
+    return wf
 
 
 @router.post("/predict", response_model=PredictionResponse)

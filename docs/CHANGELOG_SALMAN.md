@@ -205,3 +205,21 @@ Expanded and exposed parameter controls across all core model trainers:
      $$\text{Ingestion (1.0)} \rightarrow \text{NLP (1.4-1.6)} \rightarrow \text{Deduplication (2.0)} \rightarrow \text{Outlier Guardrail (2.02)} \rightarrow \text{Sanitizer (2.05)} \rightarrow \text{Imputation (2.1)} \rightarrow \text{Corr/Var Filters (2.15-2.18)} \rightarrow \text{Encoding (2.2)} \rightarrow \text{Scaling (2.4)} \rightarrow \text{Lag Features (2.5)} \rightarrow \text{Train/Test Split (3.0)} \rightarrow \mathbf{\text{SMOTE Resampler (3.5)}} \rightarrow \text{Model Training (4.0)} \rightarrow \text{Evaluation (5.0)} \rightarrow \text{MLflow Governance (6.0)}$$
    - Automatic secondary branch edge generation: `train_test_split` $\rightarrow$ `model_evaluator` preserves unbiased $X_{\text{test}}, y_{\text{test}}$ partitions while the resampler balances only $X_{\text{train}}, y_{\text{train}}$.
    - Supported both in the FastAPI endpoint (`POST /api/v1/recommend/autowire`) and the interactive Streamlit Whiteboard canvas.
+
+---
+
+## 6. Workflow Version History, Audit Trail & Rollback (Option B Suite)
+
+*Files: `backend/app/workflows/models.py`, `backend/app/workflows/schemas.py`, `backend/app/workflows/router.py`, `backend/tests/test_workflow_history.py`, `ui_prototype/app.py`*
+
+1. **Immutable Execution Ledger (`WorkflowExecution` Model):**
+   - Table `workflow_executions` captures an immutable snapshot on every pipeline run (`execute_workflow`, `execute_workflow_by_id`, `save_workflow_execution_report`).
+   - Stores: `id`, `workflow_id`, `version_number` (auto-incrementing: 1, 2, 3...), `run_label`, `status`, `total_duration_ms`, `snapshot_nodes`, `snapshot_edges`, `snapshot_node_configs`, `metrics`, `reports`, `step_snapshots`, `logs`, `created_at`.
+2. **REST API Suite (4 Dedicated Endpoints):**
+   - **`GET /api/v1/workflows/{id}/history`**: Fast lightweight timeline list sorted in descending version order. Includes automatic backward-compatibility synthesis of Run #1 for legacy workbooks.
+   - **`GET /api/v1/workflows/{id}/history/{exec_id}`**: Full deep-dive returning frozen canvas graph snapshots, confusion matrix, ROC curve, and step logs.
+   - **`POST /api/v1/workflows/{id}/history/{exec_id}/rollback`**: One-click rollback restoring the active workbook's `nodes`, `edges`, `node_configs`, and `last_execution` to match the historical run.
+   - **`GET /api/v1/workflows/{id}/history/compare?run_a={id}&run_b={id}`**: Side-by-side run comparison computing metric deltas ($\Delta$ Accuracy, $\Delta$ Recall, $\Delta$ F1) and configuration diffs (nodes added/removed, hyperparameter changes).
+3. **Interactive Whiteboard UI Integration:**
+   - Added **"🕒 Version History & Execution Audit Trail"** expander with timeline cards, run inspect modal, one-click whiteboard rollback, and side-by-side A/B comparison table.
+
