@@ -303,18 +303,25 @@ async def save_workflow(
 @router.get("/", response_model=List[WorkflowListItemResponse])
 async def list_workflows(
     include_deleted: bool = False,
+    limit: int = Query(50, ge=1, le=200, description="Max workbooks to retrieve per page"),
+    offset: int = Query(0, ge=0, description="Offset index for pagination"),
+    page: Optional[int] = Query(None, ge=1, description="Optional 1-indexed page number (e.g. page=2 with limit=50 sets offset=50)"),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    List all saved pipeline workbooks with lightweight summary metadata.
+    List all saved pipeline workbooks with lightweight summary metadata and pagination support.
     Excludes heavy nodes, edges, node_configs, and raw execution payloads.
     Surfaces top-level execution status, latest metrics, and node counts.
     """
+    actual_offset = offset
+    if page is not None and offset == 0:
+        actual_offset = (page - 1) * limit
+
     query = select(Workflow)
     if not include_deleted:
         query = query.where(Workflow.is_active == True)
     
-    query = query.order_by(Workflow.updated_at.desc())
+    query = query.order_by(Workflow.updated_at.desc()).offset(actual_offset).limit(limit)
     result = await db.execute(query)
     workflows = result.scalars().all()
 

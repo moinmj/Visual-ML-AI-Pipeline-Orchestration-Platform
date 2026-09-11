@@ -404,3 +404,21 @@ async def test_list_workflows_lean_response_and_get_workflow_full_response():
         assert "last_execution" in full_item and full_item["last_execution"]["status"] == "SUCCESS"
         assert full_item["last_execution"]["final_metrics"]["accuracy"] == 0.92
 
+        # 4. Test Pagination parameters (limit, offset, page)
+        pag_resp_1 = await client.get("/api/v1/workflows/?limit=1")
+        assert pag_resp_1.status_code == 200
+        items_p1 = pag_resp_1.json()
+        assert len(items_p1) == 1
+
+        pag_resp_2 = await client.get("/api/v1/workflows/?limit=1&offset=1")
+        assert pag_resp_2.status_code == 200
+        items_p2 = pag_resp_2.json()
+        assert len(items_p2) <= 1
+        if items_p2:
+            assert items_p2[0]["id"] != items_p1[0]["id"]
+
+        pag_resp_page = await client.get("/api/v1/workflows/?limit=1&page=2")
+        assert pag_resp_page.status_code == 200
+        items_page = pag_resp_page.json()
+        assert items_page == items_p2
+
