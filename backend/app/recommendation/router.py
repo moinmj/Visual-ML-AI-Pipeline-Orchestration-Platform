@@ -140,14 +140,25 @@ async def autowire_nodes(payload: AutoWireRequest):
         "text_preprocessor": 1.4,
         "text_vectorizer": 1.6,
 
-        # Preprocessing (Deduplicate -> Impute NaNs -> Encode Categories -> Scale Numbers)
+        # Preprocessing (Deduplicate -> Outlier Guardrail -> Sanitize -> Impute NaNs -> Filter Correlated -> Filter Variance -> Encode Categories -> Scale Numbers -> Lag Features)
+        "duplicate_remover": 2.0,
         "duplicates": 2.0,
+        "statistical_guardrail": 2.02,
+        "category_sanitizer": 2.05,
+        "missing_value_imputer": 2.1,
         "missing_values": 2.1,
+        "correlation_filter": 2.15,
+        "variance_filter": 2.18,
         "categorical_encoder": 2.2,
         "feature_scaler": 2.4,
+        "lag_feature_engineering": 2.5,
+        "lag_features": 2.5,
 
         # Splitting
         "train_test_split": 3.0,
+
+        # Resampling / Balancing (Post-split training resampling)
+        "class_imbalance_resampler": 3.5,
 
         # Training / Forecasting / Anomaly
         "xgboost_trainer": 4.0,
@@ -156,7 +167,6 @@ async def autowire_nodes(payload: AutoWireRequest):
         "random_forest_trainer": 4.0,
         "logistic_regression_trainer": 4.0,
         "isolation_forest": 4.0,
-        "statistical_guardrail": 4.0,
         "prophet_forecaster": 4.0,
         "arima_forecaster": 4.0,
 
@@ -186,14 +196,26 @@ async def autowire_nodes(payload: AutoWireRequest):
             return 1.6
         elif any(k in label for k in ["dup", "dedup"]):
             return 2.0
+        elif any(k in label for k in ["guardrail", "outlier", "iqr", "zscore", "z_score"]):
+            return 2.02
+        elif any(k in label for k in ["sanitiz", "clean_cat"]):
+            return 2.05
         elif any(k in label for k in ["impute", "missing", "nan"]):
             return 2.1
+        elif any(k in label for k in ["corr", "correlation"]):
+            return 2.15
+        elif any(k in label for k in ["var", "variance"]):
+            return 2.18
         elif any(k in label for k in ["encode", "onehot", "label_enc", "categorical"]):
             return 2.2
         elif any(k in label for k in ["scale", "scaler", "standard", "minmax", "robust"]):
             return 2.4
+        elif any(k in label for k in ["lag", "timeseries", "window"]):
+            return 2.5
         elif "split" in label:
             return 3.0
+        elif any(k in label for k in ["imbalance", "smote", "resample", "oversample", "undersample"]):
+            return 3.5
         elif any(k in label for k in ["xgb", "lightgbm", "catboost", "model", "train", "forest", "linear", "logistic"]):
             return 4.0
         elif any(k in label for k in ["eval", "metric", "performance"]):
