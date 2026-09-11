@@ -106,8 +106,8 @@ class AIRecommender:
         if missing_cells > 0:
             cleaning_steps.append({
                 "recipe_id": "missing_value_imputer",
-                "name": "🧹 Missing Value Imputer",
-                "recipe_name": "🧹 Missing Value Imputer",
+                "name": "Missing Value Imputer",
+                "recipe_name": "Missing Value Imputer",
                 "config": {"strategy": "median"},
                 "reason": f"Dataset contains {missing_cells} missing cells requiring imputation."
             })
@@ -119,8 +119,8 @@ class AIRecommender:
         if feature_cats:
             cleaning_steps.append({
                 "recipe_id": "categorical_encoder",
-                "name": "🔤 Categorical One-Hot Encoder",
-                "recipe_name": "🔤 Categorical One-Hot Encoder",
+                "name": "Categorical One-Hot Encoder",
+                "recipe_name": "Categorical One-Hot Encoder",
                 "config": {"method": "one_hot"},
                 "reason": f"Found {len(feature_cats)} categorical features ({', '.join(feature_cats[:3])}) requiring numerical encoding."
             })
@@ -128,8 +128,8 @@ class AIRecommender:
         if feature_nums:
             cleaning_steps.append({
                 "recipe_id": "feature_scaler",
-                "name": "⚖️ Feature Scaler",
-                "recipe_name": "⚖️ Feature Scaler",
+                "name": "Feature Scaler",
+                "recipe_name": "Feature Scaler",
                 "config": {"method": "standard"},
                 "reason": "Standardizing variance across numerical features for model stability."
             })
@@ -139,34 +139,34 @@ class AIRecommender:
         if detected_task in ["classification", "regression"]:
             recommended_models.append({
                 "recipe_id": "xgboost_trainer",
-                "name": f"⚡ XGBoost {detected_task.title()}",
+                "name": f"XGBoost {detected_task.title()}",
                 "tier": "Gold Standard",
                 "reason": "Highest accuracy regularized gradient boosting for tabular datasets."
             })
             recommended_models.append({
                 "recipe_id": "lightgbm_trainer",
-                "name": f"🚀 LightGBM {detected_task.title()}",
+                "name": f"LightGBM {detected_task.title()}",
                 "tier": "High Speed",
                 "reason": "Optimal for ultra-fast training with histogram-based leaf growth."
             })
             if feature_cats:
                 recommended_models.append({
                     "recipe_id": "catboost_trainer",
-                    "name": f"🐱 CatBoost {detected_task.title()}",
+                    "name": f"CatBoost {detected_task.title()}",
                     "tier": "Categorical",
                     "reason": "Native handling of high-cardinality categorical features without one-hot expansion."
                 })
             if date_cols:
                 recommended_models.append({
                     "recipe_id": "prophet_forecaster" if row_count >= 60 else "arima_forecaster",
-                    "name": "🔮 Meta Prophet Forecaster" if row_count >= 60 else "📊 ARIMA / SARIMAX",
+                    "name": "Meta Prophet Forecaster" if row_count >= 60 else "ARIMA / SARIMAX",
                     "tier": "Time Series",
                     "reason": "Captures trend and seasonality for long time series." if row_count >= 60 else "Optimal classical statistical forecaster for short time series."
                 })
             else:
                 recommended_models.append({
                     "recipe_id": "random_forest_trainer",
-                    "name": "🌲 Random Forest",
+                    "name": "Random Forest",
                     "tier": "Ensemble Baseline",
                     "reason": "Robust non-linear bagging baseline."
                 })
@@ -175,38 +175,38 @@ class AIRecommender:
             if row_count < 60:
                 recommended_models.append({
                     "recipe_id": "arima_forecaster",
-                    "name": "📊 ARIMA / SARIMAX",
+                    "name": "ARIMA / SARIMAX",
                     "tier": "Statistical Baseline",
                     "reason": "Optimal classical statistical baseline for small time series datasets (< 60 points)."
                 })
                 recommended_models.append({
                     "recipe_id": "prophet_forecaster",
-                    "name": "🔮 Meta Prophet",
+                    "name": "Meta Prophet",
                     "tier": "Trend & Seasonality",
                     "reason": "Decomposes trend and yearly seasonality."
                 })
             else:
                 recommended_models.append({
                     "recipe_id": "prophet_forecaster",
-                    "name": "🔮 Meta Prophet",
+                    "name": "Meta Prophet",
                     "tier": "Business Standard",
                     "reason": "Decomposes trend, weekly/yearly seasonality, and handles irregular intervals with prediction bands."
                 })
                 recommended_models.append({
                     "recipe_id": "arima_forecaster",
-                    "name": "📊 ARIMA / SARIMAX",
+                    "name": "ARIMA / SARIMAX",
                     "tier": "Statistical Baseline",
                     "reason": "Rigorous classical statistical baseline with lag and error differencing."
                 })
             recommended_models.append({
                 "recipe_id": "xgboost_trainer",
-                "name": "⚡ XGBoost Regressor (Temporal)",
+                "name": "XGBoost Regressor (Temporal)",
                 "tier": "Gradient Boosting",
                 "reason": "Tree-based gradient boosting on temporal feature lags."
             })
             recommended_models.append({
                 "recipe_id": "lightgbm_trainer",
-                "name": "🚀 LightGBM Regressor (Temporal)",
+                "name": "LightGBM Regressor (Temporal)",
                 "tier": "High Speed",
                 "reason": "Ultra-fast histogram gradient boosting with native categorical and temporal handling."
             })
@@ -214,13 +214,13 @@ class AIRecommender:
         else: # Anomaly Detection
             recommended_models.append({
                 "recipe_id": "isolation_forest",
-                "name": "🌲 Isolation Forest",
+                "name": "Isolation Forest",
                 "tier": "Outlier Standard",
                 "reason": "Linear-time unsupervised isolation partitioning that scales to high dimensions."
             })
             recommended_models.append({
                 "recipe_id": "statistical_guardrail",
-                "name": "🛡️ Statistical Guardrail",
+                "name": "Statistical Guardrail",
                 "tier": "ELT Filter",
                 "reason": "Z-Score / IQR standard-deviation thresholding for data quality filtering."
             })
@@ -276,7 +276,7 @@ class AIRecommender:
         nodes.append({
             "id": "node_csv",
             "recipe_id": "csv_loader",
-            "label": "📄 Data Ingestion",
+            "label": "Data Ingestion",
             "position": {"x": 40, "y": 100},
             "config": csv_config
         })
@@ -295,7 +295,7 @@ class AIRecommender:
             nodes.append({
                 "id": "node_impute",
                 "recipe_id": "missing_value_imputer",
-                "label": "🧹 Time Imputer (ffill)",
+                "label": "Time Imputer (ffill)",
                 "position": {"x": cur_x, "y": 100},
                 "config": {"strategy": "ffill"}
             })
@@ -314,7 +314,7 @@ class AIRecommender:
             if chosen_recipe not in ["prophet_forecaster", "arima_forecaster"]:
                 chosen_recipe = "prophet_forecaster"
 
-            fc_label = "📊 ARIMA / SARIMAX" if chosen_recipe == "arima_forecaster" else "🔮 Prophet Forecaster"
+            fc_label = "ARIMA / SARIMAX" if chosen_recipe == "arima_forecaster" else "Prophet Forecaster"
             p_config = {
                 "date_column": date_column or "Date",
                 "target_column": target_col or "Value",
@@ -340,7 +340,7 @@ class AIRecommender:
             nodes.append({
                 "id": "node_impute",
                 "recipe_id": "missing_value_imputer",
-                "label": "🧹 Imputer (Median)",
+                "label": "Imputer (Median)",
                 "position": {"x": cur_x, "y": 100},
                 "config": {"strategy": "median"}
             })
@@ -357,7 +357,7 @@ class AIRecommender:
             nodes.append({
                 "id": "node_iso",
                 "recipe_id": "isolation_forest",
-                "label": "🌲 Isolation Forest",
+                "label": "Isolation Forest",
                 "position": {"x": cur_x, "y": 100},
                 "config": {"contamination": 0.05, "n_estimators": 100}
             })
@@ -401,7 +401,6 @@ class AIRecommender:
 
             # 3. Train/Test Splitter
             split_id = "node_split"
-            # Auto-enable chronological split if date columns are present to prevent leakage
             split_cfg: Dict[str, Any] = {
                 "target_column": target_col or "target",
                 "test_size": 0.2
@@ -412,7 +411,7 @@ class AIRecommender:
             nodes.append({
                 "id": split_id,
                 "recipe_id": "train_test_split",
-                "label": "✂️ Train/Test Split",
+                "label": "Train/Test Split",
                 "position": {"x": cur_x, "y": 100},
                 "config": split_cfg
             })
@@ -442,7 +441,7 @@ class AIRecommender:
             nodes.append({
                 "id": model_id,
                 "recipe_id": model_recipe,
-                "label": f"⚡ {model_name}",
+                "label": model_name,
                 "position": {"x": cur_x, "y": 50},
                 "config": model_cfg
             })
@@ -465,7 +464,7 @@ class AIRecommender:
             nodes.append({
                 "id": eval_id,
                 "recipe_id": eval_recipe,
-                "label": "🎯 Model Evaluator",
+                "label": "Model Evaluator",
                 "position": {"x": cur_x, "y": 100},
                 "config": {"report_type": "Comprehensive"}
             })

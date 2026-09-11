@@ -56,7 +56,7 @@ RULES FOR DAG CONSTRUCTION:
   "explanation": "Concise architectural explanation of why this pipeline was chosen for the user's objective",
   "recommended_dag": {
     "nodes": [
-      {"id": "node_csv", "recipe_id": "csv_loader", "label": "📄 Data Ingestion", "position": {"x": 40, "y": 100}, "config": {}},
+      {"id": "node_csv", "recipe_id": "csv_loader", "label": "Data Ingestion", "position": {"x": 40, "y": 100}, "config": {}},
       ...
     ],
     "edges": [
