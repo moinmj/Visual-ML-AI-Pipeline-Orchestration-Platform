@@ -85,15 +85,28 @@ async def test_recommendation_and_templates_api():
         # 2. Test Auto-Wire
         wire_resp = await client.post("/api/v1/recommend/autowire", json={
             "nodes": [
-                {"id": "node_1", "recipe_id": "csv_loader", "label": "CSV Ingest"},
-                {"id": "node_2", "recipe_id": "feature_scaler", "label": "Scaler"},
-                {"id": "node_3", "recipe_id": "xgboost_trainer", "label": "Model"}
+                {"id": "node_eval", "recipe_id": "model_evaluator", "label": "Evaluator"},
+                {"id": "node_model", "recipe_id": "xgboost_trainer", "label": "Model"},
+                {"id": "node_smote", "recipe_id": "class_imbalance_resampler", "label": "SMOTE Resampler"},
+                {"id": "node_split", "recipe_id": "train_test_split", "label": "Splitter"},
+                {"id": "node_scaler", "recipe_id": "feature_scaler", "label": "Scaler"},
+                {"id": "node_guard", "recipe_id": "statistical_guardrail", "label": "Guardrail"},
+                {"id": "node_ingest", "recipe_id": "csv_loader", "label": "Data Ingestion"}
             ]
         })
         assert wire_resp.status_code == 200
         wire_data = wire_resp.json()
         assert wire_data["status"] == "AUTOWIRED"
-        assert len(wire_data["edges"]) >= 2
+        assert len(wire_data["edges"]) == 7  # 6 linear chain + 1 split->eval secondary edge
+        # Verify topological chain order
+        edge_pairs = [(e["source"], e["target"]) for e in wire_data["edges"]]
+        assert ("node_ingest", "node_guard") in edge_pairs
+        assert ("node_guard", "node_scaler") in edge_pairs
+        assert ("node_scaler", "node_split") in edge_pairs
+        assert ("node_split", "node_smote") in edge_pairs
+        assert ("node_smote", "node_model") in edge_pairs
+        assert ("node_model", "node_eval") in edge_pairs
+        assert ("node_split", "node_eval") in edge_pairs  # X_test propagation
 
         # 3. Test Templates List
         tmpl_list = await client.get("/api/v1/templates/")

@@ -200,5 +200,8 @@ Expanded and exposed parameter controls across all core model trainers:
    - `column_types: Dict[str, str]` and `columns_schema: List[ColumnSchemaItem]` classifying columns into `Numeric`, `Categorical`, `Datetime`, `Text`.
 3. **Sequential Kahn's Topological Sort:**
    - Upgraded DAG validation in `graph.py` to sort nodes topologically so upstream configuration issues are reported before downstream nodes.
-4. **Intelligent Auto-Wire:**
-   - Recipe-aware connection suggestions that automatically order ingestion $\rightarrow$ text vectorization $\rightarrow$ scaling $\rightarrow$ splitting $\rightarrow$ training $\rightarrow$ evaluation.
+4. **Intelligent Auto-Wire (Backend & UI Canvas):**
+   - Implemented hierarchical topological weight ordering across all 26 recipes:
+     $$\text{Ingestion (1.0)} \rightarrow \text{NLP (1.4-1.6)} \rightarrow \text{Deduplication (2.0)} \rightarrow \text{Outlier Guardrail (2.02)} \rightarrow \text{Sanitizer (2.05)} \rightarrow \text{Imputation (2.1)} \rightarrow \text{Corr/Var Filters (2.15-2.18)} \rightarrow \text{Encoding (2.2)} \rightarrow \text{Scaling (2.4)} \rightarrow \text{Lag Features (2.5)} \rightarrow \text{Train/Test Split (3.0)} \rightarrow \mathbf{\text{SMOTE Resampler (3.5)}} \rightarrow \text{Model Training (4.0)} \rightarrow \text{Evaluation (5.0)} \rightarrow \text{MLflow Governance (6.0)}$$
+   - Automatic secondary branch edge generation: `train_test_split` $\rightarrow$ `model_evaluator` preserves unbiased $X_{\text{test}}, y_{\text{test}}$ partitions while the resampler balances only $X_{\text{train}}, y_{\text{train}}$.
+   - Supported both in the FastAPI endpoint (`POST /api/v1/recommend/autowire`) and the interactive Streamlit Whiteboard canvas.

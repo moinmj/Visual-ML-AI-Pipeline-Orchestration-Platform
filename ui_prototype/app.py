@@ -1459,11 +1459,13 @@ if app_mode == "🎨 Pipeline Whiteboard":
                         return 1.0
                     if r_id in ["text_preprocessor", "text_vectorizer"]:
                         return 1.5
-                    if r_id in ["missing_value_imputer", "feature_scaler", "categorical_encoder", "statistical_guardrail", "lag_feature_engineering", "duplicate_remover", "category_sanitizer", "correlation_filter", "variance_filter"]:
+                    if r_id in ["missing_value_imputer", "missing_values", "feature_scaler", "categorical_encoder", "statistical_guardrail", "lag_feature_engineering", "lag_features", "duplicate_remover", "duplicates", "category_sanitizer", "correlation_filter", "variance_filter"]:
                         return 2.0
                     if r_id in ["train_test_split"]:
                         return 3.0
-                    if r_id in ["xgboost_trainer", "lightgbm_trainer", "catboost_trainer", "random_forest_trainer", "linear_trainer", "isolation_forest", "prophet_forecaster", "arima_forecaster"]:
+                    if r_id in ["class_imbalance_resampler"]:
+                        return 3.5
+                    if r_id in ["xgboost_trainer", "lightgbm_trainer", "catboost_trainer", "random_forest_trainer", "logistic_regression_trainer", "linear_trainer", "isolation_forest", "prophet_forecaster", "arima_forecaster"]:
                         return 4.0
                     if r_id in ["model_evaluator", "mlflow_tracker"]:
                         return 5.0
@@ -1472,8 +1474,9 @@ if app_mode == "🎨 Pipeline Whiteboard":
                 # Categorize nodes
                 triggers = [n for n in curr_nodes if get_category_order(n.id) == 0]
                 ingestions = [n for n in curr_nodes if get_category_order(n.id) == 1]
-                preprocessings = [n for n in curr_nodes if get_category_order(n.id) == 2]
+                preprocessings = [n for n in curr_nodes if get_category_order(n.id) == 2 or get_category_order(n.id) == 1.5]
                 splitters = [n for n in curr_nodes if get_category_order(n.id) == 3]
+                resamplers = [n for n in curr_nodes if get_category_order(n.id) == 3.5]
                 models = [n for n in curr_nodes if get_category_order(n.id) == 4]
                 evaluators = [n for n in curr_nodes if get_category_order(n.id) == 5]
 
@@ -1482,6 +1485,7 @@ if app_mode == "🎨 Pipeline Whiteboard":
                 ingestions.sort(key=get_node_position)
                 preprocessings.sort(key=get_node_position)
                 splitters.sort(key=get_node_position)
+                resamplers.sort(key=get_node_position)
                 models.sort(key=get_node_position)
                 evaluators.sort(key=get_node_position)
 
@@ -1499,7 +1503,7 @@ if app_mode == "🎨 Pipeline Whiteboard":
                         ))
 
                 # 1. Triggers -> First Ingestion or Preprocessing node
-                data_candidates = ingestions + preprocessings + splitters + models
+                data_candidates = ingestions + preprocessings + splitters + resamplers + models
                 first_data_node = data_candidates[0].id if data_candidates else None
                 for t_node in triggers:
                     if first_data_node:
@@ -1518,12 +1522,29 @@ if app_mode == "🎨 Pipeline Whiteboard":
                     if last_prep_node:
                         add_edge(last_prep_node, main_splitter)
                     
-                    # Splitter connects to all models and evaluators
-                    for m in models:
-                        add_edge(main_splitter, m.id)
+                    if resamplers:
+                        main_resampler = resamplers[0].id
+                        add_edge(main_splitter, main_resampler)
+                        for m in models:
+                            add_edge(main_resampler, m.id)
+                    else:
+                        for m in models:
+                            add_edge(main_splitter, m.id)
+
                     for ev in evaluators:
                         add_edge(main_splitter, ev.id)
-                    # Models connect to evaluators
+                    for m in models:
+                        for ev in evaluators:
+                            add_edge(m.id, ev.id)
+                elif resamplers:
+                    # No splitter, but resampler exists (pre-split resampling mode)
+                    main_resampler = resamplers[0].id
+                    if last_prep_node:
+                        add_edge(last_prep_node, main_resampler)
+                    for m in models:
+                        add_edge(main_resampler, m.id)
+                    for ev in evaluators:
+                        add_edge(main_resampler, ev.id)
                     for m in models:
                         for ev in evaluators:
                             add_edge(m.id, ev.id)
