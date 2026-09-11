@@ -13,9 +13,9 @@ except ImportError:
 class ARIMAForecasterRecipe(BaseRecipe):
     recipe_id = "arima_forecaster"
     name = "ARIMA Statistical Forecaster"
-    version = "1.0.0"
+    version = "1.1.0"
     category = "forecasting"
-    description = "Classical AutoRegressive Integrated Moving Average (ARIMA) for statistical univariate time-series forecasting (Tier-1 Baseline)."
+    description = "Classical ARIMA for statistical time-series forecasting with chronological out-of-sample backtesting (Tier-1 Baseline)."
     input_types = ["dataframe"]
     output_types = ["forecast", "metrics", "model"]
 
@@ -63,6 +63,14 @@ class ARIMAForecasterRecipe(BaseRecipe):
                     "default": 14,
                     "minimum": 1,
                     "maximum": 365
+                },
+                "test_size_pct": {
+                    "type": "number",
+                    "title": "Holdout Test Size (%)",
+                    "default": 0.2,
+                    "minimum": 0.05,
+                    "maximum": 0.4,
+                    "description": "Fraction of chronologically latest observations to hold out for out-of-sample evaluation."
                 }
             },
             "required": ["target_column"]
@@ -164,73 +172,133 @@ class ARIMAForecasterRecipe(BaseRecipe):
         d = int(config.get("d", 1))
         q = int(config.get("q", 1))
         horizon = int(config.get("horizon_periods", 14))
+        test_size_pct = float(config.get("test_size_pct", 0.2))
 
         ts_df = pd.DataFrame({
             "ds": valid_ds,
             "y": pd.to_numeric(df[target_col], errors="coerce")
         }).dropna().sort_values(by="ds").reset_index(drop=True)
 
-        if len(ts_df) < (p + d + q + 3):
-            raise ValueError(f"ARIMA({p},{d},{q}) requires at least {p + d + q + 3} observations, found {len(ts_df)}.")
+        min_obs = p + d + q + 3
+        if len(ts_df) < min_obs:
+            raise ValueError(f"ARIMA({p},{d},{q}) requires at least {min_obs} observations, found {len(ts_df)}.")
 
-        # Fit ARIMA Model
-        model = ARIMA(ts_df["y"].values, order=(p, d, q))
-        fitted_model = model.fit()
+        # ─────────────────────────────────────────────────────────────
+        # CHRONOLOGICAL OUT-OF-SAMPLE BACKTESTING
+        # Split last `test_size_pct` as unseen holdout, fit ARIMA on
+        # training slice, forecast the exact number of test steps,
+        # compute OOS metrics. Then refit on full data for production.
+        # ─────────────────────────────────────────────────────────────
+        n = len(ts_df)
+        min_test_pts = max(2, p + d + q + 1)
+        split_idx = max(min_test_pts, int(n * (1.0 - test_size_pct)))
 
-        # In-sample fitted values
+        eval_type = "out_of_sample_holdout"
+        train_series = ts_df["y"].values[:split_idx]
+        test_series  = ts_df["y"].values[split_idx:]
+
+        if len(test_series) < 2:
+            train_series = ts_df["y"].values
+            test_series  = ts_df["y"].values
+            eval_type    = "in_sample_fallback"
+
+        # --- Phase 1: Fit on training slice, forecast test horizon ---
+        try:
+            eval_arima        = ARIMA(train_series, order=(p, d, q))
+            eval_fitted        = eval_arima.fit()
+            oos_forecast_res   = eval_fitted.get_forecast(steps=len(test_series))
+            oos_preds          = oos_forecast_res.predicted_mean
+
+            oos_actuals = test_series
+            mae  = float(round(np.mean(np.abs(oos_actuals - oos_preds)), 4))
+            rmse = float(round(np.sqrt(np.mean((oos_actuals - oos_preds) ** 2)), 4))
+
+            non_zero = oos_actuals != 0
+            if np.any(non_zero):
+                mape = float(round(
+                    np.mean(np.abs((oos_actuals[non_zero] - oos_preds[non_zero]) / oos_actuals[non_zero])) * 100,
+                    2
+                ))
+            else:
+                mape = 0.0
+        except Exception:
+            # Graceful fallback — in-sample residuals if OOS fitting fails
+            eval_type   = "in_sample_fallback"
+            eval_arima  = ARIMA(ts_df["y"].values, order=(p, d, q))
+            eval_fitted  = eval_arima.fit()
+            fv           = eval_fitted.fittedvalues
+            oos_actuals  = ts_df["y"].values[d:]
+            oos_preds    = fv[d:]
+            mae          = float(round(np.mean(np.abs(oos_actuals - oos_preds)), 4))
+            rmse         = float(round(np.sqrt(np.mean((oos_actuals - oos_preds) ** 2)), 4))
+            non_zero     = oos_actuals != 0
+            mape         = float(round(np.mean(np.abs(
+                (oos_actuals[non_zero] - oos_preds[non_zero]) / oos_actuals[non_zero]
+            )) * 100, 2)) if np.any(non_zero) else 0.0
+
+        # --- Phase 2: Refit on FULL dataset for production forecast ---
+        full_arima   = ARIMA(ts_df["y"].values, order=(p, d, q))
+        fitted_model = full_arima.fit()
+
+        forecast_res  = fitted_model.get_forecast(steps=horizon)
+        future_means  = forecast_res.predicted_mean
+        conf_int      = forecast_res.conf_int(alpha=0.05)
         fitted_values = fitted_model.fittedvalues
-        actuals = ts_df["y"].values
-
-        # Out-of-sample Forecast
-        forecast_res = fitted_model.get_forecast(steps=horizon)
-        future_means = forecast_res.predicted_mean
-        conf_int = forecast_res.conf_int(alpha=0.05)
 
         # Generate future dates
-        last_date = ts_df["ds"].iloc[-1]
-        freq = pd.infer_freq(ts_df["ds"]) or "D"
+        last_date    = ts_df["ds"].iloc[-1]
+        freq         = pd.infer_freq(ts_df["ds"]) or "D"
         future_dates = pd.date_range(start=last_date, periods=horizon + 1, freq=freq)[1:]
 
-        # Metrics on in-sample
-        valid_idx = slice(d, None)
-        mae = float(round(np.mean(np.abs(actuals[valid_idx] - fitted_values[valid_idx])), 4))
-        rmse = float(round(np.sqrt(np.mean((actuals[valid_idx] - fitted_values[valid_idx]) ** 2)), 4))
-
-        non_zero = actuals[valid_idx] != 0
-        if np.any(non_zero):
-            mape = float(round(np.mean(np.abs((actuals[valid_idx][non_zero] - fitted_values[valid_idx][non_zero]) / actuals[valid_idx][non_zero])) * 100, 2))
-        else:
-            mape = 0.0
-
         metrics = {
-            "task_type": "time_series_forecasting",
-            "algorithm": f"ARIMA({p},{d},{q})",
-            "aic": float(round(fitted_model.aic, 2)),
-            "bic": float(round(fitted_model.bic, 2)),
-            "historical_points": len(ts_df),
-            "forecast_horizon": horizon,
-            "trend_direction": "Upward" if float(future_means[-1]) >= float(ts_df["y"].iloc[-1]) else "Downward",
-            "horizon_periods": horizon,
-            "mae": mae,
-            "rmse": rmse,
-            "mape": mape
+            "task_type":          "time_series_forecasting",
+            "algorithm":          f"ARIMA({p},{d},{q})",
+            "eval_type":          eval_type,
+            "aic":                float(round(fitted_model.aic, 2)),
+            "bic":                float(round(fitted_model.bic, 2)),
+            "historical_points":  len(ts_df),
+            "train_size":         split_idx,
+            "test_size":          n - split_idx,
+            "holdout_test_start": str(ts_df["ds"].iloc[split_idx].date()) if split_idx < n else None,
+            "holdout_test_end":   str(ts_df["ds"].iloc[-1].date()),
+            "forecast_horizon":   horizon,
+            "trend_direction":    "Upward" if float(future_means[-1]) >= float(ts_df["y"].iloc[-1]) else "Downward",
+            "horizon_periods":    horizon,
+            # ── True out-of-sample accuracy metrics ──
+            "mae":                mae,
+            "rmse":               rmse,
+            "mape":               mape,
+            "evaluation_note":    (
+                f"Metrics computed on chronologically held-out last {n - split_idx} observations "
+                f"({test_size_pct*100:.0f}% of data). "
+                f"Model was retrained on all {len(ts_df)} points for future forecasting."
+                if eval_type == "out_of_sample_holdout"
+                else "Dataset too small for holdout — metrics are in-sample."
+            )
         }
 
-        # Build clean visualization table
+        # Build clean visualization table (historical fitted + future forecast)
         hist_df = pd.DataFrame({
-            "ds": ts_df["ds"],
-            "yhat": np.round(fitted_values, 2),
+            "ds":         ts_df["ds"],
+            "yhat":       np.round(fitted_values, 2),
             "yhat_lower": np.round(fitted_values, 2),
             "yhat_upper": np.round(fitted_values, 2),
-            "is_future": 0
+            "is_future":  0
         })
 
         fut_df = pd.DataFrame({
-            "ds": future_dates,
-            "yhat": np.round(future_means, 2),
-            "yhat_lower": np.round(conf_int[:, 0], 2),
-            "yhat_upper": np.round(conf_int[:, 1], 2),
-            "is_future": 1
+            "ds":         future_dates,
+            "yhat":       np.round(future_means, 2),
+            # conf_int may be a DataFrame or ndarray depending on statsmodels version
+            "yhat_lower": np.round(
+                conf_int.iloc[:, 0].values if hasattr(conf_int, "iloc") else conf_int[:, 0],
+                2
+            ),
+            "yhat_upper": np.round(
+                conf_int.iloc[:, 1].values if hasattr(conf_int, "iloc") else conf_int[:, 1],
+                2
+            ),
+            "is_future":  1
         })
 
         full_forecast_df = pd.concat([hist_df, fut_df], ignore_index=True)
@@ -239,14 +307,14 @@ class ARIMAForecasterRecipe(BaseRecipe):
         else:
             full_forecast_df["ds"] = full_forecast_df["ds"].astype(str)
 
-        # Embed forecast points directly into metrics/summary for instant lightweight charting
+        # Embed forecast points into metrics for lightweight charting
         metrics["forecast_data"] = full_forecast_df.to_dict(orient="records")
 
         return {
-            "forecast_df": full_forecast_df,
-            "dataframe": full_forecast_df,
-            "metrics": metrics,
+            "forecast_df":         full_forecast_df,
+            "dataframe":           full_forecast_df,
+            "metrics":             metrics,
             "forecasting_summary": metrics,
-            "model": fitted_model,
-            "task_type": "time_series_forecasting"
+            "model":               fitted_model,
+            "task_type":           "time_series_forecasting"
         }

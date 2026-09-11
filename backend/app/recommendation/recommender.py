@@ -23,8 +23,20 @@ class AIRecommender:
         missing_cells = profile.get("total_missing_cells", 0)
 
         date_cols = [c for c, m in columns.items() if m.get("inferred_type") == "datetime"]
-        cat_cols = [c for c, m in columns.items() if m.get("inferred_type") == "categorical"]
-        num_cols = [c for c, m in columns.items() if m.get("inferred_type") == "numeric"]
+        cat_cols  = [c for c, m in columns.items() if m.get("inferred_type") == "categorical"]
+        num_cols  = [c for c, m in columns.items() if m.get("inferred_type") == "numeric"]
+
+        # Also detect integer year-range columns (e.g. a 'Year' column containing 2000-2050)
+        # as temporal, since the data profiler treats them as numeric, not datetime.
+        year_cols = [
+            c for c in df.columns
+            if c not in date_cols
+            and any(kw in c.lower() for kw in ["year", "date", "time", "period", "timestamp", "month", "ds", "week"])
+            and pd.api.types.is_numeric_dtype(df[c])
+            and df[c].dropna().between(1800, 2200).all()
+        ] if len(df) > 0 else []
+        # Treat these as usable temporal columns
+        all_temporal_cols = date_cols + [c for c in year_cols if c not in date_cols]
 
         # 1. Determine Target Column
         if target_column and target_column in df.columns:
@@ -216,7 +228,7 @@ class AIRecommender:
             rec_result,
             df=df,
             target_column=selected_target,
-            date_column=date_cols[0] if date_cols else None
+            date_column=all_temporal_cols[0] if all_temporal_cols else None
         )
         return rec_result
 
@@ -366,7 +378,14 @@ class AIRecommender:
 
             # 3. Train/Test Splitter
             split_id = "node_split"
-            split_cfg = {"target_column": target_col or "target", "test_size": 0.2}
+            # Auto-enable chronological split if date columns are present to prevent leakage
+            split_cfg: Dict[str, Any] = {
+                "target_column": target_col or "target",
+                "test_size": 0.2
+            }
+            if date_column:
+                split_cfg["time_series_mode"] = True
+                split_cfg["time_column"] = date_column
             nodes.append({
                 "id": split_id,
                 "recipe_id": "train_test_split",
