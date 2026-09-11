@@ -38,6 +38,8 @@ from sqlalchemy import text
 
 
 async def init_db():
+    import backend.app.workflows.models
+    import backend.app.datasets.models
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         # Auto-migrate workflows table columns for soft delete support

@@ -1143,6 +1143,7 @@ def save_workflow_to_backend(name: str, description: str = "") -> dict:
     persisted_configs["_dataset_metadata"] = dataset_metadata
 
     body = {
+        "id": st.session_state.get("active_saved_workflow_id"),
         "name": name,
         "description": description,
         "nodes": nodes_payload,
@@ -1156,10 +1157,10 @@ def save_workflow_to_backend(name: str, description: str = "") -> dict:
         res = httpx.post("http://localhost:8000/api/v1/workflows/", json=body, timeout=4.0)
         if res.status_code in [200, 201]:
             saved_json = res.json()
+            st.session_state["active_saved_workflow_id"] = saved_json.get("id")
+            st.session_state["active_saved_workflow_name"] = name
             record_api_telemetry("💾 Save Workflow API", "/api/v1/workflows/", "POST", body, saved_json, res.status_code, 2.1)
             return saved_json
-    except Exception:
-        pass
     except Exception:
         pass
 
@@ -1168,25 +1169,41 @@ def save_workflow_to_backend(name: str, description: str = "") -> dict:
     import asyncio
     from backend.app.infrastructure.database.session import AsyncSessionLocal, init_db
     from backend.app.workflows.models import Workflow
+    from sqlalchemy.future import select
 
-    wf_id = str(uuid.uuid4())
+    wf_id = st.session_state.get("active_saved_workflow_id") or str(uuid.uuid4())
     async def _async_save():
         await init_db()
         async with AsyncSessionLocal() as session:
-            wf = Workflow(
-                id=wf_id,
-                name=name,
-                description=description,
-                nodes=nodes_payload,
-                edges=edges_payload,
-                node_configs=persisted_configs,
-                last_execution=st.session_state.get("last_execution")
-            )
-            session.add(wf)
+            existing_wf_res = await session.execute(select(Workflow).where(Workflow.id == wf_id))
+            wf = existing_wf_res.scalar_one_or_none()
+            if wf:
+                wf.name = name
+                wf.description = description
+                wf.nodes = nodes_payload
+                wf.edges = edges_payload
+                wf.node_configs = persisted_configs
+                wf.last_execution = st.session_state.get("last_execution")
+                wf.is_active = True
+                wf.deleted_at = None
+                wf.updated_at = datetime.now(timezone.utc)
+            else:
+                wf = Workflow(
+                    id=wf_id,
+                    name=name,
+                    description=description,
+                    nodes=nodes_payload,
+                    edges=edges_payload,
+                    node_configs=persisted_configs,
+                    last_execution=st.session_state.get("last_execution")
+                )
+                session.add(wf)
             await session.commit()
 
     try:
         asyncio.run(_async_save())
+        st.session_state["active_saved_workflow_id"] = wf_id
+        st.session_state["active_saved_workflow_name"] = name
         saved_dict = {"id": wf_id, "name": name, "status": "SAVED"}
         record_api_telemetry("💾 Save Workflow DB", "/api/v1/workflows/", "POST", body, saved_dict, 201, 1.8)
         return saved_dict
@@ -1308,14 +1325,258 @@ def restore_deleted_workflow_backend(workflow_id: str) -> bool:
                 return True
             return False
 
+def fetch_workflow_history_backend(workflow_id: str) -> list:
+    """Fetches execution history list for a workflow."""
     try:
-        return asyncio.run(_async_restore())
+        import httpx
+        url = f"http://localhost:8000/api/v1/workflows/{workflow_id}/history"
+        res = httpx.get(url, timeout=4.0)
+        if res.status_code == 200:
+            return res.json()
     except Exception:
-        return False
+        pass
+
+    # Direct Async DB Fallback
+    import asyncio
+    from backend.app.infrastructure.database.session import AsyncSessionLocal, init_db
+    from backend.app.workflows.models import Workflow, WorkflowExecution
+    from sqlalchemy.future import select
+
+    async def _async_get_hist():
+        await init_db()
+        async with AsyncSessionLocal() as session:
+            stmt = select(WorkflowExecution).where(WorkflowExecution.workflow_id == workflow_id).order_by(WorkflowExecution.version_number.desc())
+            res = await session.execute(stmt)
+            execs = res.scalars().all()
+            if not execs:
+                # Check if legacy workflow has last_execution
+                wf_res = await session.execute(select(Workflow).where(Workflow.id == workflow_id))
+                wf = wf_res.scalar_one_or_none()
+                if wf and wf.last_execution and isinstance(wf.last_execution, dict):
+                    last_ex = wf.last_execution
+                    return [{
+                        "id": last_ex.get("execution_id", "legacy"),
+                        "workflow_id": workflow_id,
+                        "version_number": 1,
+                        "run_label": "Run #1 (Initial Execution)",
+                        "status": last_ex.get("status", "SUCCESS"),
+                        "total_duration_ms": last_ex.get("total_duration_ms", 0.0),
+                        "metrics": last_ex.get("final_metrics") or last_ex.get("metrics") or {},
+                        "nodes_count": len(wf.nodes or []),
+                        "edges_count": len(wf.edges or []),
+                        "created_at": wf.updated_at.strftime("%Y-%m-%d %H:%M:%S") if wf.updated_at else ""
+                    }]
+            return [
+                {
+                    "id": ex.id,
+                    "workflow_id": ex.workflow_id,
+                    "version_number": ex.version_number,
+                    "run_label": ex.run_label,
+                    "status": ex.status,
+                    "total_duration_ms": ex.total_duration_ms,
+                    "metrics": ex.metrics or {},
+                    "nodes_count": len(ex.snapshot_nodes or []),
+                    "edges_count": len(ex.snapshot_edges or []),
+                    "created_at": ex.created_at.strftime("%Y-%m-%d %H:%M:%S") if ex.created_at else ""
+                }
+                for ex in execs
+            ]
+    try:
+        return asyncio.run(_async_get_hist())
+    except Exception:
+        return []
+
+
+def fetch_workflow_execution_detail_backend(workflow_id: str, execution_id: str) -> dict:
+    """Fetches full snapshot and execution report for a specific run."""
+    try:
+        import httpx
+        url = f"http://localhost:8000/api/v1/workflows/{workflow_id}/history/{execution_id}"
+        res = httpx.get(url, timeout=4.0)
+        if res.status_code == 200:
+            return res.json()
+    except Exception:
+        pass
+
+    import asyncio
+    from backend.app.infrastructure.database.session import AsyncSessionLocal, init_db
+    from backend.app.workflows.models import WorkflowExecution
+    from sqlalchemy.future import select
+
+    async def _async_detail():
+        await init_db()
+        async with AsyncSessionLocal() as session:
+            stmt = select(WorkflowExecution).where(WorkflowExecution.workflow_id == workflow_id, WorkflowExecution.id == execution_id)
+            res = await session.execute(stmt)
+            ex = res.scalar_one_or_none()
+            if ex:
+                return {
+                    "id": ex.id,
+                    "workflow_id": ex.workflow_id,
+                    "version_number": ex.version_number,
+                    "run_label": ex.run_label,
+                    "status": ex.status,
+                    "total_duration_ms": ex.total_duration_ms,
+                    "snapshot_nodes": ex.snapshot_nodes or [],
+                    "snapshot_edges": ex.snapshot_edges or [],
+                    "snapshot_node_configs": ex.snapshot_node_configs or {},
+                    "metrics": ex.metrics,
+                    "reports": ex.reports,
+                    "step_snapshots": ex.step_snapshots,
+                    "logs": ex.logs,
+                    "created_at": ex.created_at.strftime("%Y-%m-%d %H:%M:%S") if ex.created_at else ""
+                }
+            return None
+    try:
+        return asyncio.run(_async_detail())
+    except Exception:
+        return None
+
+
+def rollback_workflow_backend(workflow_id: str, execution_id: str) -> dict:
+    """Performs one-click rollback of a workflow to a historical execution snapshot."""
+    try:
+        import httpx
+        url = f"http://localhost:8000/api/v1/workflows/{workflow_id}/history/{execution_id}/rollback"
+        res = httpx.post(url, timeout=4.0)
+        if res.status_code == 200:
+            return res.json()
+    except Exception:
+        pass
+
+    import asyncio
+    from datetime import datetime, timezone
+    from backend.app.infrastructure.database.session import AsyncSessionLocal, init_db
+    from backend.app.workflows.models import Workflow, WorkflowExecution
+    from sqlalchemy.future import select
+    from fastapi.encoders import jsonable_encoder
+
+    async def _async_rollback():
+        await init_db()
+        async with AsyncSessionLocal() as session:
+            ex_res = await session.execute(select(WorkflowExecution).where(WorkflowExecution.workflow_id == workflow_id, WorkflowExecution.id == execution_id))
+            ex = ex_res.scalar_one_or_none()
+            wf_res = await session.execute(select(Workflow).where(Workflow.id == workflow_id))
+            wf = wf_res.scalar_one_or_none()
+            if ex and wf:
+                wf.nodes = ex.snapshot_nodes
+                wf.edges = ex.snapshot_edges
+                wf.node_configs = ex.snapshot_node_configs
+                wf.last_execution = jsonable_encoder({
+                    "execution_id": ex.id,
+                    "status": ex.status,
+                    "total_duration_ms": ex.total_duration_ms,
+                    "final_metrics": ex.metrics,
+                    **(ex.reports or {}),
+                    "step_snapshots": ex.step_snapshots,
+                    "execution_logs": ex.logs,
+                    "rolled_back_from_version": ex.version_number
+                })
+                wf.updated_at = datetime.now(timezone.utc)
+                await session.commit()
+                await session.refresh(wf)
+                return {
+                    "id": wf.id,
+                    "name": wf.name,
+                    "nodes": wf.nodes,
+                    "edges": wf.edges,
+                    "node_configs": wf.node_configs,
+                    "last_execution": wf.last_execution
+                }
+            return None
+    try:
+        return asyncio.run(_async_rollback())
+    except Exception:
+        return None
+
+
+def compare_workflow_executions_backend(workflow_id: str, run_a_id: str, run_b_id: str) -> dict:
+    """Compares two historical execution runs."""
+    try:
+        import httpx
+        url = f"http://localhost:8000/api/v1/workflows/{workflow_id}/history/compare?run_a={run_a_id}&run_b={run_b_id}"
+        res = httpx.get(url, timeout=4.0)
+        if res.status_code == 200:
+            return res.json()
+    except Exception:
+        pass
+
+    # Fallback to local detail comparison
+    detail_a = fetch_workflow_execution_detail_backend(workflow_id, run_a_id)
+    detail_b = fetch_workflow_execution_detail_backend(workflow_id, run_b_id)
+    if not detail_a or not detail_b:
+        return {}
+
+    metrics_a = detail_a.get("metrics") or {}
+    metrics_b = detail_b.get("metrics") or {}
+    all_keys = sorted(list(set(list(metrics_a.keys()) + list(metrics_b.keys()))))
+    m_diff = {}
+    lower_is_better = {"loss", "log_loss", "mae", "mse", "rmse"}
+    for k in all_keys:
+        v_a = metrics_a.get(k)
+        v_b = metrics_b.get(k)
+        if isinstance(v_a, (int, float)) and isinstance(v_b, (int, float)):
+            delta = round(float(v_b) - float(v_a), 4)
+            pct = round((delta / abs(v_a)) * 100, 2) if v_a != 0 else None
+            improved = (delta > 0) if k.lower() not in lower_is_better else (delta < 0)
+            m_diff[k] = {"val_a": v_a, "val_b": v_b, "delta": delta, "pct_change": pct, "improved": improved}
+
+    nodes_a = {n["id"]: n for n in detail_a.get("snapshot_nodes", []) if isinstance(n, dict)}
+    nodes_b = {n["id"]: n for n in detail_b.get("snapshot_nodes", []) if isinstance(n, dict)}
+    added = [{"id": nid, "label": n.get("content") or n.get("label")} for nid, n in nodes_b.items() if nid not in nodes_a]
+    removed = [{"id": nid, "label": n.get("content") or n.get("label")} for nid, n in nodes_a.items() if nid not in nodes_b]
+
+    return {
+        "workflow_id": workflow_id,
+        "run_a": detail_a,
+        "run_b": detail_b,
+        "metrics_diff": m_diff,
+        "config_diff": {"nodes_added": added, "nodes_removed": removed}
+    }
 
 
 def restore_saved_workflow(wf_data: dict):
     """Restores a saved pipeline workbook into active StreamlitFlowState and node_configs."""
+    # If wf_data is a lean list summary (missing nodes/configs), fetch full details via GET /workflows/{id}
+    if not wf_data.get("nodes") and wf_data.get("id"):
+        try:
+            import httpx
+            r = httpx.get(f"http://localhost:8000/api/v1/workflows/{wf_data['id']}", timeout=4.0)
+            if r.status_code == 200:
+                wf_data = r.json()
+        except Exception:
+            pass
+
+        if not wf_data.get("nodes"):
+            try:
+                import asyncio
+                from backend.app.infrastructure.database.session import AsyncSessionLocal, init_db
+                from backend.app.workflows.models import Workflow
+                from sqlalchemy.future import select
+
+                async def _get_full():
+                    await init_db()
+                    async with AsyncSessionLocal() as session:
+                        res = await session.execute(select(Workflow).where(Workflow.id == wf_data["id"]))
+                        w = res.scalar_one_or_none()
+                        if w:
+                            return {
+                                "id": w.id,
+                                "name": w.name,
+                                "description": w.description,
+                                "nodes": w.nodes or [],
+                                "edges": w.edges or [],
+                                "node_configs": w.node_configs or {},
+                                "last_execution": w.last_execution,
+                                "is_active": w.is_active,
+                            }
+                        return None
+                db_full = asyncio.run(_get_full())
+                if db_full:
+                    wf_data = db_full
+            except Exception:
+                pass
+
     t_nodes = []
     t_edges = []
     
@@ -1365,6 +1626,7 @@ def restore_saved_workflow(wf_data: dict):
     st.session_state["node_configs"] = saved_configs
     st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
     st.session_state["active_saved_workflow_name"] = wf_data.get("name", "Saved Workflow")
+    st.session_state["active_saved_workflow_id"] = wf_data.get("id")
 
     # Restore Execution Results & Diagnostics if present
     last_exec = wf_data.get("last_execution")
@@ -1631,6 +1893,149 @@ if app_mode == "🎨 Pipeline Whiteboard":
                         if restore_deleted_workflow_backend(selected_wf["id"]):
                             st.success(f"♻️ Restored '{selected_wf['name']}' back to active state!")
                             st.rerun()
+
+    # ---------------------------------------------------------
+    # WORKFLOW VERSION HISTORY & EXECUTION AUDIT TRAIL (Option B)
+    # ---------------------------------------------------------
+    with st.expander("🕒 Version History & Execution Audit Trail", expanded=False):
+        st.markdown("#### 🕒 Pipeline Version History & Audit Trail")
+        st.caption("Inspect past configurations, view execution run reports, rollback canvas to past states, and compare metrics side-by-side.")
+
+        # Determine active workflow or select from saved workbooks
+        active_saved_id = st.session_state.get("active_saved_workflow_id")
+        saved_pipelines = fetch_saved_workflows_from_backend(include_deleted=False)
+
+        if not saved_pipelines:
+            st.info("ℹ️ No saved workbooks found. Save your current pipeline first to enable version tracking & history.")
+        else:
+            w_opts = {f"{w['name']} (ID: {w['id'][:8]}...)": w["id"] for w in saved_pipelines}
+            default_wf_idx = 0
+            if active_saved_id:
+                for idx, (lbl, wid) in enumerate(w_opts.items()):
+                    if wid == active_saved_id:
+                        default_wf_idx = idx
+                        break
+
+            chosen_wf_lbl = st.selectbox("Select Workbook to Audit", list(w_opts.keys()), index=default_wf_idx, key="sel_audit_wf")
+            target_audit_wfid = w_opts[chosen_wf_lbl]
+
+            hist_runs = fetch_workflow_history_backend(target_audit_wfid)
+
+            if not hist_runs:
+                st.info("ℹ️ No historical execution runs recorded for this workbook yet. Click '▶️ RUN PIPELINE' above to record Run #1.")
+            else:
+                hist_tab1, hist_tab2 = st.tabs(["📜 Execution Timeline & Rollback", "⚖️ Compare Runs Side-by-Side"])
+
+                with hist_tab1:
+                    st.markdown(f"##### Showing **{len(hist_runs)}** Recorded Execution Runs:")
+
+                    run_choices = {}
+                    for r in hist_runs:
+                        status_icon = "🟢" if r.get("status") == "SUCCESS" else "🔴"
+                        v_num = r.get("version_number", 1)
+                        dt_str = r.get("created_at", "")[:19]
+                        metrics_dict = r.get("metrics") or {}
+                        # Format headline metric badge
+                        headline_metric = ""
+                        for mk in ["accuracy", "recall", "f1_score", "r2_score", "mae"]:
+                            if mk in metrics_dict:
+                                headline_metric = f" | {mk.capitalize()}: {metrics_dict[mk]:.3f}"
+                                break
+                        lbl = f"{status_icon} v{v_num} — {r.get('run_label', f'Run #{v_num}')} ({dt_str}){headline_metric}"
+                        run_choices[lbl] = r
+
+                    selected_run_lbl = st.selectbox("Select Run to Inspect / Restore", list(run_choices.keys()), key="sel_hist_run_card")
+                    active_run_summary = run_choices[selected_run_lbl]
+
+                    # Metrics & KPIs Row
+                    kpi_c1, kpi_c2, kpi_c3, kpi_c4 = st.columns(4)
+                    kpi_c1.metric("Version", f"v{active_run_summary.get('version_number', 1)}")
+                    kpi_c2.metric("Status", active_run_summary.get("status", "UNKNOWN"))
+                    dur_s = (active_run_summary.get("total_duration_ms") or 0.0) / 1000.0
+                    kpi_c3.metric("Duration", f"{dur_s:.2f}s")
+                    kpi_c4.metric("Canvas Nodes", active_run_summary.get("nodes_count", 0))
+
+                    if active_run_summary.get("metrics"):
+                        with st.expander("📊 Run Summary Metrics", expanded=True):
+                            st.json(active_run_summary["metrics"])
+
+                    # Actions: View Report & Rollback
+                    b_col1, b_col2 = st.columns([3, 3])
+                    with b_col1:
+                        if st.button("🔍 Inspect Run Report in Diagnostic Viewer", type="primary", use_container_width=True, key=f"btn_view_rep_{active_run_summary['id']}"):
+                            detail = fetch_workflow_execution_detail_backend(target_audit_wfid, active_run_summary["id"])
+                            if detail:
+                                st.session_state["last_execution"] = {
+                                    "execution_id": detail["id"],
+                                    "status": detail["status"],
+                                    "total_duration_ms": detail.get("total_duration_ms", 0.0),
+                                    "final_metrics": detail.get("metrics"),
+                                    **(detail.get("reports") or {}),
+                                    "step_snapshots": detail.get("step_snapshots"),
+                                    "execution_logs": detail.get("logs")
+                                }
+                                st.success(f"Loaded execution report for {active_run_summary.get('run_label', 'Run')}! Scroll down to Diagnostic Results.")
+                                st.rerun()
+
+                    with b_col2:
+                        if st.button("⏪ Rollback Whiteboard to this Version", use_container_width=True, key=f"btn_rb_{active_run_summary['id']}"):
+                            rb_res = rollback_workflow_backend(target_audit_wfid, active_run_summary["id"])
+                            if rb_res:
+                                restore_saved_workflow(rb_res)
+                                st.success(f"🎉 Whiteboard restored to v{active_run_summary.get('version_number', 1)} configuration!")
+                                st.rerun()
+
+                with hist_tab2:
+                    st.markdown("##### ⚖️ Side-by-Side Execution Run Comparison")
+                    if len(hist_runs) < 2:
+                        st.info("ℹ️ Comparison requires at least 2 execution runs. Run the pipeline again with tweaked parameters to compare.")
+                    else:
+                        cmp_col1, cmp_col2 = st.columns(2)
+                        with cmp_col1:
+                            r_a_lbl = st.selectbox("Baseline Run (Run A)", list(run_choices.keys()), index=min(1, len(run_choices)-1), key="cmp_run_a_select")
+                            run_a_obj = run_choices[r_a_lbl]
+                        with cmp_col2:
+                            r_b_lbl = st.selectbox("Comparison Run (Run B)", list(run_choices.keys()), index=0, key="cmp_run_b_select")
+                            run_b_obj = run_choices[r_b_lbl]
+
+                        cmp_data = compare_workflow_executions_backend(target_audit_wfid, run_a_obj["id"], run_b_obj["id"])
+                        if cmp_data:
+                            # 1. Metric Deltas
+                            m_diff = cmp_data.get("metrics_diff", {})
+                            if m_diff:
+                                st.markdown("###### 📈 Metric Differences:")
+                                diff_rows = []
+                                for m_key, m_info in m_diff.items():
+                                    v_a = m_info.get("val_a")
+                                    v_b = m_info.get("val_b")
+                                    delta = m_info.get("delta")
+                                    pct = m_info.get("pct_change")
+                                    pct_str = f" ({'+' if pct > 0 else ''}{pct}%)" if pct is not None else ""
+                                    imp = m_info.get("improved")
+                                    status_badge = "🟢 Improved" if imp else ("🔴 Regressed" if imp is False else "⚪ Neutral")
+                                    diff_rows.append({
+                                        "Metric": m_key,
+                                        "Run A (Baseline)": v_a,
+                                        "Run B (Comparison)": v_b,
+                                        "Delta (B - A)": f"{'+' if delta > 0 else ''}{delta}{pct_str}",
+                                        "Status": status_badge
+                                    })
+                                st.dataframe(pd.DataFrame(diff_rows), use_container_width=True)
+
+                            # 2. Graph and Parameter Changes
+                            c_diff = cmp_data.get("config_diff", {})
+                            if c_diff:
+                                if c_diff.get("nodes_added"):
+                                    st.markdown("###### ➕ Components Added in Run B:")
+                                    for na in c_diff["nodes_added"]:
+                                        st.markdown(f"- `{na.get('label')}` (`{na.get('id')}`)")
+                                if c_diff.get("nodes_removed"):
+                                    st.markdown("###### ➖ Components Removed in Run B:")
+                                    for nr in c_diff["nodes_removed"]:
+                                        st.markdown(f"- `{nr.get('label')}` (`{nr.get('id')}`)")
+                                if c_diff.get("parameter_changes"):
+                                    st.markdown("###### ⚙️ Parameter Modifications:")
+                                    st.dataframe(pd.DataFrame(c_diff["parameter_changes"]), use_container_width=True)
 
     # Overwrite & Clear Confirmation Prompt
     if "pending_action" in st.session_state and st.session_state["pending_action"]:

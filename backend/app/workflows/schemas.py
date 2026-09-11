@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from datetime import datetime
 
 
@@ -44,5 +44,69 @@ class WorkflowResponse(BaseModel):
     deleted_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
+    model_config = {"from_attributes": True}
+
+
+class WorkflowListItemResponse(BaseModel):
+    id: str
+    name: str
+    description: Optional[str] = None
+    dataset_id: Optional[str] = None
+    dataset_name: Optional[str] = None
+    is_active: bool = True
+    deleted_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+    last_execution_status: Optional[str] = Field(None, description="Latest run status: SUCCESS, FAILED, or None if never executed")
+    last_execution_id: Optional[str] = Field(None, description="Execution ID of the latest run")
+    last_metrics: Optional[Dict[str, Any]] = Field(None, description="Headline metric scores (e.g. accuracy, f1_score)")
+    nodes_count: int = Field(0, description="Total number of nodes in this pipeline")
+    edges_count: int = Field(0, description="Total number of edge connections in this pipeline")
 
     model_config = {"from_attributes": True}
+
+
+WorkflowSummaryResponse = WorkflowListItemResponse
+
+
+class WorkflowExecutionSummaryResponse(BaseModel):
+    id: str
+    workflow_id: str
+    version_number: int
+    run_label: Optional[str] = None
+    status: str
+    total_duration_ms: Optional[float] = 0.0
+    metrics: Optional[Dict[str, Any]] = None
+    nodes_count: int = 0
+    edges_count: int = 0
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class WorkflowExecutionDetailResponse(BaseModel):
+    id: str
+    workflow_id: str
+    version_number: int
+    run_label: Optional[str] = None
+    status: str
+    total_duration_ms: Optional[float] = 0.0
+    snapshot_nodes: List[Dict[str, Any]] = Field(default_factory=list)
+    snapshot_edges: List[Dict[str, Any]] = Field(default_factory=list)
+    snapshot_node_configs: Dict[str, Any] = Field(default_factory=dict)
+    metrics: Optional[Dict[str, Any]] = None
+    reports: Optional[Dict[str, Any]] = None
+    step_snapshots: Optional[Dict[str, Any]] = None
+    logs: Optional[Union[List[str], List[Dict[str, Any]]]] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class WorkflowCompareResponse(BaseModel):
+    workflow_id: str
+    run_a: Dict[str, Any]
+    run_b: Dict[str, Any]
+    metrics_diff: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    config_diff: Dict[str, Any] = Field(default_factory=dict)
+
