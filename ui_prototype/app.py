@@ -1219,7 +1219,10 @@ def fetch_saved_workflows_from_backend(include_deleted: bool = False) -> list:
         url = f"http://localhost:8000/api/v1/workflows/?include_deleted={'true' if include_deleted else 'false'}"
         res = httpx.get(url, timeout=4.0)
         if res.status_code == 200:
-            return res.json()
+            payload = res.json()
+            if isinstance(payload, dict):
+                return payload.get("data") or payload.get("items") or []
+            return payload
     except Exception:
         pass
 

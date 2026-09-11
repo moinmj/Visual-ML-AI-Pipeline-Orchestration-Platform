@@ -1,10 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Body, Query
 from fastapi.encoders import jsonable_encoder
 from typing import Dict, Any, List, Optional, Union
+import math
 import uuid
 import pandas as pd
 from datetime import datetime, timezone, timedelta
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
@@ -18,6 +19,8 @@ from backend.app.workflows.schemas import (
     WorkflowUpdate,
     WorkflowResponse,
     WorkflowListItemResponse,
+    WorkflowListPaginatedResponse,
+    WorkflowStatusFilter,
     WorkflowExecutionSummaryResponse,
     WorkflowExecutionDetailResponse,
     WorkflowCompareResponse
@@ -300,28 +303,82 @@ async def save_workflow(
     return wf
 
 
-@router.get("/", response_model=List[WorkflowListItemResponse])
+@router.get("/", response_model=WorkflowListPaginatedResponse)
 async def list_workflows(
     include_deleted: bool = False,
-    limit: int = Query(50, ge=1, le=200, description="Max workbooks to retrieve per page"),
-    offset: int = Query(0, ge=0, description="Offset index for pagination"),
-    page: Optional[int] = Query(None, ge=1, description="Optional 1-indexed page number (e.g. page=2 with limit=50 sets offset=50)"),
+    limit: int = Query(10, ge=1, le=200, description="Max workbooks to retrieve per page"),
+    skip: int = Query(0, ge=0, description="Number of records to skip (offset)"),
+    offset: Optional[int] = Query(None, ge=0, description="Alias for skip"),
+    page: Optional[int] = Query(None, ge=1, description="Optional 1-indexed page number (e.g. page=2 with limit=10 sets skip=10)"),
+    filters: Optional[WorkflowStatusFilter] = Query(None, description="Filter workbooks by execution status: 'success', 'failed', 'unrun'"),
+    search: Optional[str] = Query(None, description="Search keyword to filter workflows by title or description"),
+    status: Optional[str] = Query(None, include_in_schema=False, description="Alias for filters"),
+    filter: Optional[str] = Query(None, include_in_schema=False, description="Alias for filters"),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    List all saved pipeline workbooks with lightweight summary metadata and pagination support.
-    Excludes heavy nodes, edges, node_configs, and raw execution payloads.
-    Surfaces top-level execution status, latest metrics, and node counts.
+    List all saved pipeline workbooks with pagination, execution status filtering ('success', 'failed', 'unrun'),
+    and keyword search.
+    Returns: total_records, skip, limit, current_page, total_pages, and data array.
     """
-    actual_offset = offset
-    if page is not None and offset == 0:
-        actual_offset = (page - 1) * limit
+    actual_skip = skip
+    if page is not None and skip == 0:
+        actual_skip = (page - 1) * limit
+    elif offset is not None and skip == 0:
+        actual_skip = offset
 
-    query = select(Workflow)
+    # Build SQL filter conditions
+    conditions = []
     if not include_deleted:
-        query = query.where(Workflow.is_active == True)
-    
-    query = query.order_by(Workflow.updated_at.desc()).offset(actual_offset).limit(limit)
+        conditions.append(Workflow.is_active == True)
+
+    # 1. Search filter by title / description keyword
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        conditions.append(or_(
+            Workflow.name.ilike(term),
+            Workflow.description.ilike(term)
+        ))
+
+    # 2. Execution status filter ('success', 'failed', 'unrun')
+    status_raw = filters.value if isinstance(filters, WorkflowStatusFilter) else (filters or status or filter)
+    if status_raw and str(status_raw).strip():
+        s = str(status_raw).strip().lower()
+        if s == "success":
+            conditions.append(
+                func.lower(func.json_extract(Workflow.last_execution, '$.status')) == 'success'
+            )
+        elif s == "failed":
+            conditions.append(
+                or_(
+                    func.lower(func.json_extract(Workflow.last_execution, '$.status')) == 'failed',
+                    func.lower(func.json_extract(Workflow.last_execution, '$.status')) == 'error'
+                )
+            )
+        elif s in ("unrun", "never_run", "draft", "not_run"):
+            conditions.append(
+                or_(
+                    Workflow.last_execution == None,
+                    func.json_extract(Workflow.last_execution, '$.status') == None,
+                    func.json_extract(Workflow.last_execution, '$.status') == ""
+                )
+            )
+
+    # Count total records matching filter conditions
+    count_stmt = select(func.count(Workflow.id))
+    for cond in conditions:
+        count_stmt = count_stmt.where(cond)
+    total_res = await db.execute(count_stmt)
+    total_records = total_res.scalar() or 0
+
+    current_page = (actual_skip // limit) + 1 if limit > 0 else 1
+    total_pages = math.ceil(total_records / limit) if (limit > 0 and total_records > 0) else (1 if total_records == 0 else 1)
+
+    # Retrieve matching records
+    query = select(Workflow)
+    for cond in conditions:
+        query = query.where(cond)
+    query = query.order_by(Workflow.updated_at.desc()).offset(actual_skip).limit(limit)
     result = await db.execute(query)
     workflows = result.scalars().all()
 
@@ -346,7 +403,15 @@ async def list_workflows(
                 edges_count=len(wf.edges or []),
             )
         )
-    return items
+
+    return WorkflowListPaginatedResponse(
+        total_records=total_records,
+        skip=actual_skip,
+        limit=limit,
+        current_page=current_page,
+        total_pages=total_pages,
+        data=items
+    )
 
 
 @router.get("/jobs")
