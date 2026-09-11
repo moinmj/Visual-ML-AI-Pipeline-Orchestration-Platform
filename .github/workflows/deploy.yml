@@ -29,8 +29,8 @@ jobs:
             -o UserKnownHostsFile=/dev/null \
             -o "ProxyCommand=ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ~/.ssh/id_ed25519 -W %h:%p ${{ secrets.SERVER1_USER }}@${{ secrets.SERVER1_HOST }}" \
             -i ~/.ssh/id_ed25519 \
-            -p ${{ secrets.SERVER2_PORT }} \
-            ${{ secrets.SERVER2_USER }}@127.0.0.1 \
+            -p 2222 \
+            serverguy@127.0.0.1 \
             "hostname && whoami"
 
       - name: Deploy ML Pipeline
@@ -40,8 +40,8 @@ jobs:
             -o UserKnownHostsFile=/dev/null \
             -o "ProxyCommand=ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ~/.ssh/id_ed25519 -W %h:%p ${{ secrets.SERVER1_USER }}@${{ secrets.SERVER1_HOST }}" \
             -i ~/.ssh/id_ed25519 \
-            -p ${{ secrets.SERVER2_PORT }} \
-            ${{ secrets.SERVER2_USER }}@127.0.0.1 \
+            -p 2222 \
+            serverguy@127.0.0.1 \
             "
             set -e
 
