@@ -113,82 +113,80 @@ class AIRecommender:
                 "reason": "Standardizing variance across numerical features for model stability."
             })
 
-        # 4. Recommended Algorithm Rankings
+        # 4. Recommended Algorithm Rankings (Dynamic Tiering based on Dataset Profile)
         recommended_models = []
         if detected_task in ["classification", "regression"]:
             recommended_models.append({
                 "recipe_id": "xgboost_trainer",
                 "name": f"⚡ XGBoost {detected_task.title()}",
-                "score": 9.8,
-                "tier": "Tier-1 Gold Standard",
-                "reason": "Highest accuracy and regularized gradient boosting for tabular datasets."
+                "tier": "Gold Standard",
+                "reason": "Highest accuracy regularized gradient boosting for tabular datasets."
             })
             recommended_models.append({
                 "recipe_id": "lightgbm_trainer",
                 "name": f"🚀 LightGBM {detected_task.title()}",
-                "score": 9.5,
-                "tier": "Tier-1 High Speed",
+                "tier": "High Speed",
                 "reason": "Optimal for ultra-fast training with histogram-based leaf growth."
             })
             if feature_cats:
                 recommended_models.append({
                     "recipe_id": "catboost_trainer",
                     "name": f"🐱 CatBoost {detected_task.title()}",
-                    "score": 9.4,
-                    "tier": "Tier-1 Categorical",
+                    "tier": "Categorical",
                     "reason": "Native handling of high-cardinality categorical features without one-hot expansion."
                 })
             if date_cols:
                 recommended_models.append({
-                    "recipe_id": "prophet_forecaster",
-                    "name": "🔮 Meta Prophet Forecaster",
-                    "score": 9.3,
-                    "tier": "Tier-1 Time Series",
-                    "reason": "Detected timestamp column; Meta Prophet natively captures trend, changepoints, and seasonality."
-                })
-                recommended_models.append({
-                    "recipe_id": "arima_forecaster",
-                    "name": "📊 ARIMA / SARIMAX",
-                    "score": 8.6,
-                    "tier": "Tier-1 Statistical",
-                    "reason": "Rigorous classical statistical time-series baseline."
+                    "recipe_id": "prophet_forecaster" if row_count >= 60 else "arima_forecaster",
+                    "name": "🔮 Meta Prophet Forecaster" if row_count >= 60 else "📊 ARIMA / SARIMAX",
+                    "tier": "Time Series",
+                    "reason": "Captures trend and seasonality for long time series." if row_count >= 60 else "Optimal classical statistical forecaster for short time series."
                 })
             else:
                 recommended_models.append({
                     "recipe_id": "random_forest_trainer",
                     "name": "🌲 Random Forest",
-                    "score": 8.5,
-                    "tier": "Tier-1 Ensemble",
+                    "tier": "Ensemble Baseline",
                     "reason": "Robust non-linear bagging baseline."
                 })
 
         elif detected_task == "time_series_forecasting":
-            recommended_models.append({
-                "recipe_id": "prophet_forecaster",
-                "name": "🔮 Meta Prophet",
-                "score": 9.5,
-                "tier": "Tier-1 Business Standard",
-                "reason": "Decomposes trend, weekly/yearly seasonality, and handles irregular intervals with prediction bands."
-            })
-            recommended_models.append({
-                "recipe_id": "arima_forecaster",
-                "name": "📊 ARIMA / SARIMAX",
-                "score": 8.8,
-                "tier": "Tier-1 Statistical",
-                "reason": "Rigorous classical statistical baseline with lag and error differencing."
-            })
+            if row_count < 60:
+                recommended_models.append({
+                    "recipe_id": "arima_forecaster",
+                    "name": "📊 ARIMA / SARIMAX",
+                    "tier": "Statistical Baseline",
+                    "reason": "Optimal classical statistical baseline for small time series datasets (< 60 points)."
+                })
+                recommended_models.append({
+                    "recipe_id": "prophet_forecaster",
+                    "name": "🔮 Meta Prophet",
+                    "tier": "Trend & Seasonality",
+                    "reason": "Decomposes trend and yearly seasonality."
+                })
+            else:
+                recommended_models.append({
+                    "recipe_id": "prophet_forecaster",
+                    "name": "🔮 Meta Prophet",
+                    "tier": "Business Standard",
+                    "reason": "Decomposes trend, weekly/yearly seasonality, and handles irregular intervals with prediction bands."
+                })
+                recommended_models.append({
+                    "recipe_id": "arima_forecaster",
+                    "name": "📊 ARIMA / SARIMAX",
+                    "tier": "Statistical Baseline",
+                    "reason": "Rigorous classical statistical baseline with lag and error differencing."
+                })
             recommended_models.append({
                 "recipe_id": "xgboost_trainer",
                 "name": "⚡ XGBoost Regressor (Temporal)",
-                "score": 9.3,
-                "tier": "Tier-1 Gradient Boosting",
-                "reason": "Tree-based gradient boosting on temporal feature lags; captures non-linear tabular interactions alongside time."
+                "tier": "Gradient Boosting",
+                "reason": "Tree-based gradient boosting on temporal feature lags."
             })
             recommended_models.append({
                 "recipe_id": "lightgbm_trainer",
                 "name": "🚀 LightGBM Regressor (Temporal)",
-                "score": 9.1,
-                "tier": "Tier-1 High Speed",
+                "tier": "High Speed",
                 "reason": "Ultra-fast histogram gradient boosting with native categorical and temporal handling."
             })
 
@@ -196,15 +194,13 @@ class AIRecommender:
             recommended_models.append({
                 "recipe_id": "isolation_forest",
                 "name": "🌲 Isolation Forest",
-                "score": 9.6,
-                "tier": "Tier-1 Outlier Standard",
+                "tier": "Outlier Standard",
                 "reason": "Linear-time unsupervised isolation partitioning that scales to high dimensions."
             })
             recommended_models.append({
                 "recipe_id": "statistical_guardrail",
                 "name": "🛡️ Statistical Guardrail",
-                "score": 8.0,
-                "tier": "Tier-1 ELT Filter",
+                "tier": "ELT Filter",
                 "reason": "Z-Score / IQR standard-deviation thresholding for data quality filtering."
             })
 
@@ -291,25 +287,31 @@ class AIRecommender:
             prev_node_id = "node_impute"
             cur_x += 280
 
-            # 3. Prophet Forecaster
+            # 3. Dynamic Forecaster Node (ARIMA for small series, Prophet for long series)
+            rankings = recommendation.get("model_rankings", [])
+            chosen_recipe = rankings[0].get("recipe_id") if rankings else "prophet_forecaster"
+            if chosen_recipe not in ["prophet_forecaster", "arima_forecaster"]:
+                chosen_recipe = "prophet_forecaster"
+
+            fc_label = "📊 ARIMA / SARIMAX" if chosen_recipe == "arima_forecaster" else "🔮 Prophet Forecaster"
             p_config = {
                 "date_column": date_column or "Date",
                 "target_column": target_col or "Value",
                 "horizon_periods": 30
             }
             nodes.append({
-                "id": "node_prophet",
-                "recipe_id": "prophet_forecaster",
-                "label": "🔮 Prophet Forecaster",
+                "id": "node_forecaster",
+                "recipe_id": chosen_recipe,
+                "label": fc_label,
                 "position": {"x": cur_x, "y": 100},
                 "config": p_config
             })
-            node_configs["node_prophet"] = {
-                "recipe_id": "prophet_forecaster",
-                "label": "Prophet Forecaster",
+            node_configs["node_forecaster"] = {
+                "recipe_id": chosen_recipe,
+                "label": fc_label,
                 "config": p_config
             }
-            edges.append({"id": "e_impute_prophet", "source": prev_node_id, "target": "node_prophet", "animated": True})
+            edges.append({"id": "e_impute_fc", "source": prev_node_id, "target": "node_forecaster", "animated": True})
 
         elif task == "anomaly_detection":
             # Anomaly Detection Pipeline
