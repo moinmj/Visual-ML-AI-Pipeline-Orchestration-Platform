@@ -53,17 +53,43 @@ class PipelineInferencer:
                     request.target_year = parsed_nl["target_year"]
                 if parsed_nl.get("future_periods") and not request.future_periods:
                     request.future_periods = parsed_nl["future_periods"]
+                if parsed_nl.get("requested_metric") and not request.requested_metric:
+                    request.requested_metric = parsed_nl["requested_metric"]
 
                 # Automatically calculate time-series forecast_horizon from query if not explicitly passed!
                 if not request.forecast_horizon:
-                    max_yr = bundle.get("max_year", 2020)
-                    t_yr = parsed_nl.get("target_year")
-                    f_per = parsed_nl.get("future_periods")
+                    # Detect the END of the training/historical data (last non-future point)
+                    # and the end of the current forecast window
+                    hist_max_yr  = None
+                    fc_max_yr    = None
+                    max_yr       = bundle.get("max_year")
+
+                    fc_sum   = bundle.get("forecasting_summary", {})
+                    fc_data  = fc_sum.get("forecast_data", [])
+                    if fc_data:
+                        try:
+                            fc_max_yr = pd.to_datetime(fc_data[-1]["ds"]).year
+                            # Last historical (non-future) record
+                            hist_pts = [r for r in fc_data if not r.get("is_future", 1)]
+                            if hist_pts:
+                                hist_max_yr = pd.to_datetime(hist_pts[-1]["ds"]).year
+                            else:
+                                hist_max_yr = pd.to_datetime(fc_data[0]["ds"]).year
+                        except Exception:
+                            fc_max_yr   = 2020
+                            hist_max_yr = 2020
+
+                    # Use the training data end (hist_max_yr) as the projection baseline
+                    base_yr = max_yr or hist_max_yr or 2020
+
+                    t_yr   = parsed_nl.get("target_year")
+                    f_per  = parsed_nl.get("future_periods")
                     t_unit = (parsed_nl.get("time_unit") or "").lower()
 
-                    if t_yr and t_yr > max_yr:
-                        yr_diff = t_yr - max_yr
-                        request.forecast_horizon = int(yr_diff * 365)
+                    if t_yr:
+                        # +1 ensures the full TARGET year is included (not just the boundary)
+                        years_ahead = max(1, t_yr - base_yr + 1)
+                        request.forecast_horizon = int(years_ahead * 365)
                     elif f_per:
                         q_low = nl_query.lower()
                         if "year" in t_unit or "year" in q_low:
@@ -74,6 +100,7 @@ class PipelineInferencer:
                             request.forecast_horizon = int(f_per * 7)
                         else:
                             request.forecast_horizon = int(f_per)
+
             except Exception as e:
                 logger.warning(f"Failed to parse natural language query: {str(e)}")
 
@@ -414,6 +441,115 @@ class PipelineInferencer:
     # 3. TIME-SERIES FORECASTING
     # -------------------------------------------------------------
     @classmethod
+    def _build_forecasting_response(
+        cls,
+        bundle: Dict[str, Any],
+        request: PredictionRequest,
+        records: List[Dict[str, Any]],
+        exec_id: str
+    ) -> PredictionResponse:
+        if not records:
+            raise ValueError("Forecasting produced 0 projection points.")
+
+        yhats = [float(r["yhat"]) for r in records if r.get("yhat") is not None]
+        start_val = records[0]["yhat"] if records else 0.0
+        end_val = records[-1]["yhat"] if records else 0.0
+        pct_chg = round(((end_val - start_val) / (abs(start_val) + 1e-9)) * 100.0, 2)
+        trend = "Upward" if end_val >= start_val else "Downward"
+
+        # Compute Yearly Breakdown across forecast records
+        yearly_breakdown = {}
+        try:
+            recs_df = pd.DataFrame(records)
+            if not recs_df.empty and "ds" in recs_df.columns:
+                recs_df["ds_dt"] = pd.to_datetime(recs_df["ds"])
+                recs_df["year"] = recs_df["ds_dt"].dt.year
+                for yr, grp in recs_df.groupby("year"):
+                    y_vals = [float(v) for v in grp["yhat"].dropna().tolist()]
+                    if y_vals:
+                        y_avg = round(float(np.mean(y_vals)), 2)
+                        y_min = round(float(np.min(y_vals)), 2)
+                        y_max = round(float(np.max(y_vals)), 2)
+                        y_start = float(y_vals[0])
+                        y_end = float(y_vals[-1])
+                        yearly_breakdown[str(yr)] = {
+                            "year": int(yr),
+                            "avg": y_avg,
+                            "min": y_min,
+                            "max": y_max,
+                            "start": y_start,
+                            "end": y_end,
+                            "count": len(y_vals),
+                            "trend": "Downward" if y_end < y_start else "Upward"
+                        }
+        except Exception as e:
+            logger.warning(f"Error computing yearly breakdown: {str(e)}")
+
+        series_summary = {
+            "start_date": records[0]["ds"] if records else "N/A",
+            "end_date": records[-1]["ds"] if records else "N/A",
+            "start_value": start_val,
+            "end_value": end_val,
+            "min_value": min(yhats) if yhats else 0.0,
+            "max_value": max(yhats) if yhats else 0.0,
+            "avg_value": round(float(np.mean(yhats)), 2) if yhats else 0.0,
+            "total_points": len(records),
+            "yearly_breakdown": yearly_breakdown
+        }
+
+        # Resolve primary prediction value & user-facing label
+        req_metric = (request.requested_metric or "").lower()
+        t_yr_str = str(request.target_year) if request.target_year else None
+        target_name = bundle.get("target_column") or "Target"
+
+        if req_metric in ["average", "mean", "avg"]:
+            if t_yr_str and t_yr_str in yearly_breakdown:
+                pred_val = yearly_breakdown[t_yr_str]["avg"]
+                pred_label = f"Forecasted Average ({t_yr_str}): {target_name}"
+            else:
+                pred_val = series_summary["avg_value"]
+                pred_label = f"Forecasted Average: {target_name}"
+        elif req_metric in ["max", "peak", "highest"]:
+            if t_yr_str and t_yr_str in yearly_breakdown:
+                pred_val = yearly_breakdown[t_yr_str]["max"]
+                pred_label = f"Forecasted Peak ({t_yr_str}): {target_name}"
+            else:
+                pred_val = series_summary["max_value"]
+                pred_label = f"Forecasted Peak: {target_name}"
+        elif req_metric in ["min", "lowest"]:
+            if t_yr_str and t_yr_str in yearly_breakdown:
+                pred_val = yearly_breakdown[t_yr_str]["min"]
+                pred_label = f"Forecasted Minimum ({t_yr_str}): {target_name}"
+            else:
+                pred_val = series_summary["min_value"]
+                pred_label = f"Forecasted Minimum: {target_name}"
+        else:
+            if t_yr_str and t_yr_str in yearly_breakdown and len(yearly_breakdown) == 1:
+                pred_val = yearly_breakdown[t_yr_str]["avg"]
+                pred_label = f"Forecasted Average ({t_yr_str}): {target_name}"
+            else:
+                pred_val = end_val
+                last_ds = records[-1]["ds"] if records else ""
+                pred_label = f"Forecasted Target ({last_ds}): {target_name}"
+
+        return PredictionResponse(
+            status="SUCCESS",
+            task_type="time_series_forecasting",
+            execution_id=exec_id,
+            target_column=bundle.get("target_column"),
+            prediction=pred_val,
+            prediction_label=pred_label,
+            prediction_raw=pred_val,
+            forecast_horizon=len(records),
+            forecast_records=records,
+            trajectory=records,
+            projected_end_value=end_val,
+            projected_change_pct=pct_chg,
+            trend=trend,
+            series_summary=series_summary
+        )
+
+    @classmethod
     def _predict_forecasting(cls, bundle: Dict[str, Any], request: PredictionRequest) -> PredictionResponse:
         model = bundle.get("model")
         exec_id = bundle.get("execution_id", "unknown")
@@ -441,7 +577,9 @@ class PipelineInferencer:
 
                     for step_i in range(len(base_data), horizon):
                         step_d = last_d + pd.Timedelta(days=(step_i - len(base_data) + 1))
-                        extrap_y = round(last_y + slope * (step_i - len(base_data) + 1) * 0.2 + np.sin(step_i * 0.1) * 1.5, 2)
+                        day_of_year = step_d.dayofyear
+                        seasonal_effect = np.sin((day_of_year - 105) * 2 * np.pi / 365.25) * 9.5
+                        extrap_y = round(last_y + slope * (step_i - len(base_data) + 1) * 0.15 + seasonal_effect, 2)
                         records.append({
                             "ds": step_d.strftime("%Y-%m-%d"),
                             "yhat": extrap_y,
@@ -450,34 +588,7 @@ class PipelineInferencer:
                             "is_future": 1
                         })
 
-                yhats = [r.get("yhat", 0.0) for r in records if r.get("yhat") is not None]
-                end_val = records[-1]["yhat"] if records else 0.0
-                start_val = records[0]["yhat"] if records else 0.0
-                pct_chg = round(((end_val - start_val) / (abs(start_val) + 1e-9)) * 100.0, 2)
-                series_summary = {
-                    "start_date": records[0]["ds"] if records else "N/A",
-                    "end_date": records[-1]["ds"] if records else "N/A",
-                    "start_value": start_val,
-                    "end_value": end_val,
-                    "min_value": min(yhats) if yhats else 0.0,
-                    "max_value": max(yhats) if yhats else 0.0,
-                    "avg_value": round(float(np.mean(yhats)), 2) if yhats else 0.0,
-                    "total_points": len(records)
-                }
-
-                return PredictionResponse(
-                    status="SUCCESS",
-                    task_type="time_series_forecasting",
-                    execution_id=exec_id,
-                    target_column=bundle.get("target_column"),
-                    forecast_horizon=len(records),
-                    forecast_records=records,
-                    trajectory=records,
-                    projected_end_value=end_val,
-                    projected_change_pct=pct_chg,
-                    trend="Upward" if end_val >= start_val else "Downward",
-                    series_summary=series_summary
-                )
+                return cls._build_forecasting_response(bundle, request, records, exec_id)
             raise ValueError("No trained forecasting model found.")
 
         # Check for Prophet Model
@@ -503,42 +614,13 @@ class PipelineInferencer:
                 for d, yh, yhl, yhu in zip(out_df["ds"], out_df["yhat"], out_df["yhat_lower"], out_df["yhat_upper"])
             ]
 
-            end_val = records[-1]["yhat"] if records else 0.0
-            start_val = records[0]["yhat"] if records else 0.0
-            pct_chg = round(((end_val - start_val) / (start_val + 1e-9)) * 100.0, 2)
-
-            yhats = [r.get("yhat", 0.0) for r in records if r.get("yhat") is not None]
-            series_summary = {
-                "start_date": records[0]["ds"] if records else "N/A",
-                "end_date": records[-1]["ds"] if records else "N/A",
-                "start_value": start_val,
-                "end_value": end_val,
-                "min_value": min(yhats) if yhats else 0.0,
-                "max_value": max(yhats) if yhats else 0.0,
-                "avg_value": round(float(np.mean(yhats)), 2) if yhats else 0.0,
-                "total_points": len(records)
-            }
-
-            return PredictionResponse(
-                status="SUCCESS",
-                task_type="time_series_forecasting",
-                execution_id=exec_id,
-                target_column=bundle.get("target_column"),
-                forecast_horizon=len(records),
-                forecast_records=records,
-                trajectory=records,
-                projected_end_value=end_val,
-                projected_change_pct=pct_chg,
-                trend="Upward" if end_val >= start_val else "Downward",
-                series_summary=series_summary
-            )
+            return cls._build_forecasting_response(bundle, request, records, exec_id)
 
         # Check for ARIMA / SARIMAX Model
         if hasattr(model, "get_forecast"):
             forecast_res = model.get_forecast(steps=horizon)
             means = forecast_res.predicted_mean
             ci = forecast_res.conf_int(alpha=0.05)
-            ci_cols = ci.columns if hasattr(ci, "columns") else [0, 1]
 
             # Generate synthetic future dates starting from today
             dates = pd.date_range(start=pd.Timestamp.now().floor("D"), periods=horizon, freq=freq)
@@ -552,35 +634,7 @@ class PipelineInferencer:
                     "is_future": 1
                 })
 
-            end_val = records[-1]["yhat"] if records else 0.0
-            start_val = records[0]["yhat"] if records else 0.0
-            pct_chg = round(((end_val - start_val) / (start_val + 1e-9)) * 100.0, 2)
-
-            yhats = [r.get("yhat", 0.0) for r in records if r.get("yhat") is not None]
-            series_summary = {
-                "start_date": records[0]["ds"] if records else "N/A",
-                "end_date": records[-1]["ds"] if records else "N/A",
-                "start_value": start_val,
-                "end_value": end_val,
-                "min_value": min(yhats) if yhats else 0.0,
-                "max_value": max(yhats) if yhats else 0.0,
-                "avg_value": round(float(np.mean(yhats)), 2) if yhats else 0.0,
-                "total_points": len(records)
-            }
-
-            return PredictionResponse(
-                status="SUCCESS",
-                task_type="time_series_forecasting",
-                execution_id=exec_id,
-                target_column=bundle.get("target_column"),
-                forecast_horizon=len(records),
-                forecast_records=records,
-                trajectory=records,
-                projected_end_value=end_val,
-                projected_change_pct=pct_chg,
-                trend="Upward" if end_val >= start_val else "Downward",
-                series_summary=series_summary
-            )
+            return cls._build_forecasting_response(bundle, request, records, exec_id)
 
         raise ValueError(f"Unsupported forecasting model class: {type(model).__name__}")
 
@@ -798,15 +852,17 @@ class PipelineInferencer:
             '  "target_year": 2025 or null,\n'
             '  "future_periods": 3 or null,\n'
             '  "time_unit": "year" or "month" or "week" or "day" or null,\n'
+            '  "requested_metric": "average" or "max" or "min" or "end" or null,\n'
             '  "interpreted_intent": "Brief 1-sentence summary of what the user asked"\n'
             "}\n"
             "Rules:\n"
             "1. Only include feature names that strictly match the provided feature list.\n"
             "2. If the user mentions relative values (e.g. 'high humidity', 'heavy rain', 'low temp'), map them reasonably inside [min, max].\n"
-            "3. If the user mentions a future year (e.g. 'in 2025', 'by 2030'), set target_year to that integer.\n"
+            "3. If the user mentions a future year (e.g. 'in 2021', 'for year 2025', 'by 2030'), set target_year to that integer.\n"
             "4. If the user asks for a future timeframe (e.g. 'next 3 years', 'for 6 months', '2 weeks trajectory'), set future_periods to that integer (e.g. 3) and time_unit to 'year', 'month', 'week', or 'day'.\n"
-            f"5. If the user asks to predict an input feature (e.g. asking to predict rain) rather than the model's trained target ('{target_col}'), clarify this in interpreted_intent.\n"
-            "6. Never invent nonexistent features. Return pure JSON without markdown backticks."
+            "5. If the user asks for an average or mean (e.g. 'average forecast', 'mean value'), set requested_metric to 'average'. If peak, max, or highest, set 'max'. If min or lowest, set 'min'.\n"
+            f"6. If the user asks to predict an input feature (e.g. asking to predict rain) rather than the model's trained target ('{target_col}'), clarify this in interpreted_intent.\n"
+            "7. Never invent nonexistent features. Return pure JSON without markdown backticks."
         )
 
         user_content = (
@@ -838,11 +894,22 @@ class PipelineInferencer:
             except Exception as e:
                 logger.warning(f"Groq NL query parse warning: {str(e)}")
 
-        # Fallback extraction: check for 4-digit years and period keywords
+        # Fallback extraction: check for 4-digit years, period keywords, and requested metrics
         overrides = {}
         target_year = None
         future_periods = None
         time_unit = None
+        requested_metric = None
+
+        q_low = query.lower()
+        if any(w in q_low for w in ["average", "avg", "mean"]):
+            requested_metric = "average"
+        elif any(w in q_low for w in ["peak", "maximum", "max", "highest", "high point"]):
+            requested_metric = "max"
+        elif any(w in q_low for w in ["minimum", "min", "lowest", "low point"]):
+            requested_metric = "min"
+        elif any(w in q_low for w in ["final", "end", "ending"]):
+            requested_metric = "end"
 
         years = re.findall(r"\b(20[2-9][0-9])\b", query)
         if years:
@@ -861,6 +928,7 @@ class PipelineInferencer:
             "target_year": target_year,
             "future_periods": future_periods,
             "time_unit": time_unit,
+            "requested_metric": requested_metric,
             "interpreted_intent": f"Evaluated under natural language parameters: '{query}'"
         }
 
@@ -889,6 +957,13 @@ class PipelineInferencer:
                 f"- Peak (Max): {series_summary.get('max_value')}\n"
                 f"- Lowest (Min): {series_summary.get('min_value')}\n"
             )
+            yearly_breakdown = series_summary.get("yearly_breakdown", {})
+            if yearly_breakdown:
+                series_text += "\nYearly Forecast Breakdown (Annual Aggregates):\n"
+                for y_key, y_info in yearly_breakdown.items():
+                    series_text += (
+                        f"- Year {y_key}: Average={y_info.get('avg')}, Range=[{y_info.get('min')} to {y_info.get('max')}], Trend={y_info.get('trend')}\n"
+                    )
 
         if api_key:
             try:
@@ -905,7 +980,9 @@ class PipelineInferencer:
                                         f"You are a lead AI Data Scientist answering a user query using a machine learning model prediction.\n"
                                         f"This model was trained to predict the target variable: '{target_label}'.\n"
                                         f"Provide a clear, authoritative, 2-4 sentence conversational answer summarizing the predicted '{target_label}' in direct response to the user's question.\n"
+                                        f"Explicitly mention the primary requested prediction value ({prediction}) upfront.\n"
                                         f"Highlight key series insights (timeline start/end, overall trend direction, average, and high/low points) whenever series data is provided.\n"
+                                        f"If annual breakdown data is provided, explicitly state the yearly averages and ranges.\n"
                                         f"If the user asked to predict an input feature (e.g. asking to predict rain) rather than the model's actual target ('{target_label}'), gently clarify that '{target_label}' was predicted under those specified conditions."
                                     )
                                 },
@@ -915,7 +992,7 @@ class PipelineInferencer:
                                         f"User Question: '{query}'\n"
                                         f"Trained Target Variable: {target_label}\n"
                                         f"Task: {task_type}\n"
-                                        f"Predicted Result: {prediction}\n"
+                                        f"Primary Predicted Result: {prediction}\n"
                                         f"Key Input Features / Conditions: {features_used}\n"
                                         f"Trend: {trend or 'N/A'}"
                                         f"{series_text}"
@@ -932,6 +1009,16 @@ class PipelineInferencer:
                 logger.warning(f"Groq explanation generation warning: {str(e)}")
 
         if series_summary:
+            yearly_breakdown = series_summary.get("yearly_breakdown", {})
+            if yearly_breakdown and len(yearly_breakdown) > 0:
+                y_summaries = [f"Year {y}: Average {info.get('avg')} (range {info.get('min')} - {info.get('max')}, trend {info.get('trend')})" for y, info in yearly_breakdown.items()]
+                breakdown_str = "; ".join(y_summaries)
+                return (
+                    f"Based on your query '{query}', the model forecasts '{target_label}' from {series_summary.get('start_date')} to {series_summary.get('end_date')}. "
+                    f"Annual breakdown: {breakdown_str}. "
+                    f"Overall requested result is {prediction} with a {trend or 'projected'} trend."
+                )
+
             return (
                 f"Based on your query '{query}', the model forecasts a {trend or 'projected'} trajectory for '{target_label}' "
                 f"from {series_summary.get('start_date')} to {series_summary.get('end_date')} ({series_summary.get('total_points')} intervals). "

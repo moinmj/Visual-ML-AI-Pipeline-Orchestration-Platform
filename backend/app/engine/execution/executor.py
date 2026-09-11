@@ -276,7 +276,7 @@ class DAGExecutor:
                     "X_test", "y_test", "X_train", "y_train", "dataframe", "forecast_df",
                     "model", "scaler", "encoder", "task_type", "feature_names", "feature_importances",
                     "target_classes", "target_encoder", "target_column", "imputer_stats",
-                    "vectorizer", "text_column"
+                    "vectorizer", "text_column", "split_mode", "categorical_maps"
                 ]:
                     if key in outputs and outputs[key] is not None:
                         pipeline_context[key] = outputs[key]
@@ -473,6 +473,8 @@ class DAGExecutor:
             "temporal_column": temporal_col,
             "min_year": min_year,
             "max_year": max_year,
+            "split_mode": pipeline_context.get("split_mode"),
+            "categorical_maps": pipeline_context.get("categorical_maps", {}),
         }
 
         try:
