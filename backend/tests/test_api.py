@@ -1,4 +1,5 @@
 import pytest
+import uuid
 from httpx import AsyncClient, ASGITransport
 from backend.app.main import app
 from backend.app.infrastructure.database.session import init_db
@@ -335,4 +336,71 @@ async def test_class_imbalance_resampler_pipeline():
         assert data["final_metrics"] is not None
         assert "accuracy" in data["final_metrics"]
         assert data["final_metrics"]["task_type"] == "classification"
+
+
+@pytest.mark.asyncio
+async def test_list_workflows_lean_response_and_get_workflow_full_response():
+    await init_db()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. Create a full workflow workbook with nodes, edges, configs, and last_execution
+        wf_id = f"wf_test_lean_{uuid.uuid4().hex[:8]}"
+        save_payload = {
+            "id": wf_id,
+            "name": "Lean List Test Pipeline",
+            "description": "Testing lean list endpoint response",
+            "nodes": [
+                {"id": "n1", "recipe_id": "csv_loader", "label": "Node 1", "config": {}},
+                {"id": "n2", "recipe_id": "train_test_split", "label": "Node 2", "config": {"target_column": "target"}}
+            ],
+            "edges": [{"source": "n1", "target": "n2"}],
+            "node_configs": {
+                "n1": {"recipe_id": "csv_loader", "config": {"delimiter": ","}},
+                "n2": {"recipe_id": "train_test_split", "config": {"test_size": 0.2}}
+            },
+            "last_execution": {
+                "execution_id": "exec_lean_123",
+                "status": "SUCCESS",
+                "final_metrics": {"accuracy": 0.92, "f1_score": 0.89},
+                "node_results": {"heavy_data": [1, 2, 3] * 1000},
+                "execution_logs": ["Log line 1", "Log line 2"]
+            }
+        }
+
+        save_resp = await client.post("/api/v1/workflows/", json=save_payload)
+        assert save_resp.status_code == 201
+
+        # 2. Test GET /api/v1/workflows/ (List API) -> Must be lean!
+        list_resp = await client.get("/api/v1/workflows/")
+        assert list_resp.status_code == 200
+        items = list_resp.json()
+        assert isinstance(items, list)
+
+        matching = [item for item in items if item.get("id") == wf_id]
+        assert len(matching) == 1
+        lean_item = matching[0]
+
+        # Assert heavy fields are strictly REMOVED
+        assert "nodes" not in lean_item
+        assert "edges" not in lean_item
+        assert "node_configs" not in lean_item
+        assert "last_execution" not in lean_item
+
+        # Assert lightweight status and indicators are present at the root
+        assert lean_item["last_execution_status"] == "SUCCESS"
+        assert lean_item["last_execution_id"] == "exec_lean_123"
+        assert lean_item["last_metrics"]["accuracy"] == 0.92
+        assert lean_item["nodes_count"] == 2
+        assert lean_item["edges_count"] == 1
+
+        # 3. Test GET /api/v1/workflows/{id} (Single Get API) -> Must remain FULL and intact!
+        get_resp = await client.get(f"/api/v1/workflows/{wf_id}")
+        assert get_resp.status_code == 200
+        full_item = get_resp.json()
+
+        assert "nodes" in full_item and len(full_item["nodes"]) == 2
+        assert "edges" in full_item and len(full_item["edges"]) == 1
+        assert "node_configs" in full_item and "n1" in full_item["node_configs"]
+        assert "last_execution" in full_item and full_item["last_execution"]["status"] == "SUCCESS"
+        assert full_item["last_execution"]["final_metrics"]["accuracy"] == 0.92
 

@@ -1537,6 +1537,46 @@ def compare_workflow_executions_backend(workflow_id: str, run_a_id: str, run_b_i
 
 def restore_saved_workflow(wf_data: dict):
     """Restores a saved pipeline workbook into active StreamlitFlowState and node_configs."""
+    # If wf_data is a lean list summary (missing nodes/configs), fetch full details via GET /workflows/{id}
+    if not wf_data.get("nodes") and wf_data.get("id"):
+        try:
+            import httpx
+            r = httpx.get(f"http://localhost:8000/api/v1/workflows/{wf_data['id']}", timeout=4.0)
+            if r.status_code == 200:
+                wf_data = r.json()
+        except Exception:
+            pass
+
+        if not wf_data.get("nodes"):
+            try:
+                import asyncio
+                from backend.app.infrastructure.database.session import AsyncSessionLocal, init_db
+                from backend.app.workflows.models import Workflow
+                from sqlalchemy.future import select
+
+                async def _get_full():
+                    await init_db()
+                    async with AsyncSessionLocal() as session:
+                        res = await session.execute(select(Workflow).where(Workflow.id == wf_data["id"]))
+                        w = res.scalar_one_or_none()
+                        if w:
+                            return {
+                                "id": w.id,
+                                "name": w.name,
+                                "description": w.description,
+                                "nodes": w.nodes or [],
+                                "edges": w.edges or [],
+                                "node_configs": w.node_configs or {},
+                                "last_execution": w.last_execution,
+                                "is_active": w.is_active,
+                            }
+                        return None
+                db_full = asyncio.run(_get_full())
+                if db_full:
+                    wf_data = db_full
+            except Exception:
+                pass
+
     t_nodes = []
     t_edges = []
     
