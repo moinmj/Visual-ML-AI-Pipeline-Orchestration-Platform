@@ -1,0 +1,70 @@
+name: Deploy ML Pipeline
+
+on:
+  push:
+    branches:
+      - development
+
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+      - name: Test SSH Connection
+        run: |
+          ssh \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o "ProxyCommand=ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ~/.ssh/id_ed25519 -W %h:%p ${{ secrets.SERVER1_USER }}@${{ secrets.SERVER1_HOST }}" \
+            -i ~/.ssh/id_ed25519 \
+            -p ${{ secrets.SERVER2_PORT }} \
+            ${{ secrets.SERVER2_USER }}@127.0.0.1 \
+            "hostname && whoami"
+
+      - name: Deploy ML Pipeline
+        run: |
+          ssh \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o "ProxyCommand=ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ~/.ssh/id_ed25519 -W %h:%p ${{ secrets.SERVER1_USER }}@${{ secrets.SERVER1_HOST }}" \
+            -i ~/.ssh/id_ed25519 \
+            -p ${{ secrets.SERVER2_PORT }} \
+            ${{ secrets.SERVER2_USER }}@127.0.0.1 \
+            "
+            set -e
+
+            cd /home/serverguy/apps/Datalect_POC/AI_POC/ML_Pipeline/ML_Pipeline_platform-O
+
+            echo 'Pulling latest development branch...'
+            git fetch origin development
+            git reset --hard origin/development
+
+            echo 'Restarting ML-Pipeline-Platform...'
+
+            if pm2 describe ML-Pipeline-Platform >/dev/null 2>&1; then
+              pm2 reload ML-Pipeline-Platform
+            else
+              pm2 start /home/serverguy/apps/Datalect_POC/AI_POC/venv/bin/python \
+                --name ML-Pipeline-Platform \
+                --cwd /home/serverguy/apps/Datalect_POC/AI_POC/ML_Pipeline/ML_Pipeline_platform-O \
+                -- \
+                -m uvicorn backend.app.main:app \
+                --host 127.0.0.1 \
+                --port 9368
+            fi
+
+            pm2 save
+            pm2 status
+            "
