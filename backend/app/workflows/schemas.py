@@ -1,6 +1,13 @@
+from enum import Enum
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional, Union
 from datetime import datetime
+
+
+class WorkflowStatusFilter(str, Enum):
+    SUCCESS = "success"
+    FAILED = "failed"
+    UNRUN = "unrun"
 
 
 class WorkflowCreate(BaseModel):
@@ -67,6 +74,17 @@ class WorkflowListItemResponse(BaseModel):
 
 
 WorkflowSummaryResponse = WorkflowListItemResponse
+
+
+class WorkflowListPaginatedResponse(BaseModel):
+    total_records: int = Field(..., description="Total number of workflows matching filter")
+    skip: int = Field(0, description="Number of records skipped")
+    limit: int = Field(10, description="Page limit")
+    current_page: int = Field(1, description="1-indexed current page number")
+    total_pages: int = Field(1, description="Total number of pages")
+    data: List[WorkflowListItemResponse] = Field(default_factory=list, description="List of lightweight workflow summaries")
+
+    model_config = {"from_attributes": True}
 
 
 class WorkflowExecutionSummaryResponse(BaseModel):
