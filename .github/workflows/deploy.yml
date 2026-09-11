@@ -51,6 +51,13 @@ jobs:
             git fetch origin development
             git reset --hard origin/development
 
+            echo 'Loading Node.js environment...'
+            source ~/.nvm/nvm.sh
+            nvm use 22.23.2
+
+            echo 'PM2 version:'
+            pm2 --version
+
             echo 'Restarting ML-Pipeline-Platform...'
 
             if pm2 describe ML-Pipeline-Platform >/dev/null 2>&1; then
