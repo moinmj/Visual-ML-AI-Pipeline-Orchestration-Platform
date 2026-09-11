@@ -48,3 +48,6 @@ catboost_info/
 .DS_Store
 .idea/
 .vscode/
+scratch/
+*.png
+

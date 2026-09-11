@@ -1,5 +1,5 @@
-from backend.app.engine.inference.pipeline_inferencer import PipelineInferencer
-from backend.app.engine.inference.schemas import (
+from .pipeline_inferencer import PipelineInferencer
+from .schemas import (
     PredictionRequest,
     PredictionResponse,
     InferenceSchemaResponse,

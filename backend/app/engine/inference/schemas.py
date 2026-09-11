@@ -68,6 +68,7 @@ class PredictionResponse(BaseModel):
     execution_id: str = Field(description="Pipeline execution ID that trained this model")
     
     # Classification & Regression Outputs
+    target_column: Optional[str] = Field(default=None, description="Name of the predicted target variable")
     prediction: Optional[Any] = Field(default=None, description="Decoded class label or continuous numeric target")
     prediction_raw: Optional[Any] = Field(default=None, description="Raw model output before class decoding")
     confidence: Optional[float] = Field(default=None, description="Confidence score percentage (0-100%) for classification")
@@ -90,6 +91,7 @@ class PredictionResponse(BaseModel):
     projected_end_value: Optional[float] = Field(default=None, description="Projected final trajectory value")
     projected_change_pct: Optional[float] = Field(default=None, description="Projected percentage growth or decline")
     trend: Optional[str] = Field(default=None, description="Upward, Downward, or Neutral")
+    series_summary: Optional[Dict[str, Any]] = Field(default=None, description="Summary statistics of the projected time series (average, peak, trough, range)")
     
     # Batch Outputs
     batch_predictions: Optional[List[Dict[str, Any]]] = Field(default=None, description="Scored records for batch CSV requests")
