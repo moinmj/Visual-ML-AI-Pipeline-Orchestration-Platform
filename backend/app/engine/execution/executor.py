@@ -133,12 +133,12 @@ def make_json_safe(obj: Any) -> Any:
         return clean_s.to_dict()
     elif isinstance(obj, np.ndarray):
         return obj.tolist()
+    elif isinstance(obj, (np.bool_, bool)):
+        return bool(obj)
     elif isinstance(obj, (np.integer, int)):
         return int(obj)
     elif isinstance(obj, (np.floating, float)):
         return None if (np.isnan(obj) or np.isinf(obj)) else float(obj)
-    elif isinstance(obj, (np.bool_, bool)):
-        return bool(obj)
     elif isinstance(obj, dict):
         return {str(k): make_json_safe(v) for k, v in obj.items()}
     elif isinstance(obj, (list, tuple, set)):
@@ -414,6 +414,23 @@ class DAGExecutor:
                 })
                 sample_payload[col] = 0.0
 
+        # Detect temporal / year feature for future projection support
+        has_temporal = False
+        temporal_col = None
+        min_year = None
+        max_year = None
+
+        for f in features_schema:
+            fn_low = f["name"].lower()
+            if any(k in fn_low for k in ["year", "date", "time", "timestamp", "period", "ds"]):
+                has_temporal = True
+                if not temporal_col:
+                    temporal_col = f["name"]
+                if "year" in fn_low and f.get("min_value") is not None and f.get("max_value") is not None:
+                    if 1900 <= f["min_value"] <= 2100:
+                        min_year = int(f["min_value"])
+                        max_year = int(f["max_value"])
+
         inference_schema = {
             "execution_id": execution_id,
             "task_type": pipeline_context.get("task_type", "classification"),
@@ -421,7 +438,11 @@ class DAGExecutor:
             "target_classes": pipeline_context.get("target_classes", []),
             "features": features_schema,
             "sample_payload": sample_payload,
-            "time_series_meta": pipeline_context.get("forecasting_summary")
+            "time_series_meta": pipeline_context.get("forecasting_summary"),
+            "has_temporal_feature": has_temporal,
+            "temporal_column": temporal_col,
+            "min_year": min_year,
+            "max_year": max_year,
         }
 
         # Ensure model is preserved even if a downstream node produced outputs or was ordered differently
@@ -447,7 +468,11 @@ class DAGExecutor:
             "imputer_stats": pipeline_context.get("imputer_stats", {}),
             "forecasting_summary": pipeline_context.get("forecasting_summary", {}),
             "sample_row": sample_payload,
-            "training_feature_summary": {f["name"]: f for f in features_schema}
+            "training_feature_summary": {f["name"]: f for f in features_schema},
+            "has_temporal_feature": has_temporal,
+            "temporal_column": temporal_col,
+            "min_year": min_year,
+            "max_year": max_year,
         }
 
         try:

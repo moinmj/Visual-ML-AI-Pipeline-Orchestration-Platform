@@ -80,10 +80,14 @@ class ProphetForecasterRecipe(BaseRecipe):
         # 1. Validate and resolve target column
         target_col = config.get("target_column") or inputs.get("target_column")
         if not target_col or not str(target_col).strip() or str(target_col).strip() in ["-- Select Column --", "(None)"]:
-            raise ValueError(
-                "Target variable 'target_column' is required for Prophet Forecaster, but was left empty. "
-                "Please configure which numeric column to forecast."
-            )
+            num_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+            if num_cols:
+                target_col = num_cols[-1]
+            else:
+                raise ValueError(
+                    "Target variable 'target_column' is required for Prophet Forecaster, but was left empty. "
+                    "Please configure which numeric column to forecast."
+                )
         target_col = str(target_col).strip()
         if target_col not in df.columns:
             matching = [c for c in df.columns if c.lower() == target_col.lower()]
@@ -99,6 +103,18 @@ class ProphetForecasterRecipe(BaseRecipe):
         date_col = config.get("date_column") or inputs.get("date_column")
         valid_ds = None
 
+        def _safe_parse_datetime(series: pd.Series) -> Optional[pd.Series]:
+            if pd.api.types.is_numeric_dtype(series):
+                num_s = pd.to_numeric(series, errors="coerce").dropna()
+                if len(num_s) >= 5 and num_s.between(1800, 2200).all():
+                    res = pd.to_datetime(series.astype(str) + "-01-01", errors="coerce")
+                    if res.notna().sum() >= 5:
+                        return res
+            res = pd.to_datetime(series, errors="coerce")
+            if res.notna().sum() >= 5:
+                return res
+            return None
+
         if date_col and str(date_col).strip():
             date_col = str(date_col).strip()
             if date_col not in df.columns:
@@ -110,8 +126,8 @@ class ProphetForecasterRecipe(BaseRecipe):
                         f"Specified date column '{date_col}' was not found in dataset columns: {list(df.columns)}. "
                         "Please select an existing timestamp column."
                     )
-            converted = pd.to_datetime(df[date_col], errors="coerce")
-            if converted.notna().sum() >= 5:
+            converted = _safe_parse_datetime(df[date_col])
+            if converted is not None and converted.notna().sum() >= 5:
                 valid_ds = converted
             else:
                 raise ValueError(f"Date column '{date_col}' does not contain at least 5 valid datetime values.")
@@ -121,9 +137,9 @@ class ProphetForecasterRecipe(BaseRecipe):
             for col in df.columns:
                 if col == target_col:
                     continue
-                converted = pd.to_datetime(df[col], errors="coerce")
-                if converted.notna().sum() >= 5:
-                    valid_ds = converted
+                cand = _safe_parse_datetime(df[col])
+                if cand is not None and cand.notna().sum() >= 5:
+                    valid_ds = cand
                     date_col = col
                     break
 

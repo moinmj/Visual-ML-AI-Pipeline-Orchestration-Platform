@@ -989,7 +989,11 @@ async def get_execution_inference_schema(execution_id: str):
         target_classes=bundle.get("target_classes", []),
         features=feat_items,
         sample_payload=bundle.get("sample_row", {}),
-        time_series_meta=bundle.get("forecasting_summary")
+        time_series_meta=bundle.get("forecasting_summary"),
+        has_temporal_feature=bool(bundle.get("has_temporal_feature", False)),
+        temporal_column=bundle.get("temporal_column"),
+        min_year=bundle.get("min_year"),
+        max_year=bundle.get("max_year")
     )
 
 

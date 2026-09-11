@@ -43,12 +43,13 @@ AVAILABLE RECIPES IN THE PLATFORM (You MUST ONLY use these exact recipe_id value
 
 RULES FOR DAG CONSTRUCTION:
 1. Always start with "csv_loader" (id: "node_csv", position x=40, y=100).
-2. For Supervised tasks (classification/regression):
+2. If the dataset contains date/timestamp columns, you may choose EITHER a Time Series Forecaster ("prophet_forecaster", "arima_forecaster") OR a Gradient Boosted Regressor ("xgboost_trainer", "lightgbm_trainer") depending on the user query. The platform automatically plots chronological trajectory charts and supports future projections for both options!
+3. For Supervised tasks (classification/regression):
    - Ingestion -> Imputer (if nulls) -> Categorical Encoder (if text/cats) -> Scaler (if requested/numeric) -> Train/Test Split -> Model Trainer.
    - Both Train/Test Split (node_split) AND Model Trainer (node_model) MUST connect to Model Evaluator (node_eval).
    - "model_evaluator" receives X_test, y_test from "node_split", and trained model from "node_model".
-3. Layout coordinates: space nodes along x-axis with delta x ≈ 240px.
-4. Output MUST be valid JSON with this exact structure:
+4. Layout coordinates: space nodes along x-axis with delta x ≈ 240px.
+5. Output MUST be valid JSON with this exact structure:
 {
   "task_type": "classification" | "regression" | "time_series_forecasting" | "anomaly_detection",
   "target_column": "string",
