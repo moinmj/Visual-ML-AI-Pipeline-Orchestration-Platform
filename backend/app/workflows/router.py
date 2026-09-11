@@ -398,7 +398,6 @@ async def list_workflows(
                 updated_at=wf.updated_at,
                 last_execution_status=last_exec.get("status"),
                 last_execution_id=last_exec.get("execution_id"),
-                last_metrics=last_exec.get("final_metrics") or last_exec.get("metrics"),
                 nodes_count=len(wf.nodes or []),
                 edges_count=len(wf.edges or []),
             )

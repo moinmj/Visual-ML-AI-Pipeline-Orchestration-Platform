@@ -387,16 +387,16 @@ async def test_list_workflows_lean_response_and_get_workflow_full_response():
         assert len(matching) == 1
         lean_item = matching[0]
 
-        # Assert heavy fields are strictly REMOVED
+        # Assert heavy fields and metrics are strictly REMOVED from list view
         assert "nodes" not in lean_item
         assert "edges" not in lean_item
         assert "node_configs" not in lean_item
         assert "last_execution" not in lean_item
+        assert "last_metrics" not in lean_item
 
         # Assert lightweight status and indicators are present at the root
         assert lean_item["last_execution_status"] == "SUCCESS"
         assert lean_item["last_execution_id"] == "exec_lean_123"
-        assert lean_item["last_metrics"]["accuracy"] == 0.92
         assert lean_item["nodes_count"] == 2
         assert lean_item["edges_count"] == 1
 
