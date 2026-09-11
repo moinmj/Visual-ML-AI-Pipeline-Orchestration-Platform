@@ -4,14 +4,35 @@ from typing import Dict, Any, List, Optional
 from backend.app.profiling.profiler import DataProfiler
 
 
+from backend.app.core.config import settings
+
 class AIRecommender:
     """
     Analyzes dataset profile characteristics and user intent to detect problem types
     and rank optimal preprocessing recipes and ML models (Section 8 of spec).
+    Delegates to LLMRecommender when Groq API Key is available.
     """
 
     @classmethod
     def recommend_pipeline(
+        cls,
+        df: pd.DataFrame,
+        target_column: Optional[str] = None,
+        task_type: Optional[str] = None,
+        query: Optional[str] = None
+    ) -> Dict[str, Any]:
+        if getattr(settings, "GROQ_API_KEY", None):
+            try:
+                from backend.app.recommendation.llm_recommender import LLMRecommender
+                return LLMRecommender.recommend_pipeline(
+                    df=df, query=query, target_column=target_column, task_type=task_type
+                )
+            except Exception:
+                pass
+        return cls._heuristic_recommend_pipeline(df, target_column=target_column, task_type=task_type)
+
+    @classmethod
+    def _heuristic_recommend_pipeline(
         cls,
         df: pd.DataFrame,
         target_column: Optional[str] = None,

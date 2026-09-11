@@ -30,7 +30,7 @@ class Settings(BaseSettings):
 
     # Groq LLM Settings
     GROQ_API_KEY: Optional[str] = None
-    GROQ_MODEL: str = "openai/gpt-oss-120b"
+    GROQ_MODEL: str = "llama-3.3-70b-versatile"
 
     # Auth / JWT Settings
     # Tokens are expected to be issued by an identity provider (or the

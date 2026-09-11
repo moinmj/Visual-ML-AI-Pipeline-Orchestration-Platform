@@ -76,6 +76,49 @@ class LLMRecommender:
     """
 
     @classmethod
+    def recommend_pipeline(
+        cls,
+        df: pd.DataFrame,
+        query: Optional[str] = None,
+        target_column: Optional[str] = None,
+        time_column: Optional[str] = None,
+        task_type: Optional[str] = None,
+        preset: str = "balanced",
+        dataset_name: str = "Dataset"
+    ) -> Dict[str, Any]:
+        """
+        Synchronous wrapper for LLM pipeline recommendation.
+        """
+        import asyncio
+        import concurrent.futures
+
+        def _run_sync():
+            return asyncio.run(
+                cls.recommend_pipeline_async(
+                    df=df, query=query, target_column=target_column,
+                    time_column=time_column, task_type=task_type,
+                    preset=preset, dataset_name=dataset_name
+                )
+            )
+
+        try:
+            return asyncio.run(
+                cls.recommend_pipeline_async(
+                    df=df, query=query, target_column=target_column,
+                    time_column=time_column, task_type=task_type,
+                    preset=preset, dataset_name=dataset_name
+                )
+            )
+        except Exception:
+            try:
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    future = pool.submit(_run_sync)
+                    return future.result()
+            except Exception as e:
+                logger.warning(f"Sync wrapper for LLMRecommender failed: {str(e)}")
+                return AIRecommender._heuristic_recommend_pipeline(df, target_column=target_column, task_type=task_type)
+
+    @classmethod
     async def recommend_pipeline_async(
         cls,
         df: pd.DataFrame,
@@ -93,7 +136,7 @@ class LLMRecommender:
         api_key = settings.GROQ_API_KEY
         if not api_key:
             logger.info("GROQ_API_KEY not configured. Falling back to heuristic AIRecommender.")
-            return AIRecommender.recommend_pipeline(df, target_column=target_column, task_type=task_type)
+            return AIRecommender._heuristic_recommend_pipeline(df, target_column=target_column, task_type=task_type)
 
         try:
             # Construct dataset summary
@@ -121,24 +164,40 @@ class LLMRecommender:
                 f"Synthesize the visual ML DAG and return valid JSON only."
             )
 
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                response = await client.post(
-                    "https://api.groq.com/openai/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {api_key}"},
-                    json={
-                        "model": settings.GROQ_MODEL,
-                        "messages": [
-                            {"role": "system", "content": SYSTEM_PROMPT},
-                            {"role": "user", "content": user_prompt}
-                        ],
-                        "response_format": {"type": "json_object"},
-                        "temperature": 0.2
-                    }
-                )
+            models_to_try = [m for m in [settings.GROQ_MODEL, "llama-3.3-70b-versatile", "llama-3.1-8b-instant"] if m and "gpt-oss" not in m]
+            # Deduplicate preserving order
+            models_to_try = list(dict.fromkeys(models_to_try))
 
-            if response.status_code != 200:
-                logger.warning(f"Groq API returned status {response.status_code}: {response.text}. Using fallback.")
-                return AIRecommender.recommend_pipeline(df, target_column=target_column, task_type=task_type)
+            response = None
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                for model_id in models_to_try:
+                    if not model_id:
+                        continue
+                    try:
+                        response = await client.post(
+                            "https://api.groq.com/openai/v1/chat/completions",
+                            headers={"Authorization": f"Bearer {api_key}"},
+                            json={
+                                "model": model_id,
+                                "messages": [
+                                    {"role": "system", "content": SYSTEM_PROMPT},
+                                    {"role": "user", "content": user_prompt}
+                                ],
+                                "response_format": {"type": "json_object"},
+                                "temperature": 0.2
+                            }
+                        )
+                        if response.status_code == 200:
+                            break
+                        elif response.status_code == 429:
+                            import asyncio as a_io
+                            await a_io.sleep(1.0)
+                    except Exception as e:
+                        logger.warning(f"Groq model {model_id} failed: {str(e)}")
+
+            if not response or response.status_code != 200:
+                logger.warning(f"Groq API returned status {response.status_code if response else 'None'}. Using fallback.")
+                return AIRecommender._heuristic_recommend_pipeline(df, target_column=target_column, task_type=task_type)
 
             resp_json = response.json()
             content = resp_json["choices"][0]["message"]["content"]

@@ -879,7 +879,7 @@ class PipelineInferencer:
                         "https://api.groq.com/openai/v1/chat/completions",
                         headers={"Authorization": f"Bearer {api_key}"},
                         json={
-                            "model": getattr(settings, "GROQ_MODEL", "openai/gpt-oss-120b"),
+                            "model": getattr(settings, "GROQ_MODEL", "llama-3.3-70b-versatile"),
                             "messages": [
                                 {"role": "system", "content": prompt_system},
                                 {"role": "user", "content": user_content}
@@ -972,7 +972,7 @@ class PipelineInferencer:
                         "https://api.groq.com/openai/v1/chat/completions",
                         headers={"Authorization": f"Bearer {api_key}"},
                         json={
-                            "model": getattr(settings, "GROQ_MODEL", "openai/gpt-oss-120b"),
+                            "model": getattr(settings, "GROQ_MODEL", "llama-3.3-70b-versatile"),
                             "messages": [
                                 {
                                     "role": "system",
