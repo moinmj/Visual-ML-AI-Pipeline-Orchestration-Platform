@@ -17,13 +17,20 @@ AVAILABLE RECIPES IN THE PLATFORM (You MUST ONLY use these exact recipe_id value
 - Ingestion:
   * "csv_loader": Ingests tabular dataset. config: {"dataset_id": "..."}
 - Preprocessing:
+  * "column_selector": Keeps or drops selected columns/IDs. config: {"columns": ["col1"], "mode": "include"|"exclude"}
+  * "data_type_converter": Casts feature types safely (numeric, datetime, category, string). config: {"conversions": {"col_a": "datetime"}}
   * "missing_value_imputer": Handles NaNs. config: {"strategy": "median"|"mean"|"most_frequent"|"constant"|"ffill"|"bfill"}
+  * "outlier_handler": Detects and caps or removes extreme values. config: {"method": "iqr"|"zscore", "action": "clip"|"remove", "threshold": 1.5}
   * "categorical_encoder": Encodes text/categorical features. config: {"method": "one_hot"|"label"}
   * "feature_scaler": Normalizes numeric features. config: {"method": "standard"|"minmax"|"robust"}
+  * "feature_selector": Selects top-k most predictive features. config: {"method": "kbest"|"variance"|"correlation", "k": 10}
   * "text_preprocessor": Cleans unstructured text. config: {"remove_stopwords": true, "lowercase": true}
   * "text_vectorizer": Vectorizes text. config: {"method": "tfidf"|"count"}
 - Splitting:
-  * "train_test_split": Splits train/test sets. config: {"target_column": "<col_name>", "test_size": 0.2, "time_series_mode": false}. Set time_series_mode=true for any dataset with temporal/year/date features to prevent data leakage.
+  * "train_test_split": Standard random train/test split. config: {"target_column": "<col_name>", "test_size": 0.2, "time_series_mode": false}
+  * "stratified_split": Preserves exact class ratio for classification datasets (best for imbalanced targets). config: {"target_column": "<col_name>", "test_size": 0.2}
+  * "time_series_split": Strict chronological split for temporal datasets to prevent future data leakage. config: {"target_column": "<col_name>", "date_column": "<date_col>", "test_size": 0.2, "gap": 0}
+  * "walk_forward_split": Sliding/expanding rolling window split for financial & time-series backtesting. config: {"target_column": "<col_name>", "train_window_size": 100, "test_window_size": 20, "expanding": false}
 - Model Training (Supervised):
   * "xgboost_trainer": config: {"task_type": "classification"|"regression", "n_estimators": 100, "max_depth": 6}
   * "lightgbm_trainer": config: {"task_type": "classification"|"regression", "n_estimators": 100, "max_depth": 6}
@@ -43,10 +50,13 @@ AVAILABLE RECIPES IN THE PLATFORM (You MUST ONLY use these exact recipe_id value
 
 RULES FOR DAG CONSTRUCTION:
 1. Always start with "csv_loader" (id: "node_csv", position x=40, y=100).
-2. If the dataset contains date/timestamp columns, you may choose EITHER a Time Series Forecaster ("prophet_forecaster", "arima_forecaster") OR a Gradient Boosted Regressor ("xgboost_trainer", "lightgbm_trainer") depending on the user query. The platform automatically plots chronological trajectory charts and supports future projections for both options!
-3. For Supervised tasks (classification/regression):
-   - Ingestion -> Imputer (if nulls) -> Categorical Encoder (if text/cats) -> Scaler (if requested/numeric) -> Train/Test Split -> Model Trainer.
-   - Both Train/Test Split (node_split) AND Model Trainer (node_model) MUST connect to Model Evaluator (node_eval).
+2. For Classification, strongly prefer "stratified_split" to preserve class distribution across train/test sets.
+3. For Time Series or datasets with temporal date/year features:
+   - Prefer "time_series_split" or "walk_forward_split" for regression/GBDT models to prevent future data leakage.
+   - Or connect directly to "prophet_forecaster" / "arima_forecaster" if forecasting is requested.
+4. For Supervised tasks (classification/regression):
+   - Ingestion -> Preprocessing -> Splitter -> Model Trainer.
+   - Both the Splitter node (node_split) AND the Model Trainer node (node_model) MUST connect to Model Evaluator (node_eval).
    - "model_evaluator" receives X_test, y_test from "node_split", and trained model from "node_model".
 4. Layout coordinates: space nodes along x-axis with delta x ≈ 240px.
 5. Output MUST be valid JSON with this exact structure:
@@ -240,8 +250,18 @@ class LLMRecommender:
                     r_id = "missing_value_imputer"
                 elif "scale" in r_id:
                     r_id = "feature_scaler"
+                elif "strat" in r_id:
+                    r_id = "stratified_split"
+                elif "time" in r_id and "split" in r_id:
+                    r_id = "time_series_split"
+                elif "walk" in r_id or "forward" in r_id:
+                    r_id = "walk_forward_split"
                 elif "split" in r_id:
                     r_id = "train_test_split"
+                elif "outlier" in r_id:
+                    r_id = "outlier_handler"
+                elif "col" in r_id and "select" in r_id:
+                    r_id = "column_selector"
                 else:
                     r_id = "csv_loader"
                 n["recipe_id"] = r_id

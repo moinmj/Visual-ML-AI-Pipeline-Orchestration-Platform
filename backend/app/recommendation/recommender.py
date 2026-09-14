@@ -399,25 +399,43 @@ class AIRecommender:
                 prev_node_id = step_id
                 cur_x += 240
 
-            # 3. Train/Test Splitter
+            # 3. Intelligent Train/Test Splitter Selection
             split_id = "node_split"
-            split_cfg: Dict[str, Any] = {
-                "target_column": target_col or "target",
-                "test_size": 0.2
-            }
             if date_column:
-                split_cfg["time_series_mode"] = True
-                split_cfg["time_column"] = date_column
+                split_recipe_id = "time_series_split"
+                split_label = "Time-Series Split"
+                split_cfg = {
+                    "target_column": target_col or "target",
+                    "date_column": date_column,
+                    "test_size": 0.2
+                }
+            elif task == "classification":
+                split_recipe_id = "stratified_split"
+                split_label = "Stratified Split"
+                split_cfg = {
+                    "target_column": target_col or "target",
+                    "test_size": 0.2,
+                    "random_state": 42
+                }
+            else:
+                split_recipe_id = "train_test_split"
+                split_label = "Train/Test Split"
+                split_cfg = {
+                    "target_column": target_col or "target",
+                    "test_size": 0.2,
+                    "random_state": 42
+                }
+
             nodes.append({
                 "id": split_id,
-                "recipe_id": "train_test_split",
-                "label": "Train/Test Split",
+                "recipe_id": split_recipe_id,
+                "label": split_label,
                 "position": {"x": cur_x, "y": 100},
                 "config": split_cfg
             })
             node_configs[split_id] = {
-                "recipe_id": "train_test_split",
-                "label": "Splitter",
+                "recipe_id": split_recipe_id,
+                "label": split_label,
                 "config": split_cfg
             }
             edges.append({

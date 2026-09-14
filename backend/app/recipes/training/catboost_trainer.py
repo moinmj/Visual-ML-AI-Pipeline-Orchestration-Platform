@@ -64,10 +64,8 @@ class CatBoostTrainerRecipe(BaseRecipe):
         if not CATBOOST_AVAILABLE:
             raise ValueError("CatBoost is not installed. Please run 'pip install catboost'.")
 
-        X_train = inputs.get("X_train")
-        y_train = inputs.get("y_train")
-        X_test = inputs.get("X_test")
-        y_test = inputs.get("y_test")
+        from backend.app.recipes.training.encoder_utils import extract_train_test_data
+        X_train, y_train, X_test, y_test = extract_train_test_data(inputs)
 
         if X_train is None or y_train is None:
             raise ValueError("CatBoostTrainer expects 'X_train' and 'y_train' in inputs. Please connect a Train/Test Split node before this trainer.")
