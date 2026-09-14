@@ -139,6 +139,33 @@ class ModelEvaluatorRecipe(BaseRecipe):
         # Capture split_mode from upstream TrainTestSplit recipe for reporting
         split_mode = inputs.get("split_mode") or (context.get("split_mode") if isinstance(context, dict) else None)
 
+        # ── Snapshot temporal columns BEFORE encoding so trajectory x-axis uses
+        # real dates, not integer-encoded surrogates produced by safe_prepare_training_data.
+        # safe_prepare_training_data drops "Date" and replaces it with Date_year/month/day
+        # integers, so any temporal detection that runs on the post-encoded X_test sees
+        # only integers (or scaler-normalised floats) instead of actual date values.
+        _temporal_snapshot: Optional[pd.Series] = None  # raw date strings, pre-encoding
+        _temporal_snap_col: Optional[str] = None
+        if isinstance(X_test, pd.DataFrame):
+            _date_keywords = ["date", "time", "timestamp", "period", "ds", "week", "month", "year"]
+            for _c in X_test.columns:
+                if any(k in _c.lower() for k in _date_keywords):
+                    _col_vals = X_test[_c]
+                    # Try to parse as datetime – if it converts cleanly, use it
+                    try:
+                        _parsed = pd.to_datetime(_col_vals, errors="coerce")
+                        if _parsed.notna().sum() > 0.5 * len(_col_vals):
+                            _temporal_snapshot = _parsed
+                            _temporal_snap_col = _c
+                            break
+                    except Exception:
+                        pass
+                    # Fallback: store raw string representation
+                    if _temporal_snapshot is None:
+                        _temporal_snapshot = _col_vals.astype(str)
+                        _temporal_snap_col = _c
+                        break
+
         # Ensure X_test non-numeric columns are safely encoded and aligned with model features
         if isinstance(X_test, pd.DataFrame):
             expected_features = None
@@ -251,46 +278,85 @@ class ModelEvaluatorRecipe(BaseRecipe):
                 "mape": mape
             })
 
-            # Check for temporal / date / year column to generate chronological Actual vs Predicted trajectory
+            # ── Build Actual vs Predicted trajectory.
+            # Priority 1: use the pre-encoding date snapshot captured before safe_prepare_training_data
+            # ran (it would have replaced e.g. "Date" with Date_year/month/day integers).
+            # Priority 2: reconstruct from year/month/day integer columns in the post-encoded X_test.
+            # Priority 3: fall back to step indices.
             trajectory = []
             time_col = None
             time_sort_key = None
             formatted_dates = None
 
-            if isinstance(X_test, pd.DataFrame):
+            def _fmt_date_val(v) -> str:
+                """Normalise any date-like value to a clean ISO-8601 string."""
+                if v is None or (isinstance(v, float) and np.isnan(v)):
+                    return "N/A"
+                try:
+                    ts = pd.Timestamp(v)
+                    if pd.isna(ts):
+                        return str(v)
+                    return ts.strftime("%Y-%m-%d")
+                except Exception:
+                    return str(v)
+
+            # ── Priority 1: pre-encoding snapshot ────────────────────────────────
+            if _temporal_snapshot is not None and _temporal_snap_col is not None:
+                time_col = _temporal_snap_col
+                if pd.api.types.is_datetime64_any_dtype(_temporal_snapshot):
+                    formatted_dates = [_fmt_date_val(v) for v in _temporal_snapshot]
+                    time_sort_key = _temporal_snapshot.values
+                else:
+                    # Raw strings – try to parse, else keep as-is
+                    try:
+                        _parsed = pd.to_datetime(_temporal_snapshot, errors="coerce")
+                        if _parsed.notna().sum() > 0.5 * len(_temporal_snapshot):
+                            formatted_dates = [_fmt_date_val(v) for v in _parsed]
+                            time_sort_key = _parsed.values
+                        else:
+                            formatted_dates = list(_temporal_snapshot.astype(str))
+                            time_sort_key = list(range(len(formatted_dates)))
+                    except Exception:
+                        formatted_dates = list(_temporal_snapshot.astype(str))
+                        time_sort_key = list(range(len(formatted_dates)))
+
+            # ── Priority 2: post-encoded year/month/day columns ──────────────────
+            elif isinstance(X_test, pd.DataFrame):
                 year_cols = [c for c in X_test.columns if "year" in c.lower()]
                 month_cols = [c for c in X_test.columns if "month" in c.lower()]
                 day_cols = [c for c in X_test.columns if "day" in c.lower()]
-                candidates = [c for c in X_test.columns if any(k in c.lower() for k in ["date", "time", "year", "timestamp", "period", "ds", "month"])]
+                candidates = [c for c in X_test.columns if any(k in c.lower() for k in ["date", "time", "timestamp", "period", "ds"])]
 
                 if year_cols and month_cols:
-                    # Construct clean compound date representation and sort keys
                     time_col = year_cols[0]
                     y_s = pd.to_numeric(X_test[year_cols[0]], errors="coerce").fillna(2000).astype(int)
                     m_s = pd.to_numeric(X_test[month_cols[0]], errors="coerce").fillna(1).astype(int)
-                    if day_cols:
-                        d_s = pd.to_numeric(X_test[day_cols[0]], errors="coerce").fillna(1).astype(int)
-                        formatted_dates = [f"{y}-{m:02d}-{d:02d}" for y, m, d in zip(y_s, m_s, d_s)]
-                        time_sort_key = [y * 10000 + m * 100 + d for y, m, d in zip(y_s, m_s, d_s)]
-                    else:
-                        formatted_dates = [f"{y}-{m:02d}" for y, m in zip(y_s, m_s)]
-                        time_sort_key = [y * 100 + m for y, m in zip(y_s, m_s)]
+                    # Validate year values are real years (1990-2100), not ordinal row-numbers
+                    if y_s.between(1990, 2100).mean() > 0.5:
+                        if day_cols:
+                            d_s = pd.to_numeric(X_test[day_cols[0]], errors="coerce").fillna(1).astype(int)
+                            formatted_dates = [f"{y}-{m:02d}-{d:02d}" for y, m, d in zip(y_s, m_s, d_s)]
+                            time_sort_key = [y * 10000 + m * 100 + d for y, m, d in zip(y_s, m_s, d_s)]
+                        else:
+                            formatted_dates = [f"{y}-{m:02d}" for y, m in zip(y_s, m_s)]
+                            time_sort_key = [y * 100 + m for y, m in zip(y_s, m_s)]
                 elif candidates:
                     time_col = candidates[0]
                     t_vals = X_test[time_col]
-                    formatted_dates = [str(v) for v in t_vals.values]
-                    # Attempt robust sorting key
                     try:
                         parsed_dt = pd.to_datetime(t_vals, errors="coerce")
                         if parsed_dt.notna().sum() > len(parsed_dt) * 0.5:
+                            formatted_dates = [_fmt_date_val(v) for v in parsed_dt]
                             time_sort_key = parsed_dt.values
                         else:
+                            formatted_dates = [str(v) for v in t_vals.values]
                             time_sort_key = pd.to_numeric(t_vals, errors="coerce").fillna(0).values
                     except Exception:
+                        formatted_dates = [str(v) for v in t_vals.values]
                         time_sort_key = list(range(len(t_vals)))
                 elif isinstance(X_test.index, pd.DatetimeIndex):
                     time_col = "__index__"
-                    formatted_dates = [str(v) for v in X_test.index.values]
+                    formatted_dates = [_fmt_date_val(v) for v in X_test.index]
                     time_sort_key = X_test.index.values
 
             y_actuals = y_test.values if hasattr(y_test, "values") else list(y_test)
@@ -327,7 +393,8 @@ class ModelEvaluatorRecipe(BaseRecipe):
                 metrics["trajectory"] = trajectory
                 metrics["actual_vs_predicted_time_series"] = trajectory
                 if time_col:
-                    metrics["temporal_column"] = time_col
+                    # Strip internal __index__ sentinel before surfacing to UI
+                    metrics["temporal_column"] = time_col if time_col != "__index__" else "index"
                     metrics["is_temporal"] = True
 
         if split_mode:

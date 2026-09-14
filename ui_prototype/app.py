@@ -2995,12 +2995,64 @@ if app_mode == "🎨 Pipeline Whiteboard":
                     st.info(f"✨ **Regression Model Evaluation:** Model achieved **R² = {r2_v:.4f}** with an average absolute deviation of **MAE = {mae_v:.4f}** on the unseen test set.")
 
                 with rep_tab2:
-                    st.markdown("##### Model Predictions Preview on Unseen Test Partition:")
-                    if "predictions_sample" in exec_data.get("final_metrics", {}):
-                        preds = exec_data["final_metrics"]["predictions_sample"]
-                        st.dataframe(pd.DataFrame({"Sample Prediction": preds}), use_container_width=True)
+                    traj_data = final_metrics.get("trajectory") or final_metrics.get("actual_vs_predicted_time_series")
+                    temp_col_label = final_metrics.get("temporal_column", "Step")
+
+                    if traj_data and len(traj_data) > 0:
+                        traj_df = pd.DataFrame(traj_data)
+                        # Ensure ds column is string for plotly categorical axis
+                        traj_df["ds"] = traj_df["ds"].astype(str)
+
+                        fig_traj = go.Figure()
+                        fig_traj.add_trace(go.Scatter(
+                            x=traj_df["ds"], y=traj_df["actual"],
+                            mode="lines", name="Actual",
+                            line=dict(color="#10B981", width=2)
+                        ))
+                        fig_traj.add_trace(go.Scatter(
+                            x=traj_df["ds"], y=traj_df["yhat"],
+                            mode="lines", name="Predicted",
+                            line=dict(color="#3B82F6", width=2, dash="dot")
+                        ))
+                        fig_traj.update_layout(
+                            title="Actual vs Predicted — Chronological Trajectory",
+                            xaxis_title=temp_col_label,
+                            yaxis_title="Value",
+                            height=400,
+                            legend=dict(orientation="h", y=1.02, x=1, xanchor="right"),
+                            margin=dict(l=40, r=20, t=55, b=40)
+                        )
+                        st.plotly_chart(fig_traj, use_container_width=True)
+
+                        # Residual chart
+                        if "residual" in traj_df.columns:
+                            fig_res = go.Figure()
+                            fig_res.add_trace(go.Bar(
+                                x=traj_df["ds"], y=traj_df["residual"],
+                                name="Residual (Actual − Predicted)",
+                                marker_color=traj_df["residual"].apply(
+                                    lambda r: "#EF4444" if r < 0 else "#10B981"
+                                )
+                            ))
+                            fig_res.add_hline(y=0, line_dash="dash", line_color="white", opacity=0.5)
+                            fig_res.update_layout(
+                                title="Residuals (Actual − Predicted)",
+                                xaxis_title=temp_col_label,
+                                yaxis_title="Residual",
+                                height=280,
+                                margin=dict(l=40, r=20, t=45, b=40)
+                            )
+                            st.plotly_chart(fig_res, use_container_width=True)
+
+                        with st.expander("📋 Raw Trajectory Table", expanded=False):
+                            st.dataframe(traj_df, use_container_width=True)
                     else:
-                        st.write("Predictions generated successfully.")
+                        st.markdown("##### Model Predictions Preview on Unseen Test Partition:")
+                        if "predictions_sample" in exec_data.get("final_metrics", {}):
+                            preds = exec_data["final_metrics"]["predictions_sample"]
+                            st.dataframe(pd.DataFrame({"Sample Prediction": preds}), use_container_width=True)
+                        else:
+                            st.info("ℹ️ No trajectory data available. Re-run the pipeline to generate the Actual vs Predicted chart.")
 
                 with rep_tab3:
                     for n_id, out in node_outputs.items():
