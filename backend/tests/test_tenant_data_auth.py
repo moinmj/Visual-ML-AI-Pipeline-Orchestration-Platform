@@ -58,9 +58,11 @@ async def test_tenant_data_requires_auth_and_scopes_by_tenant(monkeypatch):
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             # Enforce strict auth mode for unauthenticated request test
             monkeypatch.setattr("backend.app.core.security.settings.ENVIRONMENT", "production")
+            monkeypatch.setattr("backend.app.core.security.settings.DEBUG", False)
             resp = await client.get("/api/v1/tenant-data/environments")
             assert resp.status_code in (401, 403)
             monkeypatch.setattr("backend.app.core.security.settings.ENVIRONMENT", "development")
+            monkeypatch.setattr("backend.app.core.security.settings.DEBUG", True)
 
             # Get a dev token for tenant 1
             resp = await client.post(
