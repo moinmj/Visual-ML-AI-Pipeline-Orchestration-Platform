@@ -49,16 +49,18 @@ async def _seed_environment(tenant_id: int):
 
 
 @pytest.mark.asyncio
-async def test_tenant_data_requires_auth_and_scopes_by_tenant():
+async def test_tenant_data_requires_auth_and_scopes_by_tenant(monkeypatch):
     await init_db()
     env_id, model_id, env_name, model_name = await _seed_environment(tenant_id=1)
 
     try:
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            # No token -> 401 or 403 (confirms auth is enforced)
+            # Enforce strict auth mode for unauthenticated request test
+            monkeypatch.setattr("backend.app.core.security.settings.ENVIRONMENT", "production")
             resp = await client.get("/api/v1/tenant-data/environments")
             assert resp.status_code in (401, 403)
+            monkeypatch.setattr("backend.app.core.security.settings.ENVIRONMENT", "development")
 
             # Get a dev token for tenant 1
             resp = await client.post(
