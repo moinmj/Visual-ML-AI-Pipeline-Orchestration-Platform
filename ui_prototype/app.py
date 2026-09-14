@@ -1486,61 +1486,7 @@ def fetch_workflow_execution_detail_backend(workflow_id: str, execution_id: str)
         return None
 
 
-def rollback_workflow_backend(workflow_id: str, execution_id: str) -> dict:
-    """Performs one-click rollback of a workflow to a historical execution snapshot."""
-    try:
-        import httpx
-        url = f"http://localhost:8000/api/v1/workflows/{workflow_id}/history/{execution_id}/rollback"
-        res = httpx.post(url, timeout=4.0)
-        if res.status_code == 200:
-            return res.json()
-    except Exception:
-        pass
 
-    import asyncio
-    from datetime import datetime, timezone
-    from backend.app.infrastructure.database.session import AsyncSessionLocal, init_db
-    from backend.app.workflows.models import Workflow, WorkflowExecution
-    from sqlalchemy.future import select
-    from fastapi.encoders import jsonable_encoder
-
-    async def _async_rollback():
-        await init_db()
-        async with AsyncSessionLocal() as session:
-            ex_res = await session.execute(select(WorkflowExecution).where(WorkflowExecution.workflow_id == workflow_id, WorkflowExecution.id == execution_id))
-            ex = ex_res.scalar_one_or_none()
-            wf_res = await session.execute(select(Workflow).where(Workflow.id == workflow_id))
-            wf = wf_res.scalar_one_or_none()
-            if ex and wf:
-                wf.nodes = ex.snapshot_nodes
-                wf.edges = ex.snapshot_edges
-                wf.node_configs = ex.snapshot_node_configs
-                wf.last_execution = jsonable_encoder({
-                    "execution_id": ex.id,
-                    "status": ex.status,
-                    "total_duration_ms": ex.total_duration_ms,
-                    "final_metrics": ex.metrics,
-                    **(ex.reports or {}),
-                    "step_snapshots": ex.step_snapshots,
-                    "execution_logs": ex.logs,
-                    "rolled_back_from_version": ex.version_number
-                })
-                wf.updated_at = datetime.now(timezone.utc)
-                await session.commit()
-                await session.refresh(wf)
-                return {
-                    "id": wf.id,
-                    "name": wf.name,
-                    "nodes": wf.nodes,
-                    "edges": wf.edges,
-                    "node_configs": wf.node_configs,
-                    "last_execution": wf.last_execution
-                }
-            return None
-    try:
-        return asyncio.run(_async_rollback())
-    except Exception:
-        return None
 
 
 def compare_workflow_executions_backend(workflow_id: str, run_a_id: str, run_b_id: str) -> dict:
@@ -1960,7 +1906,7 @@ if app_mode == "🎨 Pipeline Whiteboard":
     # ---------------------------------------------------------
     with st.expander("🕒 Version History & Execution Audit Trail", expanded=False):
         st.markdown("#### 🕒 Pipeline Version History & Audit Trail")
-        st.caption("Inspect past configurations, view execution run reports, rollback canvas to past states, and compare metrics side-by-side.")
+        st.caption("Inspect past configurations, view execution run reports, and compare metrics side-by-side.")
 
         # Determine active workflow or select from saved workbooks
         active_saved_id = st.session_state.get("active_saved_workflow_id")
@@ -1985,7 +1931,7 @@ if app_mode == "🎨 Pipeline Whiteboard":
             if not hist_runs:
                 st.info("ℹ️ No historical execution runs recorded for this workbook yet. Click '▶️ RUN PIPELINE' above to record Run #1.")
             else:
-                hist_tab1, hist_tab2 = st.tabs(["📜 Execution Timeline & Rollback", "⚖️ Compare Runs Side-by-Side"])
+                hist_tab1, hist_tab2 = st.tabs(["📜 Execution Timeline", "⚖️ Compare Runs Side-by-Side"])
 
                 with hist_tab1:
                     st.markdown(f"##### Showing **{len(hist_runs)}** Recorded Execution Runs:")
@@ -2005,7 +1951,7 @@ if app_mode == "🎨 Pipeline Whiteboard":
                         lbl = f"{status_icon} v{v_num} — {r.get('run_label', f'Run #{v_num}')} ({dt_str}){headline_metric}"
                         run_choices[lbl] = r
 
-                    selected_run_lbl = st.selectbox("Select Run to Inspect / Restore", list(run_choices.keys()), key="sel_hist_run_card")
+                    selected_run_lbl = st.selectbox("Select Run to Inspect", list(run_choices.keys()), key="sel_hist_run_card")
                     active_run_summary = run_choices[selected_run_lbl]
 
                     # Metrics & KPIs Row
@@ -2020,31 +1966,21 @@ if app_mode == "🎨 Pipeline Whiteboard":
                         with st.expander("📊 Run Summary Metrics", expanded=True):
                             st.json(active_run_summary["metrics"])
 
-                    # Actions: View Report & Rollback
-                    b_col1, b_col2 = st.columns([3, 3])
-                    with b_col1:
-                        if st.button("🔍 Inspect Run Report in Diagnostic Viewer", type="primary", use_container_width=True, key=f"btn_view_rep_{active_run_summary['id']}"):
-                            detail = fetch_workflow_execution_detail_backend(target_audit_wfid, active_run_summary["id"])
-                            if detail:
-                                st.session_state["last_execution"] = {
-                                    "execution_id": detail["id"],
-                                    "status": detail["status"],
-                                    "total_duration_ms": detail.get("total_duration_ms", 0.0),
-                                    "final_metrics": detail.get("metrics"),
-                                    **(detail.get("reports") or {}),
-                                    "step_snapshots": detail.get("step_snapshots"),
-                                    "execution_logs": detail.get("logs")
-                                }
-                                st.success(f"Loaded execution report for {active_run_summary.get('run_label', 'Run')}! Scroll down to Diagnostic Results.")
-                                st.rerun()
-
-                    with b_col2:
-                        if st.button("⏪ Rollback Whiteboard to this Version", use_container_width=True, key=f"btn_rb_{active_run_summary['id']}"):
-                            rb_res = rollback_workflow_backend(target_audit_wfid, active_run_summary["id"])
-                            if rb_res:
-                                restore_saved_workflow(rb_res)
-                                st.success(f"🎉 Whiteboard restored to v{active_run_summary.get('version_number', 1)} configuration!")
-                                st.rerun()
+                    # Action: View Report
+                    if st.button("🔍 Inspect Run Report in Diagnostic Viewer", type="primary", use_container_width=True, key=f"btn_view_rep_{active_run_summary['id']}"):
+                        detail = fetch_workflow_execution_detail_backend(target_audit_wfid, active_run_summary["id"])
+                        if detail:
+                            st.session_state["last_execution"] = {
+                                "execution_id": detail["id"],
+                                "status": detail["status"],
+                                "total_duration_ms": detail.get("total_duration_ms", 0.0),
+                                "final_metrics": detail.get("metrics"),
+                                **(detail.get("reports") or {}),
+                                "step_snapshots": detail.get("step_snapshots"),
+                                "execution_logs": detail.get("logs")
+                            }
+                            st.success(f"Loaded execution report for {active_run_summary.get('run_label', 'Run')}! Scroll down to Diagnostic Results.")
+                            st.rerun()
 
                 with hist_tab2:
                     st.markdown("##### ⚖️ Side-by-Side Execution Run Comparison")

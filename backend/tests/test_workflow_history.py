@@ -128,29 +128,6 @@ async def test_workflow_history_and_rollback_full_suite():
         assert est_change["val_run_a"] == 10
         assert est_change["val_run_b"] == 25
 
-        # 8. Test Endpoint 3: POST /{id}/history/{exec_id}/rollback (Restore to v1)
-        # Verify active workflow currently has 5 nodes (v2 with SMOTE)
-        active_resp_before = await client.get(f"/api/v1/workflows/{wf_id}")
-        assert active_resp_before.status_code == 200
-        assert len(active_resp_before.json()["nodes"]) == 5
-
-        # Perform rollback to Run #1
-        rollback_resp = await client.post(f"/api/v1/workflows/{wf_id}/history/{exec1_id}/rollback")
-        assert rollback_resp.status_code == 200
-        rb_data = rollback_resp.json()
-        assert rb_data["id"] == wf_id
-        assert len(rb_data["nodes"]) == 4
-        assert "n_smote" not in [n["id"] for n in rb_data["nodes"]]
-        # Verify Random Forest parameter n_estimators is restored back to 10
-        assert rb_data["node_configs"]["n_model"]["config"]["n_estimators"] == 10
-        assert rb_data["last_execution"]["rolled_back_from_version"] == 1
-
-        # Verify GET /{id} confirms the restored state in database
-        active_resp_after = await client.get(f"/api/v1/workflows/{wf_id}")
-        assert active_resp_after.status_code == 200
-        assert len(active_resp_after.json()["nodes"]) == 4
-        assert "n_smote" not in [n["id"] for n in active_resp_after.json()["nodes"]]
-
 
 @pytest.mark.asyncio
 async def test_workflow_history_backward_compatibility_auto_synthesis():

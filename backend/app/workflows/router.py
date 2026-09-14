@@ -1093,7 +1093,7 @@ async def get_execution_inference_schema(execution_id: str):
 
 
 # -------------------------------------------------------------
-# WORKFLOW VERSION HISTORY, AUDIT TRAIL & ROLLBACK ENDPOINTS (Option B)
+# WORKFLOW VERSION HISTORY & AUDIT TRAIL ENDPOINTS (Option B)
 # -------------------------------------------------------------
 
 @router.get(
@@ -1338,65 +1338,6 @@ async def get_workflow_execution_detail(
         logs=ex.logs,
         created_at=ex.created_at
     )
-
-
-@router.post(
-    "/{workflow_id}/history/{execution_id}/rollback",
-    response_model=WorkflowResponse,
-    dependencies=[Depends(require_role("Tenant Admin", "Data Scientist", "ML Engineer"))]
-)
-async def rollback_workflow_to_execution(
-    workflow_id: str,
-    execution_id: str,
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Endpoint 3: One-Click Rollback / Restore.
-    Restores the workflow's active nodes, edges, node_configs, and last_execution to match this historical run.
-    """
-    res_exec = await db.execute(
-        select(WorkflowExecution).where(
-            WorkflowExecution.workflow_id == workflow_id,
-            WorkflowExecution.id == execution_id
-        )
-    )
-    ex = res_exec.scalar_one_or_none()
-    if not ex:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Execution '{execution_id}' not found for workflow '{workflow_id}'."
-        )
-
-    res_wf = await db.execute(select(Workflow).where(Workflow.id == workflow_id))
-    wf = res_wf.scalar_one_or_none()
-    if not wf:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Workflow '{workflow_id}' not found."
-        )
-
-    # Overwrite canvas with historical snapshot
-    wf.nodes = ex.snapshot_nodes
-    wf.edges = ex.snapshot_edges
-    wf.node_configs = ex.snapshot_node_configs
-
-    # Reconstruct last_execution payload from snapshot
-    restored_last_exec = {
-        "execution_id": ex.id,
-        "status": ex.status,
-        "total_duration_ms": ex.total_duration_ms,
-        "final_metrics": ex.metrics,
-        **(ex.reports or {}),
-        "step_snapshots": ex.step_snapshots,
-        "execution_logs": ex.logs,
-        "rolled_back_from_version": ex.version_number
-    }
-    wf.last_execution = jsonable_encoder(restored_last_exec)
-    wf.updated_at = datetime.now(timezone.utc)
-
-    await db.commit()
-    await db.refresh(wf)
-    return wf
 
 
 @router.post("/predict", response_model=PredictionResponse)
