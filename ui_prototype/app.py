@@ -285,6 +285,49 @@ def parse_uploaded_dataset(up_file):
         return None, None
 
 
+def fetch_platform_datasets() -> List[Dict[str, Any]]:
+    """Fetches list of uploaded datasets from platform database."""
+    try:
+        import sqlite3
+        db_path = os.path.join(ROOT_DIR, "data", "platform.db")
+        if os.path.exists(db_path):
+            conn = sqlite3.connect(db_path)
+            cur = conn.cursor()
+            cur.execute("SELECT id, name, row_count, column_count, storage_path FROM datasets ORDER BY created_at DESC")
+            rows = cur.fetchall()
+            conn.close()
+            seen = set()
+            res = []
+            for r in rows:
+                if r[1] not in seen:
+                    seen.add(r[1])
+                    res.append({"id": r[0], "name": r[1], "rows": r[2], "columns": r[3], "storage_path": r[4]})
+            return res
+    except Exception:
+        pass
+    return []
+
+
+def load_platform_dataset(storage_rel_path: str) -> Optional[pd.DataFrame]:
+    """Loads a DataFrame from local platform storage."""
+    try:
+        storage_root = os.path.join(ROOT_DIR, "data", "storage")
+        full_p = os.path.join(storage_root, storage_rel_path)
+        if os.path.exists(full_p):
+            if full_p.endswith(".csv"):
+                return pd.read_csv(full_p)
+            elif full_p.endswith((".xlsx", ".xls")):
+                return pd.read_excel(full_p)
+            elif full_p.endswith(".parquet"):
+                return pd.read_parquet(full_p)
+            elif full_p.endswith(".json"):
+                return pd.read_json(full_p)
+    except Exception:
+        pass
+    return None
+
+
+
 # -------------------------------------------------------------
 # SIDEBAR NAVIGATION & PERSISTENT API INSPECTOR DOCK
 # -------------------------------------------------------------
@@ -2399,9 +2442,30 @@ if app_mode == "🎨 Pipeline Whiteboard":
                 # SPECIAL HANDLER FOR INGESTION NODES
                 if recipe_obj.category == "ingestion":
                     st.markdown("##### 📁 Ingestion Data Source:")
-                    data_source_mode = st.radio("Source Mode", ["Use Active Dataset", "Upload New File", "Choose Preset Sample", "🏢 Tenant Model Source"], index=0, key=f"src_mode_{selected_node_id}")
+                    data_source_mode = st.radio("Source Mode", ["Use Active Dataset", "Upload New File", "📂 Platform Uploaded Datasets", "Choose Preset Sample", "🏢 Tenant Model Source"], index=0, key=f"src_mode_{selected_node_id}")
+
+                    if data_source_mode == "📂 Platform Uploaded Datasets":
+                        p_datasets = fetch_platform_datasets()
+                        if p_datasets:
+                            ds_options = {f"{d['name']} ({d['rows']} rows, {d['columns']} cols)": d for d in p_datasets}
+                            chosen_label = st.selectbox("Select Platform Dataset", list(ds_options.keys()), key=f"pds_{selected_node_id}")
+                            if st.button("Apply Selected Dataset to Pipeline", key=f"btn_apply_pds_{selected_node_id}"):
+                                d_meta = ds_options[chosen_label]
+                                df_loaded = load_platform_dataset(d_meta["storage_path"])
+                                if df_loaded is not None:
+                                    st.session_state["active_df"] = df_loaded
+                                    st.session_state["active_dataset_name"] = d_meta["name"]
+                                    for n in st.session_state["flow_state"].nodes:
+                                        if n.id == selected_node_id:
+                                            n.data = {"content": f"📄 {d_meta['name'][:15]}"}
+                                    sanitize_node_configs_for_active_dataset()
+                                    st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
+                                    st.success(f"Applied '{d_meta['name']}' ({len(df_loaded)} rows, {len(df_loaded.columns)} cols) to pipeline!")
+                                    st.rerun()
+                        else:
+                            st.info("No uploaded datasets found in database. Upload a CSV/Excel file using 'Upload New File' above.")
                     
-                    if data_source_mode == "Choose Preset Sample":
+                    elif data_source_mode == "Choose Preset Sample":
                         preset_name = st.selectbox("Preset Dataset", ["Customer Churn (Classification)", "Daily Retail Sales (Time-Series)", "Credit Transactions (Anomaly Injection)", "Titanic Survival", "Iris Flower"], key=f"preset_{selected_node_id}")
                         if st.button("Apply Preset to Ingestion Node"):
                             st.session_state["active_df"] = get_preset_dataset(preset_name)
@@ -2504,85 +2568,287 @@ if app_mode == "🎨 Pipeline Whiteboard":
                         return f"{icon} {opt}  [{ctype}]"
                     return str(opt)
 
-                for prop_name, prop_meta in props.items():
-                    title = prop_meta.get("title", prop_name)
-                    default_val = prop_meta.get("default", None)
-                    curr_val = current_config.get(prop_name, default_val)
-                    prop_type = prop_meta.get("type")
+                if recipe_obj.recipe_id == "data_type_converter":
+                    st.markdown("##### 🔤 Column Data Type Converter & Cast")
+                    st.caption("Cast dataset columns to explicit types (`categorical`, `datetime`, `boolean`, `numeric`, `integer`, `string`). Unselected columns remain in their original type.")
 
-                    # Smart column selectors: array of columns vs single column
-                    if prop_type == "array" or prop_name in ["columns", "feature_columns", "categorical_columns", "numerical_columns"]:
-                        multiselect_options = list(available_cols)
-                        if isinstance(curr_val, str):
-                            curr_list = [c.strip() for c in curr_val.split(",") if c.strip()]
-                        elif isinstance(curr_val, (list, tuple)):
-                            curr_list = [str(c) for c in curr_val]
+                    # Quick dataset status & switcher
+                    ds_name_active = st.session_state.get('active_dataset_name', 'Customer Churn')
+                    c_ds1, c_ds2 = st.columns([3, 1])
+                    with c_ds1:
+                        st.info(f"📊 Active Data Source: **{ds_name_active}** ({len(available_cols)} columns detected)")
+                    with c_ds2:
+                        if st.button("🔄 Refresh", key=f"refr_cols_{selected_node_id}", help="Reload columns from active dataset"):
+                            st.rerun()
+
+                    with st.expander("📁 Switch Active Dataset (if columns above don't match your data)", expanded=(len(available_cols) == 0)):
+                        sw_tab1, sw_tab2 = st.tabs(["📂 Platform Datasets", "📤 Upload File"])
+                        with sw_tab1:
+                            p_list = fetch_platform_datasets()
+                            if p_list:
+                                p_map = {f"{d['name']} ({d['rows']} rows, {d['columns']} cols)": d for d in p_list}
+                                p_pick = st.selectbox("Select Uploaded Dataset", list(p_map.keys()), key=f"sw_ds_{selected_node_id}")
+                                if st.button("Load Dataset", key=f"sw_btn_{selected_node_id}"):
+                                    sel_meta = p_map[p_pick]
+                                    loaded_df = load_platform_dataset(sel_meta["storage_path"])
+                                    if loaded_df is not None:
+                                        st.session_state["active_df"] = loaded_df
+                                        st.session_state["active_dataset_name"] = sel_meta["name"]
+                                        sanitize_node_configs_for_active_dataset()
+                                        st.success(f"Loaded '{sel_meta['name']}' ({len(loaded_df.columns)} columns)!")
+                                        st.rerun()
+                            else:
+                                st.caption("No platform datasets found in database.")
+                        with sw_tab2:
+                            sw_file = st.file_uploader("Upload CSV / Excel", type=["csv", "xlsx"], key=f"sw_up_{selected_node_id}")
+                            if sw_file is not None:
+                                s_df, s_name = parse_uploaded_dataset(sw_file)
+                                if s_df is not None:
+                                    st.session_state["active_df"] = s_df
+                                    st.session_state["active_dataset_name"] = s_name
+                                    sanitize_node_configs_for_active_dataset()
+                                    st.success(f"Loaded '{s_name}' ({len(s_df.columns)} cols)!")
+                                    st.rerun()
+
+                    # Conversions
+                    raw_conversions = current_config.get("conversions", {})
+                    if not isinstance(raw_conversions, dict):
+                        raw_conversions = {}
+                    conversions = dict(raw_conversions)
+
+                    # Gather all columns to display
+                    display_cols = list(available_cols)
+                    for c in conversions.keys():
+                        if c not in display_cols:
+                            display_cols.append(c)
+
+                    TARGET_TYPE_CHOICES = [
+                        "-- Leave Unchanged --",
+                        "datetime (Date / Timestamp)",
+                        "categorical (Discrete Category / ID)",
+                        "boolean (True / False Flag)",
+                        "numeric (Float / Continuous)",
+                        "integer (Whole Number / Count)",
+                        "string (Raw Text)"
+                    ]
+
+                    def map_target_to_choice(t: str) -> str:
+                        t = str(t).lower()
+                        if t in ["datetime", "date", "timestamp"]:
+                            return "datetime (Date / Timestamp)"
+                        elif t in ["categorical", "category"]:
+                            return "categorical (Discrete Category / ID)"
+                        elif t in ["boolean", "bool"]:
+                            return "boolean (True / False Flag)"
+                        elif t in ["numeric", "float", "number"]:
+                            return "numeric (Float / Continuous)"
+                        elif t in ["integer", "int"]:
+                            return "integer (Whole Number / Count)"
+                        elif t in ["string", "text", "str"]:
+                            return "string (Raw Text)"
+                        return "-- Leave Unchanged --"
+
+                    def map_choice_to_target(c: str) -> Optional[str]:
+                        if "datetime" in c:
+                            return "datetime"
+                        elif "categorical" in c:
+                            return "categorical"
+                        elif "boolean" in c:
+                            return "boolean"
+                        elif "numeric" in c:
+                            return "numeric"
+                        elif "integer" in c:
+                            return "integer"
+                        elif "string" in c:
+                            return "string"
+                        return None
+
+                    if display_cols:
+                        st.markdown("###### 🎯 Column Type Mappings:")
+                        for col_name in display_cols:
+                            c_left, c_right = st.columns([1, 1])
+                            with c_left:
+                                inferred_type = col_type_map.get(str(col_name), "feature")
+                                icon = {"numeric": "🔢", "categorical": "🔤", "datetime": "📅", "boolean": "🔘", "text": "📝"}.get(inferred_type, "📄")
+                                st.markdown(f"<div style='padding-top: 6px;'><b>{icon} {col_name}</b> <span style='font-size:0.75rem; color:#64748B;'>[{inferred_type}]</span></div>", unsafe_allow_html=True)
+                            with c_right:
+                                curr_t = conversions.get(col_name, "")
+                                cur_choice = map_target_to_choice(curr_t)
+                                cur_idx = TARGET_TYPE_CHOICES.index(cur_choice) if cur_choice in TARGET_TYPE_CHOICES else 0
+                                chosen = st.selectbox(
+                                    f"Type for {col_name}",
+                                    TARGET_TYPE_CHOICES,
+                                    index=cur_idx,
+                                    key=f"dt_col_{selected_node_id}_{col_name}",
+                                    label_visibility="collapsed"
+                                )
+                                new_tgt = map_choice_to_target(chosen)
+                                if new_tgt:
+                                    conversions[col_name] = new_tgt
+                                else:
+                                    conversions.pop(col_name, None)
+
+                    # Add Column Manually
+                    with st.expander("➕ Add Column Not Listed Above", expanded=(len(display_cols) == 0)):
+                        add_c1, add_c2, add_c3 = st.columns([2, 2, 1])
+                        with add_c1:
+                            new_col_input = st.text_input("Column Name", placeholder="e.g. Date, Store, Holiday_Flag", key=f"dt_new_col_{selected_node_id}")
+                        with add_c2:
+                            new_type_input = st.selectbox("Target Type", TARGET_TYPE_CHOICES[1:], key=f"dt_new_type_{selected_node_id}")
+                        with add_c3:
+                            st.write("")
+                            st.write("")
+                            if st.button("➕ Add", key=f"dt_btn_add_{selected_node_id}"):
+                                if new_col_input.strip():
+                                    target_key = map_choice_to_target(new_type_input)
+                                    conversions[new_col_input.strip()] = target_key
+                                    st.rerun()
+
+                    # Datetime parsing format
+                    has_datetime = any(v in ["datetime", "date", "timestamp"] for v in conversions.values())
+                    DT_PRESETS = [
+                        "DD-MM-YYYY (%d-%m-%Y)",
+                        "DD/MM/YYYY (%d/%m/%Y)",
+                        "YYYY-MM-DD (%Y-%m-%d)",
+                        "MM-DD-YYYY (%m-%d-%Y)",
+                        "Auto-detect (Flexible)",
+                        "Custom format..."
+                    ]
+                    curr_dt_fmt = current_config.get("datetime_format", "")
+                    matched_idx = 0
+                    if curr_dt_fmt:
+                        if "dd-mm-yyyy" in curr_dt_fmt.lower() or "%d-%m-%y" in curr_dt_fmt.lower():
+                            matched_idx = 0
+                        elif "dd/mm/yyyy" in curr_dt_fmt.lower() or "%d/%m/%y" in curr_dt_fmt.lower():
+                            matched_idx = 1
+                        elif "yyyy-mm-dd" in curr_dt_fmt.lower() or "%y-%m-%d" in curr_dt_fmt.lower():
+                            matched_idx = 2
+                        elif "mm-dd-yyyy" in curr_dt_fmt.lower() or "%m-%d-%y" in curr_dt_fmt.lower():
+                            matched_idx = 3
                         else:
-                            curr_list = []
-                        # Ensure any saved columns are in the options list so they don't disappear
-                        for c in curr_list:
-                            if c not in multiselect_options:
-                                multiselect_options.append(c)
-                        new_val = st.multiselect(
-                            title,
-                            options=multiselect_options,
-                            default=curr_list,
-                            format_func=format_col_option,
-                            key=f"cfg_{selected_node_id}_{prop_name}",
-                            help=prop_meta.get("description", "Select specific columns or leave empty to apply across all columns.")
+                            matched_idx = 5
+
+                    if has_datetime:
+                        st.markdown("---")
+                        st.markdown("##### 📅 Datetime Parsing Format:")
+                        st.caption("Choose **DD-MM-YYYY** for day-first dates (e.g. 05-02-2010 = Feb 5).")
+                        chosen_dt_preset = st.selectbox(
+                            "Date Format Preset",
+                            DT_PRESETS,
+                            index=matched_idx,
+                            key=f"dt_fmt_sel_{selected_node_id}"
                         )
-                    elif ("column" in prop_name.lower() or prop_name.endswith("_col")):
-                        is_required = prop_name in schema.get("required", []) or prop_name == "target_column"
-                        col_options = list(available_cols)
-                        if curr_val and str(curr_val).strip() and str(curr_val) not in col_options and str(curr_val) not in ["-- Select Column --", "(None)"]:
-                            col_options.append(str(curr_val))
-                        
-                        if is_required:
-                            options = ["-- Select Column --"] + col_options
-                            if curr_val and str(curr_val) in options:
-                                col_idx = options.index(str(curr_val))
-                            else:
-                                col_idx = 0
+                        if chosen_dt_preset == "Custom format...":
+                            final_dt_fmt = st.text_input("Custom Strftime Pattern", value=curr_dt_fmt or "%d-%m-%Y", key=f"dt_cust_{selected_node_id}")
+                        elif chosen_dt_preset == "Auto-detect (Flexible)":
+                            final_dt_fmt = ""
                         else:
-                            options = ["(None)"] + col_options
-                            if curr_val and str(curr_val) in options:
-                                col_idx = options.index(str(curr_val))
-                            else:
-                                col_idx = 0
-
-                        selected_opt = st.selectbox(title, options, index=col_idx, format_func=format_col_option, key=f"cfg_{selected_node_id}_{prop_name}")
-                        if selected_opt in ["-- Select Column --", "(None)"]:
-                            new_val = ""
-                        else:
-                            new_val = selected_opt
-                    elif "enum" in prop_meta:
-                        options = prop_meta["enum"]
-                        opt_idx = options.index(curr_val) if curr_val in options else 0
-                        new_val = st.selectbox(title, options, index=opt_idx, key=f"cfg_{selected_node_id}_{prop_name}")
-                    elif prop_type == "integer":
-                        min_v = int(prop_meta.get("minimum", 1))
-                        max_v = int(prop_meta.get("maximum", 1000))
-                        try:
-                            val_int = int(curr_val) if curr_val is not None else min_v
-                        except (ValueError, TypeError):
-                            val_int = min_v
-                        new_val = st.slider(title, min_value=min_v, max_value=max_v, value=val_int, key=f"cfg_{selected_node_id}_{prop_name}")
-                    elif prop_type == "number":
-                        min_v = float(prop_meta.get("minimum", 0.0))
-                        max_v = float(prop_meta.get("maximum", 1.0))
-                        try:
-                            val_float = float(curr_val) if curr_val is not None else min_v
-                        except (ValueError, TypeError):
-                            val_float = min_v
-                        new_val = st.slider(title, min_value=min_v, max_value=max_v, value=val_float, step=0.01, key=f"cfg_{selected_node_id}_{prop_name}")
-                    elif prop_type == "boolean":
-                        new_val = st.checkbox(title, value=bool(curr_val) if curr_val is not None else False, key=f"cfg_{selected_node_id}_{prop_name}")
+                            final_dt_fmt = chosen_dt_preset.split(" ")[0]
                     else:
-                        new_val = st.text_input(title, value=str(curr_val) if curr_val is not None else "", key=f"cfg_{selected_node_id}_{prop_name}")
+                        final_dt_fmt = ""
 
-                    current_config[prop_name] = new_val
+                    st.markdown("---")
+                    ERR_OPTIONS = ["coerce (replace unparseable values with NaN)", "ignore (keep original value untouched)", "raise (halt pipeline with error)"]
+                    cur_err = current_config.get("errors", "coerce")
+                    err_idx = 0 if cur_err == "coerce" else (1 if cur_err == "ignore" else 2)
+                    chosen_err = st.selectbox("Invalid Value Handling", ERR_OPTIONS, index=err_idx, key=f"dt_err_{selected_node_id}")
+                    final_err = "coerce" if "coerce" in chosen_err else ("ignore" if "ignore" in chosen_err else "raise")
 
-                st.session_state["node_configs"][selected_node_id]["config"] = current_config
+                    st.markdown("---")
+                    if conversions:
+                        st.markdown(f"**⚡ Active Casts ({len(conversions)}):**")
+                        for c_name, c_type in conversions.items():
+                            extra = f" *(format: {final_dt_fmt})*" if c_type == "datetime" and final_dt_fmt else ""
+                            badge_color = {"categorical": "🟣", "datetime": "📅", "boolean": "🟢", "numeric": "🔵", "integer": "🔢"}.get(c_type, "⚪")
+                            st.markdown(f"- {badge_color} `{c_name}` ➔ **`{c_type}`**{extra}")
+                    else:
+                        st.info("ℹ️ No columns configured for casting. Columns will retain their original inferred types.")
+
+                    current_config["conversions"] = conversions
+                    current_config["datetime_format"] = final_dt_fmt
+                    current_config["errors"] = final_err
+                    st.session_state["node_configs"][selected_node_id]["config"] = current_config
+
+                else:
+                    for prop_name, prop_meta in props.items():
+                        title = prop_meta.get("title", prop_name)
+                        default_val = prop_meta.get("default", None)
+                        curr_val = current_config.get(prop_name, default_val)
+                        prop_type = prop_meta.get("type")
+
+                        # Smart column selectors: array of columns vs single column
+                        if prop_type == "array" or prop_name in ["columns", "feature_columns", "categorical_columns", "numerical_columns"]:
+                            multiselect_options = list(available_cols)
+                            if isinstance(curr_val, str):
+                                curr_list = [c.strip() for c in curr_val.split(",") if c.strip()]
+                            elif isinstance(curr_val, (list, tuple)):
+                                curr_list = [str(c) for c in curr_val]
+                            else:
+                                curr_list = []
+                            # Ensure any saved columns are in the options list so they don't disappear
+                            for c in curr_list:
+                                if c not in multiselect_options:
+                                    multiselect_options.append(c)
+                            new_val = st.multiselect(
+                                title,
+                                options=multiselect_options,
+                                default=curr_list,
+                                format_func=format_col_option,
+                                key=f"cfg_{selected_node_id}_{prop_name}",
+                                help=prop_meta.get("description", "Select specific columns or leave empty to apply across all columns.")
+                            )
+                        elif ("column" in prop_name.lower() or prop_name.endswith("_col")):
+                            is_required = prop_name in schema.get("required", []) or prop_name == "target_column"
+                            col_options = list(available_cols)
+                            if curr_val and str(curr_val).strip() and str(curr_val) not in col_options and str(curr_val) not in ["-- Select Column --", "(None)"]:
+                                col_options.append(str(curr_val))
+                            
+                            if is_required:
+                                options = ["-- Select Column --"] + col_options
+                                if curr_val and str(curr_val) in options:
+                                    col_idx = options.index(str(curr_val))
+                                else:
+                                    col_idx = 0
+                            else:
+                                options = ["(None)"] + col_options
+                                if curr_val and str(curr_val) in options:
+                                    col_idx = options.index(str(curr_val))
+                                else:
+                                    col_idx = 0
+
+                            selected_opt = st.selectbox(title, options, index=col_idx, format_func=format_col_option, key=f"cfg_{selected_node_id}_{prop_name}")
+                            if selected_opt in ["-- Select Column --", "(None)"]:
+                                new_val = ""
+                            else:
+                                new_val = selected_opt
+                        elif "enum" in prop_meta:
+                            options = prop_meta["enum"]
+                            opt_idx = options.index(curr_val) if curr_val in options else 0
+                            new_val = st.selectbox(title, options, index=opt_idx, key=f"cfg_{selected_node_id}_{prop_name}")
+                        elif prop_type == "integer":
+                            min_v = int(prop_meta.get("minimum", 1))
+                            max_v = int(prop_meta.get("maximum", 1000))
+                            try:
+                                val_int = int(curr_val) if curr_val is not None else min_v
+                            except (ValueError, TypeError):
+                                val_int = min_v
+                            new_val = st.slider(title, min_value=min_v, max_value=max_v, value=val_int, key=f"cfg_{selected_node_id}_{prop_name}")
+                        elif prop_type == "number":
+                            min_v = float(prop_meta.get("minimum", 0.0))
+                            max_v = float(prop_meta.get("maximum", 1.0))
+                            try:
+                                val_float = float(curr_val) if curr_val is not None else min_v
+                            except (ValueError, TypeError):
+                                val_float = min_v
+                            new_val = st.slider(title, min_value=min_v, max_value=max_v, value=val_float, step=0.01, key=f"cfg_{selected_node_id}_{prop_name}")
+                        elif prop_type == "boolean":
+                            new_val = st.checkbox(title, value=bool(curr_val) if curr_val is not None else False, key=f"cfg_{selected_node_id}_{prop_name}")
+                        else:
+                            new_val = st.text_input(title, value=str(curr_val) if curr_val is not None else "", key=f"cfg_{selected_node_id}_{prop_name}")
+
+                        current_config[prop_name] = new_val
+
+                    st.session_state["node_configs"][selected_node_id]["config"] = current_config
 
             if st.button("🗑️ Delete Node", type="secondary", key=f"del_node_{selected_node_id}"):
                 st.session_state["flow_state"].nodes = [n for n in st.session_state["flow_state"].nodes if n.id != selected_node_id]
