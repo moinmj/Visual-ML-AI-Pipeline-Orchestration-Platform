@@ -118,15 +118,12 @@ class LightGBMTrainerRecipe(BaseRecipe):
         if not LIGHTGBM_AVAILABLE:
             raise ValueError("LightGBM is not installed. Please install it or use Random Forest / Logistic Regression.")
 
-        X_train = inputs.get("X_train")
-        y_train = inputs.get("y_train")
-        X_test = inputs.get("X_test")
-        y_test = inputs.get("y_test")
+        from backend.app.recipes.training.encoder_utils import safe_prepare_training_data, extract_train_test_data
+        X_train, y_train, X_test, y_test = extract_train_test_data(inputs)
 
         if X_train is None or y_train is None:
             raise ValueError("LightGBMTrainer expects 'X_train' and 'y_train' in inputs.")
 
-        from backend.app.recipes.training.encoder_utils import safe_prepare_training_data
         X_train, X_test = safe_prepare_training_data(X_train, X_test)
 
         # Sanitize column names for LightGBM

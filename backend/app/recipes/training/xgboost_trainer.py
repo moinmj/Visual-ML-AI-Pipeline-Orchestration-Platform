@@ -110,15 +110,12 @@ class XGBoostTrainerRecipe(BaseRecipe):
         if not XGBOOST_AVAILABLE:
             raise ValueError("XGBoost is not installed in the environment. Please run 'pip install xgboost' or choose Random Forest / Logistic Regression.")
 
-        X_train = inputs.get("X_train")
-        y_train = inputs.get("y_train")
-        X_test = inputs.get("X_test")
-        y_test = inputs.get("y_test")
+        from backend.app.recipes.training.encoder_utils import safe_prepare_training_data, extract_train_test_data
+        X_train, y_train, X_test, y_test = extract_train_test_data(inputs)
 
         if X_train is None or y_train is None:
             raise ValueError("XGBoostTrainer expects 'X_train' and 'y_train' in inputs. Please connect a Train/Test Split node before this trainer.")
 
-        from backend.app.recipes.training.encoder_utils import safe_prepare_training_data
         X_train, X_test = safe_prepare_training_data(X_train, X_test)
 
         task_type = str(config.get("task_type", "classification")).lower()

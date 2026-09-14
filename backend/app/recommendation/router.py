@@ -136,26 +136,41 @@ async def autowire_nodes(payload: AutoWireRequest):
         "cron_trigger": 1.0,
         "csv_loader": 1.1,
 
-        # NLP (Clean text first, then vectorize text strings into numeric feature columns)
-        "text_preprocessor": 1.4,
-        "text_vectorizer": 1.6,
+        # Early Schema & Deduplication Pruning
+        "column_selector": 1.2,
+        "duplicate_remover": 1.2,
+        "duplicates": 1.2,
 
-        # Preprocessing (Deduplicate -> Outlier Guardrail -> Sanitize -> Impute NaNs -> Filter Correlated -> Filter Variance -> Encode Categories -> Scale Numbers -> Lag Features)
-        "duplicate_remover": 2.0,
-        "duplicates": 2.0,
-        "statistical_guardrail": 2.02,
-        "category_sanitizer": 2.05,
-        "missing_value_imputer": 2.1,
-        "missing_values": 2.1,
-        "correlation_filter": 2.15,
-        "variance_filter": 2.18,
-        "categorical_encoder": 2.2,
-        "feature_scaler": 2.4,
-        "lag_feature_engineering": 2.5,
-        "lag_features": 2.5,
+        # Type Safety & Conversion
+        "data_type_converter": 1.4,
+
+        # Missing Values & Outlier Guardrails
+        "missing_value_imputer": 1.6,
+        "missing_values": 1.6,
+        "outlier_handler": 1.6,
+        "statistical_guardrail": 1.6,
+
+        # NLP Text Processing & Vectorization
+        "text_preprocessor": 1.8,
+        "text_vectorizer": 1.85,
+
+        # Feature Encoders & Scalers
+        "category_sanitizer": 2.0,
+        "categorical_encoder": 2.05,
+        "feature_scaler": 2.2,
+        "lag_feature_engineering": 2.4,
+        "lag_features": 2.4,
+
+        # Feature Selection
+        "correlation_filter": 2.5,
+        "variance_filter": 2.6,
+        "feature_selector": 2.7,
 
         # Splitting
         "train_test_split": 3.0,
+        "stratified_split": 3.0,
+        "time_series_split": 3.0,
+        "walk_forward_split": 3.0,
 
         # Resampling / Balancing (Post-split training resampling)
         "class_imbalance_resampler": 3.5,
@@ -189,30 +204,26 @@ async def autowire_nodes(payload: AutoWireRequest):
         # Inferred from id/label fallback
         label = str(node.get("label") or node.get("id") or "").lower()
         if any(k in label for k in ["csv", "loader", "trigger", "ingest"]):
-            return 1.0
-        elif any(k in label for k in ["text_prep", "stem", "lemmatiz", "clean_text"]):
+            return 1.1
+        elif any(k in label for k in ["column_select", "col_select", "dup", "dedup"]):
+            return 1.2
+        elif any(k in label for k in ["type_convert", "dtype", "cast"]):
             return 1.4
-        elif any(k in label for k in ["vector", "tfidf", "word2vec", "count_vec", "nlp"]):
+        elif any(k in label for k in ["impute", "missing", "nan", "guardrail", "outlier", "iqr", "zscore"]):
             return 1.6
-        elif any(k in label for k in ["dup", "dedup"]):
+        elif any(k in label for k in ["text_prep", "stem", "lemmatiz", "clean_text"]):
+            return 1.8
+        elif any(k in label for k in ["vector", "tfidf", "word2vec", "count_vec", "nlp"]):
+            return 1.85
+        elif any(k in label for k in ["encode", "onehot", "label_enc", "categorical", "sanitiz"]):
             return 2.0
-        elif any(k in label for k in ["guardrail", "outlier", "iqr", "zscore", "z_score"]):
-            return 2.02
-        elif any(k in label for k in ["sanitiz", "clean_cat"]):
-            return 2.05
-        elif any(k in label for k in ["impute", "missing", "nan"]):
-            return 2.1
-        elif any(k in label for k in ["corr", "correlation"]):
-            return 2.15
-        elif any(k in label for k in ["var", "variance"]):
-            return 2.18
-        elif any(k in label for k in ["encode", "onehot", "label_enc", "categorical"]):
-            return 2.2
         elif any(k in label for k in ["scale", "scaler", "standard", "minmax", "robust"]):
+            return 2.2
+        elif any(k in label for k in ["lag", "window"]):
             return 2.4
-        elif any(k in label for k in ["lag", "timeseries", "window"]):
-            return 2.5
-        elif "split" in label:
+        elif any(k in label for k in ["corr", "var", "select_feat", "kbest"]):
+            return 2.6
+        elif any(k in label for k in ["split", "strat", "time_series", "walk"]):
             return 3.0
         elif any(k in label for k in ["imbalance", "smote", "resample", "oversample", "undersample"]):
             return 3.5

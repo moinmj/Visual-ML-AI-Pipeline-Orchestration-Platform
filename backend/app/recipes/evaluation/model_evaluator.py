@@ -77,6 +77,10 @@ class ModelEvaluatorRecipe(BaseRecipe):
         if y_test is None and isinstance(context, dict):
             y_test = context.get("y_test")
 
+        if (X_test is None or y_test is None) and "test_data" in inputs and isinstance(inputs["test_data"], dict):
+            X_test = inputs["test_data"].get("X_test", X_test)
+            y_test = inputs["test_data"].get("y_test", y_test)
+
         if model is None:
             raise ValueError("ModelEvaluator expects a trained 'model' in inputs. Please connect a Model Trainer node before this Evaluator.")
         if X_test is None or y_test is None:

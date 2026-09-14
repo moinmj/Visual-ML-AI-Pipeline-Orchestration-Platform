@@ -158,11 +158,15 @@ RECIPE_CATEGORY_MAP = {
         {"id": "csv_loader", "name": "Dataset Ingestion (CSV/Excel/Upload)", "icon": "📄", "default_config": {}}
     ],
     "🧹 Data Cleaning & Preprocessing": [
+        {"id": "column_selector", "name": "Column Selector & Drop (Select Subset)", "icon": "🎯", "default_config": {"mode": "keep", "columns": []}},
+        {"id": "data_type_converter", "name": "Data Type Converter & Cast", "icon": "🔄", "default_config": {"conversions": {}}},
         {"id": "duplicate_remover", "name": "Duplicate Row Handler & Remover", "icon": "👯", "default_config": {"strategy": "drop_first"}},
         {"id": "category_sanitizer", "name": "Categorical & Text Label Standardizer", "icon": "🔤", "default_config": {"lowercase": True, "strip_whitespace": True}},
         {"id": "correlation_filter", "name": "Redundant Column & Multicollinearity Filter", "icon": "📊", "default_config": {"threshold": 0.95}},
         {"id": "variance_filter", "name": "Constant & Low Variance Feature Filter", "icon": "🛑", "default_config": {"max_dominant_percentage": 0.99}},
         {"id": "missing_value_imputer", "name": "Missing Value Imputer (Mean/Median/Mode)", "icon": "🧹", "default_config": {"strategy": "median"}},
+        {"id": "outlier_handler", "name": "Outlier Handler & Winsorizer (IQR / Z-Score)", "icon": "🛡️", "default_config": {"method": "iqr", "action": "clip", "threshold": 1.5}},
+        {"id": "feature_selector", "name": "Feature Selector (SelectKBest / Mutual Info)", "icon": "✨", "default_config": {"method": "select_k_best", "k": 10}},
         {"id": "feature_scaler", "name": "Feature Scaler (StandardScaler/MinMax)", "icon": "⚖️", "default_config": {"method": "standard"}},
         {"id": "categorical_encoder", "name": "Categorical Encoder (One-Hot/Label)", "icon": "🔤", "default_config": {"method": "one_hot"}}
     ],
@@ -171,7 +175,10 @@ RECIPE_CATEGORY_MAP = {
         {"id": "text_vectorizer", "name": "Text Vectorizer (TF-IDF / Word2Vec / Count)", "icon": "🔤", "default_config": {"method": "tfidf", "max_features": 50, "drop_original": True}}
     ],
     "✂️ Splitting": [
-        {"id": "train_test_split", "name": "Train / Test Splitter", "icon": "✂️", "default_config": {"target_column": "", "test_size": 0.2}}
+        {"id": "train_test_split", "name": "Train / Test Splitter", "icon": "✂️", "default_config": {"target_column": "", "test_size": 0.2}},
+        {"id": "stratified_split", "name": "Stratified Train / Test Splitter", "icon": "📊", "default_config": {"target_column": "", "test_size": 0.2}},
+        {"id": "time_series_split", "name": "Time-Series Chronological Splitter", "icon": "⏱️", "default_config": {"target_column": "", "date_column": "", "test_size": 0.2}},
+        {"id": "walk_forward_split", "name": "Walk-Forward Rolling Window Splitter", "icon": "🔄", "default_config": {"target_column": "", "date_column": "", "window_size": 100, "test_step_size": 20}}
     ],
     "🤖 Machine Learning Models": [
         {"id": "xgboost_trainer", "name": "XGBoost Classifier / Regressor", "icon": "⚡", "default_config": {"task_type": "classification", "n_estimators": 100, "max_depth": 6}},
@@ -1722,11 +1729,19 @@ if app_mode == "🎨 Pipeline Whiteboard":
                         return 0.0
                     if r_id in ["csv_loader"]:
                         return 1.0
+                    if r_id in ["duplicate_remover", "duplicates", "column_selector"]:
+                        return 1.2
+                    if r_id in ["data_type_converter"]:
+                        return 1.4
+                    if r_id in ["missing_value_imputer", "missing_values", "outlier_handler", "statistical_guardrail"]:
+                        return 1.6
                     if r_id in ["text_preprocessor", "text_vectorizer"]:
-                        return 1.5
-                    if r_id in ["missing_value_imputer", "missing_values", "feature_scaler", "categorical_encoder", "statistical_guardrail", "lag_feature_engineering", "lag_features", "duplicate_remover", "duplicates", "category_sanitizer", "correlation_filter", "variance_filter"]:
+                        return 1.8
+                    if r_id in ["category_sanitizer", "categorical_encoder", "feature_scaler", "lag_feature_engineering", "lag_features"]:
                         return 2.0
-                    if r_id in ["train_test_split"]:
+                    if r_id in ["correlation_filter", "variance_filter", "feature_selector"]:
+                        return 2.5
+                    if r_id in ["train_test_split", "stratified_split", "time_series_split", "walk_forward_split"]:
                         return 3.0
                     if r_id in ["class_imbalance_resampler"]:
                         return 3.5
@@ -1737,13 +1752,13 @@ if app_mode == "🎨 Pipeline Whiteboard":
                     return 2.0
 
                 # Categorize nodes
-                triggers = [n for n in curr_nodes if get_category_order(n.id) == 0]
-                ingestions = [n for n in curr_nodes if get_category_order(n.id) == 1]
-                preprocessings = [n for n in curr_nodes if get_category_order(n.id) == 2 or get_category_order(n.id) == 1.5]
-                splitters = [n for n in curr_nodes if get_category_order(n.id) == 3]
-                resamplers = [n for n in curr_nodes if get_category_order(n.id) == 3.5]
-                models = [n for n in curr_nodes if get_category_order(n.id) == 4]
-                evaluators = [n for n in curr_nodes if get_category_order(n.id) == 5]
+                triggers = [n for n in curr_nodes if get_category_order(n.id) < 1.0]
+                ingestions = [n for n in curr_nodes if 1.0 <= get_category_order(n.id) < 1.2]
+                preprocessings = [n for n in curr_nodes if 1.2 <= get_category_order(n.id) < 3.0]
+                splitters = [n for n in curr_nodes if 3.0 <= get_category_order(n.id) < 3.5]
+                resamplers = [n for n in curr_nodes if 3.5 <= get_category_order(n.id) < 4.0]
+                models = [n for n in curr_nodes if 4.0 <= get_category_order(n.id) < 5.0]
+                evaluators = [n for n in curr_nodes if get_category_order(n.id) >= 5.0]
 
                 # Sort each group by X position
                 triggers.sort(key=get_node_position)

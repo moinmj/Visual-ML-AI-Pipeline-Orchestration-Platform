@@ -57,3 +57,26 @@ def safe_prepare_training_data(
         X_te = X_te.reindex(columns=X_tr.columns, fill_value=0)
 
     return X_tr, X_te
+
+
+def extract_train_test_data(inputs: dict) -> Tuple[Optional[pd.DataFrame], Optional[pd.Series], Optional[pd.DataFrame], Optional[pd.Series]]:
+    """
+    Extracts (X_train, y_train, X_test, y_test) from inputs dictionary,
+    supporting both flat keys ('X_train', 'y_train', etc.) and nested dicts
+    ('train_data' -> {'X_train', 'y_train'}, 'test_data' -> {'X_test', 'y_test'}).
+    """
+    X_train = inputs.get("X_train")
+    y_train = inputs.get("y_train")
+    X_test = inputs.get("X_test")
+    y_test = inputs.get("y_test")
+
+    if (X_train is None or y_train is None) and "train_data" in inputs and isinstance(inputs["train_data"], dict):
+        X_train = inputs["train_data"].get("X_train", X_train)
+        y_train = inputs["train_data"].get("y_train", y_train)
+
+    if (X_test is None or y_test is None) and "test_data" in inputs and isinstance(inputs["test_data"], dict):
+        X_test = inputs["test_data"].get("X_test", X_test)
+        y_test = inputs["test_data"].get("y_test", y_test)
+
+    return X_train, y_train, X_test, y_test
+

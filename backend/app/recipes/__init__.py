@@ -13,6 +13,9 @@ from backend.app.recipes.preprocessing.class_imbalance import ClassImbalanceResa
 from backend.app.recipes.nlp.text_preprocessor import TextPreprocessorRecipe
 from backend.app.recipes.nlp.text_vectorizer import TextVectorizerRecipe
 from backend.app.recipes.splitting.train_test_split import TrainTestSplitRecipe
+from backend.app.recipes.splitting.stratified_split import StratifiedSplitRecipe
+from backend.app.recipes.splitting.time_series_split import TimeSeriesSplitRecipe
+from backend.app.recipes.splitting.walk_forward_split import WalkForwardSplitRecipe
 from backend.app.recipes.training.xgboost_trainer import XGBoostTrainerRecipe
 from backend.app.recipes.training.random_forest_trainer import RandomForestTrainerRecipe
 from backend.app.recipes.training.logistic_regression_trainer import LogisticRegressionTrainerRecipe
@@ -24,6 +27,10 @@ from backend.app.recipes.anomaly.statistical_guardrail import StatisticalGuardra
 from backend.app.recipes.forecasting.lag_features import LagFeatureEngineeringRecipe
 from backend.app.recipes.forecasting.prophet_forecaster import ProphetForecasterRecipe
 from backend.app.recipes.forecasting.arima_forecaster import ARIMAForecasterRecipe
+from backend.app.recipes.preprocessing.column_selector import ColumnSelectorRecipe
+from backend.app.recipes.preprocessing.data_type_converter import DataTypeConverterRecipe
+from backend.app.recipes.preprocessing.outlier_handler import OutlierHandlerRecipe
+from backend.app.recipes.preprocessing.feature_selector import FeatureSelectorRecipe
 from backend.app.recipes.governance.mlflow_tracker import MLflowTrackerRecipe
 from backend.app.recipes.triggers.webhook_trigger import WebhookTriggerRecipe
 from backend.app.recipes.triggers.cron_trigger import CronScheduleTriggerRecipe
@@ -33,17 +40,24 @@ def register_all_recipes():
     recipe_registry.register(CSVLoaderRecipe())
     recipe_registry.register(WebhookTriggerRecipe())
     recipe_registry.register(CronScheduleTriggerRecipe())
+    recipe_registry.register(ColumnSelectorRecipe())
+    recipe_registry.register(DataTypeConverterRecipe())
     recipe_registry.register(DuplicateRemoverRecipe())
     recipe_registry.register(CategorySanitizerRecipe())
     recipe_registry.register(CorrelationFilterRecipe())
     recipe_registry.register(VarianceFilterRecipe())
     recipe_registry.register(MissingValueImputerRecipe())
+    recipe_registry.register(OutlierHandlerRecipe())
+    recipe_registry.register(FeatureSelectorRecipe())
     recipe_registry.register(FeatureScalerRecipe())
     recipe_registry.register(CategoricalEncoderRecipe())
     recipe_registry.register(ClassImbalanceResamplerRecipe())
     recipe_registry.register(TextPreprocessorRecipe())
     recipe_registry.register(TextVectorizerRecipe())
     recipe_registry.register(TrainTestSplitRecipe())
+    recipe_registry.register(StratifiedSplitRecipe())
+    recipe_registry.register(TimeSeriesSplitRecipe())
+    recipe_registry.register(WalkForwardSplitRecipe())
     recipe_registry.register(XGBoostTrainerRecipe())
     recipe_registry.register(RandomForestTrainerRecipe())
     recipe_registry.register(LogisticRegressionTrainerRecipe())
