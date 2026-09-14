@@ -1,6 +1,45 @@
+import re
 import pandas as pd
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from backend.app.recipes.base.recipe import BaseRecipe
+
+
+def normalize_datetime_format(fmt: Optional[str]) -> Tuple[Optional[str], bool]:
+    """
+    Translates common human-readable date formats (e.g. 'DD-MM-YYYY') into
+    Python strftime format strings ('%d-%m-%Y') and flags dayfirst.
+    """
+    if not fmt:
+        return None, False
+    s = str(fmt).strip()
+    if "(" in s and ")" in s:
+        match = re.search(r"\((%[^)]+)\)", s)
+        if match:
+            s = match.group(1)
+
+    mapping = {
+        "dd-mm-yyyy": ("%d-%m-%Y", True),
+        "dd/mm/yyyy": ("%d/%m/%Y", True),
+        "dd.mm.yyyy": ("%d.%m.%Y", True),
+        "yyyy-mm-dd": ("%Y-%m-%d", False),
+        "yyyy/mm/dd": ("%Y/%m/%d", False),
+        "yyyy.mm.dd": ("%Y.%m.%d", False),
+        "mm-dd-yyyy": ("%m-%d-%Y", False),
+        "mm/dd/yyyy": ("%m/%d/%Y", False),
+        "%d-%m-%y": ("%d-%m-%Y", True),
+        "%d/%m/%y": ("%d/%m/%Y", True),
+        "%d-%m-%Y": ("%d-%m-%Y", True),
+        "%d/%m/%Y": ("%d/%m/%Y", True),
+        "%Y-%m-%d": ("%Y-%m-%d", False),
+        "%Y/%m/%d": ("%Y/%m/%d", False),
+        "%m-%d-%Y": ("%m-%d-%Y", False),
+        "%m/%d/%Y": ("%m/%d/%Y", False),
+    }
+    lower_s = s.lower()
+    if lower_s in mapping:
+        return mapping[lower_s]
+    is_dayfirst = "%d" in s and s.find("%d") < s.find("%m") if ("%d" in s and "%m" in s) else False
+    return s, is_dayfirst
 
 
 class DataTypeConverterRecipe(BaseRecipe):
@@ -19,13 +58,13 @@ class DataTypeConverterRecipe(BaseRecipe):
                 "conversions": {
                     "type": "object",
                     "title": "Column Type Mappings",
-                    "description": "Key-value dictionary mapping column names to target types: 'numeric', 'integer', 'string', 'categorical', 'datetime', 'boolean'. Example: {\"age\": \"integer\", \"income\": \"numeric\", \"signup_date\": \"datetime\"}",
+                    "description": "Key-value dictionary mapping column names to target types: 'numeric', 'integer', 'string', 'categorical', 'datetime', 'boolean'. Example: {\"Store\": \"categorical\", \"Date\": \"datetime\", \"Holiday_Flag\": \"boolean\"}",
                     "default": {}
                 },
                 "datetime_format": {
                     "type": "string",
                     "title": "Datetime Format",
-                    "description": "Optional explicit datetime parsing format (e.g. '%Y-%m-%d' or '%d/%m/%Y'). Leave empty for automatic inference.",
+                    "description": "Explicit datetime format like 'DD-MM-YYYY' (%d-%m-%Y) or 'YYYY-MM-DD' (%Y-%m-%d). Leave empty for auto-inference.",
                     "default": ""
                 },
                 "errors": {
@@ -79,21 +118,31 @@ class DataTypeConverterRecipe(BaseRecipe):
                     df_out[col_name] = series.astype(str)
 
                 elif target in ["categorical", "category"]:
-                    df_out[col_name] = series.astype("category")
+                    # Convert IDs and numbers to string-backed categories so models don't treat them as ordinal numbers
+                    if pd.api.types.is_numeric_dtype(series):
+                        df_out[col_name] = series.astype(str).astype("category")
+                    else:
+                        df_out[col_name] = series.astype("category")
 
                 elif target in ["datetime", "timestamp", "date"]:
-                    if dt_format:
-                        df_out[col_name] = pd.to_datetime(series, format=dt_format, errors=errors)
+                    fmt_to_use, is_dayfirst = normalize_datetime_format(dt_format)
+                    if fmt_to_use:
+                        try:
+                            df_out[col_name] = pd.to_datetime(series, format=fmt_to_use, errors=errors)
+                        except Exception:
+                            df_out[col_name] = pd.to_datetime(series, dayfirst=is_dayfirst, errors=errors)
                     else:
                         df_out[col_name] = pd.to_datetime(series, errors=errors)
 
                 elif target in ["boolean", "bool"]:
                     bool_map = {
-                        "true": True, "1": True, "yes": True, "t": True, "y": True,
-                        "false": False, "0": False, "no": False, "f": False, "n": False
+                        "true": True, "1": True, "yes": True, "t": True, "y": True, 1: True, 1.0: True,
+                        "false": False, "0": False, "no": False, "f": False, "n": False, 0: False, 0.0: False
                     }
-                    if pd.api.types.is_string_dtype(series) or series.dtype == object:
-                        df_out[col_name] = series.astype(str).str.strip().str.lower().map(bool_map).fillna(False)
+                    if pd.api.types.is_numeric_dtype(series):
+                        df_out[col_name] = series.map({1: True, 0: False, 1.0: True, 0.0: False}).fillna(series.astype(bool)).astype(bool)
+                    elif pd.api.types.is_string_dtype(series) or series.dtype == object:
+                        df_out[col_name] = series.astype(str).str.strip().str.lower().map(bool_map).fillna(False).astype(bool)
                     else:
                         df_out[col_name] = series.astype(bool)
 
@@ -105,19 +154,24 @@ class DataTypeConverterRecipe(BaseRecipe):
 
     def to_code(self, config: Dict[str, Any]) -> str:
         conversions = config.get("conversions", {})
-        lines = ["# Data Type Conversions", f"conversions = {conversions}"]
-        lines.append("for col, target in conversions.items():")
-        lines.append("    if col in df.columns:")
-        lines.append("        if target in ['numeric', 'float']:")
-        lines.append("            df[col] = pd.to_numeric(df[col], errors='coerce')")
-        lines.append("        elif target in ['integer', 'int']:")
-        lines.append("            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)")
-        lines.append("        elif target in ['string', 'text']:")
-        lines.append("            df[col] = df[col].astype(str)")
-        lines.append("        elif target in ['datetime', 'date']:")
-        lines.append("            df[col] = pd.to_datetime(df[col], errors='coerce')")
-        lines.append("        elif target in ['categorical', 'category']:")
-        lines.append("            df[col] = df[col].astype('category')")
-        lines.append("        elif target in ['boolean', 'bool']:")
-        lines.append("            df[col] = df[col].astype(bool)")
+        dt_format = config.get("datetime_format", "")
+        lines = [
+            "# Data Type Conversions & Casting",
+            f"conversions = {conversions}",
+            f"datetime_format = '{dt_format}'",
+            "for col, target in conversions.items():",
+            "    if col in df.columns:",
+            "        if target in ['numeric', 'float']:",
+            "            df[col] = pd.to_numeric(df[col], errors='coerce')",
+            "        elif target in ['integer', 'int']:",
+            "            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)",
+            "        elif target in ['categorical', 'category']:",
+            "            df[col] = df[col].astype(str).astype('category')",
+            "        elif target in ['datetime', 'date']:",
+            "            df[col] = pd.to_datetime(df[col], format='%d-%m-%Y' if 'DD-MM' in datetime_format else None, errors='coerce')",
+            "        elif target in ['boolean', 'bool']:",
+            "            df[col] = df[col].map({1: True, 0: False, '1': True, '0': False, 'true': True, 'false': False}).fillna(False).astype(bool)",
+            "        elif target in ['string', 'text']:",
+            "            df[col] = df[col].astype(str)"
+        ]
         return "\n".join(lines)

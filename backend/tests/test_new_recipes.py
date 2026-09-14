@@ -78,6 +78,52 @@ def test_data_type_converter():
     assert df_out["str_bool"].tolist() == [True, False, True, False]
 
 
+def test_data_type_converter_walmart_use_case():
+    # Exactly replicates user request: Date DD-MM-YYYY, Store as categorical ID, Holiday_Flag as boolean
+    df = pd.DataFrame({
+        "Store": [1, 2, 3, 1],
+        "Date": ["05-02-2010", "12-02-2010", "19-02-2010", "26-02-2010"],
+        "Weekly_Sales": [24924.50, 46039.49, 41595.55, 19403.54],
+        "Holiday_Flag": [0, 1, 0, 0],
+        "Temperature": [42.31, 38.51, 39.93, 46.63],
+        "Fuel_Price": [2.572, 2.548, 2.514, 2.561],
+        "CPI": [211.096, 211.242, 211.289, 211.319],
+        "Unemployment": [8.106, 8.106, 8.106, 8.106]
+    })
+    recipe = DataTypeConverterRecipe()
+
+    config = {
+        "conversions": {
+            "Store": "categorical",
+            "Date": "datetime",
+            "Holiday_Flag": "boolean"
+        },
+        "datetime_format": "DD-MM-YYYY"
+    }
+
+    res = recipe.execute({"dataframe": df}, config)
+    df_out = res["dataframe"]
+
+    # 1. Date is parsed with dayfirst DD-MM-YYYY
+    assert pd.api.types.is_datetime64_any_dtype(df_out["Date"])
+    assert df_out["Date"].iloc[0].day == 5
+    assert df_out["Date"].iloc[0].month == 2
+    assert df_out["Date"].iloc[0].year == 2010
+
+    # 2. Store is categorical (string-backed category, not ordinal int)
+    assert isinstance(df_out["Store"].dtype, pd.CategoricalDtype)
+    assert "1" in df_out["Store"].cat.categories
+
+    # 3. Holiday_Flag is boolean
+    assert pd.api.types.is_bool_dtype(df_out["Holiday_Flag"])
+    assert df_out["Holiday_Flag"].tolist() == [False, True, False, False]
+
+    # 4. Weekly_Sales, Temperature, etc. remained numeric untouched
+    assert pd.api.types.is_numeric_dtype(df_out["Weekly_Sales"])
+    assert pd.api.types.is_numeric_dtype(df_out["Temperature"])
+    assert pd.api.types.is_numeric_dtype(df_out["Fuel_Price"])
+
+
 def test_outlier_handler():
     # Construct series with extreme outliers
     normal_data = [10.0, 11.0, 10.5, 9.8, 10.2, 10.1, 10.4, 9.9, 10.0] * 3
