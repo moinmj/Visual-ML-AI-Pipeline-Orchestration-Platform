@@ -19,7 +19,7 @@ def test_dag_cycle_detection():
     graph = WorkflowGraph(nodes=nodes, edges=edges)
     errors = graph.validate_graph()
     assert len(errors) > 0
-    assert any("Cycle detected" in e for e in errors)
+    assert any("Cycle detected" in (e.get("message", "") if isinstance(e, dict) else str(e)) for e in errors)
 
 
 def test_dag_valid_topological_sort():

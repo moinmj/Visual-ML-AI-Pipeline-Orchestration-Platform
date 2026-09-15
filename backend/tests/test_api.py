@@ -3,13 +3,19 @@ import uuid
 from httpx import AsyncClient, ASGITransport
 from backend.app.main import app
 from backend.app.infrastructure.database.session import init_db
+from backend.app.core.security import create_access_token
+
+
+def auth_headers():
+    token = create_access_token(sub="test-user", tenant_id=1, roles=["Tenant Admin"])
+    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.mark.asyncio
 async def test_health_and_recipes_api():
     await init_db()
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with AsyncClient(transport=transport, base_url="http://test", headers=auth_headers()) as client:
         # Health check
         resp = await client.get("/health")
         assert resp.status_code == 200
@@ -32,7 +38,7 @@ async def test_health_and_recipes_api():
 @pytest.mark.asyncio
 async def test_workflow_validation_api():
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with AsyncClient(transport=transport, base_url="http://test", headers=auth_headers()) as client:
         payload = {
             "nodes": [
                 {"id": "n1", "recipe_id": "missing_value_imputer", "config": {}},
@@ -52,7 +58,7 @@ async def test_workflow_validation_api():
 @pytest.mark.asyncio
 async def test_workflow_execution_api():
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with AsyncClient(transport=transport, base_url="http://test", headers=auth_headers()) as client:
         payload = {
             "nodes": [
                 {"id": "n1", "recipe_id": "csv_loader", "config": {}},
@@ -73,7 +79,7 @@ async def test_workflow_execution_api():
 @pytest.mark.asyncio
 async def test_recommendation_and_templates_api():
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with AsyncClient(transport=transport, base_url="http://test", headers=auth_headers()) as client:
         # 1. Test AI Recommendation
         rec_resp = await client.post("/api/v1/recommend/pipeline", json={"preset": "balanced"})
         assert rec_resp.status_code == 200
@@ -127,7 +133,7 @@ async def test_recommendation_and_templates_api():
 async def test_upload_dataset_and_execute_custom_pipeline():
     await init_db()
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with AsyncClient(transport=transport, base_url="http://test", headers=auth_headers()) as client:
         # 1. Upload a custom CSV with unique identifiable column names
         csv_bytes = b"custom_col_x,custom_col_y,custom_target\n10.5,20.1,1\n30.2,40.5,0\n50.1,60.8,1\n70.3,80.9,0\n90.0,100.2,1\n"
         files = {"file": ("custom_experiment.csv", csv_bytes, "text/csv")}
@@ -176,7 +182,7 @@ async def test_upload_dataset_and_execute_custom_pipeline():
 async def test_run_then_save_workflow_preserves_last_execution():
     await init_db()
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with AsyncClient(transport=transport, base_url="http://test", headers=auth_headers()) as client:
         # 1. User runs an unsaved pipeline on the canvas
         dag_payload = {
             "nodes": [
@@ -256,7 +262,7 @@ async def test_run_then_save_workflow_preserves_last_execution():
 async def test_class_imbalance_resampler_pipeline():
     await init_db()
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with AsyncClient(transport=transport, base_url="http://test", headers=auth_headers()) as client:
         # 1. Verify recipe schema retrieval
         schema_resp = await client.get("/api/v1/recipes/class_imbalance_resampler/schema")
         assert schema_resp.status_code == 200
@@ -342,7 +348,7 @@ async def test_class_imbalance_resampler_pipeline():
 async def test_list_workflows_lean_response_and_get_workflow_full_response():
     await init_db()
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with AsyncClient(transport=transport, base_url="http://test", headers=auth_headers()) as client:
         # 1. Create a full workflow workbook with nodes, edges, configs, and last_execution
         wf_id = f"wf_test_lean_{uuid.uuid4().hex[:8]}"
         save_payload = {

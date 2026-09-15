@@ -3,13 +3,19 @@ import uuid
 from httpx import AsyncClient, ASGITransport
 from backend.app.main import app
 from backend.app.infrastructure.database.session import init_db
+from backend.app.core.security import create_access_token
+
+
+def auth_headers():
+    token = create_access_token(sub="test-user", tenant_id=1, roles=["Tenant Admin"])
+    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.mark.asyncio
 async def test_workflow_history_and_rollback_full_suite():
     await init_db()
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with AsyncClient(transport=transport, base_url="http://test", headers=auth_headers()) as client:
         # 1. Upload small dataset for execution
         csv_bytes = b"feature_a,feature_b,target\n1.0,10.0,0\n2.0,20.0,0\n3.0,30.0,1\n4.0,40.0,1\n5.0,50.0,0\n6.0,60.0,1\n"
         files = {"file": ("history_test_data.csv", csv_bytes, "text/csv")}
@@ -134,7 +140,7 @@ async def test_workflow_history_backward_compatibility_auto_synthesis():
     """Verify that existing legacy workflows with last_execution automatically synthesize Run #1."""
     await init_db()
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with AsyncClient(transport=transport, base_url="http://test", headers=auth_headers()) as client:
         legacy_id = f"wf_legacy_{uuid.uuid4().hex[:8]}"
         save_resp = await client.post("/api/v1/workflows/", json={
             "id": legacy_id,
