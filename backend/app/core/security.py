@@ -117,32 +117,18 @@ def get_current_user(
     Downstream code should always read `tenant_id` from this object (never
     from a path/query param supplied by the client) so a caller can never
     request another tenant's data by simply changing an ID in the URL.
-    """
-    dev_fallback = TokenData(
-        sub="dev-user",
-        tenant_id=1,
-        roles=["Tenant Admin", "Data Scientist", "ML Engineer"],
-        permissions=["workflow:read", "workflow:write", "workflow:execute", "workflow:delete", "can_ingest_data"],
-    )
 
+    No dev fallback: a missing, malformed, or expired token always raises
+    401, in every environment.
+    """
     if credentials is None:
-        if settings.DEBUG or settings.ENVIRONMENT == "development":
-            return dev_fallback
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication credentials were not provided",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    try:
-        user = _decode_token(credentials.credentials)
-        if (settings.DEBUG or settings.ENVIRONMENT == "development") and not user.roles:
-            user.roles = ["Tenant Admin", "Data Scientist", "ML Engineer"]
-        return user
-    except HTTPException:
-        if settings.DEBUG or settings.ENVIRONMENT == "development":
-            return dev_fallback
-        raise
+    return _decode_token(credentials.credentials)
 
 
 def require_role(*allowed_roles: str):

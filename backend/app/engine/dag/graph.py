@@ -29,22 +29,32 @@ class WorkflowGraph(BaseModel):
     nodes: List[WorkflowNode]
     edges: List[WorkflowEdge]
 
-    def validate_graph(self) -> List[str]:
+    def validate_graph(self) -> List[Dict[str, Any]]:
         """
         Validates graph structure, checks node IDs, detects cycles, orphan nodes,
         and semantic recipe input/output compatibility with clear explanation reasons.
         """
-        errors = []
+        errors: List[Dict[str, Any]] = []
         node_ids = {n.id for n in self.nodes}
+        node_dict = {n.id: n for n in self.nodes}
+
+        def add_error(message: str, node_id: Optional[str] = None, recipe_id: Optional[str] = None) -> None:
+            """Appends a diagnostic entry along with the node/recipe it belongs to,
+            so the frontend can jump straight to the offending recipe's settings panel."""
+            errors.append({
+                "message": message,
+                "node_id": node_id,
+                "recipe_id": recipe_id if recipe_id is not None else (node_dict[node_id].recipe_id if node_id in node_dict else None)
+            })
 
         if len(node_ids) != len(self.nodes):
-            errors.append("Duplicate node IDs found in workflow.")
+            add_error("Duplicate node IDs found in workflow.")
 
         for edge in self.edges:
             if edge.source not in node_ids:
-                errors.append(f"Edge references non-existent source node: '{edge.source}'")
+                add_error(f"Edge references non-existent source node: '{edge.source}'", node_id=edge.source)
             if edge.target not in node_ids:
-                errors.append(f"Edge references non-existent target node: '{edge.target}'")
+                add_error(f"Edge references non-existent target node: '{edge.target}'", node_id=edge.target)
 
         if errors:
             return errors
@@ -57,7 +67,7 @@ class WorkflowGraph(BaseModel):
                 connected_nodes.add(e.target)
             orphans = node_ids - connected_nodes
             for orphan in orphans:
-                errors.append(f"⚠️ Orphan Node '{orphan}' is completely disconnected. Please connect it to your pipeline or delete it.")
+                add_error(f"⚠️ Orphan Node '{orphan}' is completely disconnected. Please connect it to your pipeline or delete it.", node_id=orphan)
 
         # 2. Detect cycles using Kahn's algorithm
         in_degree = {n.id: 0 for n in self.nodes}
@@ -67,7 +77,6 @@ class WorkflowGraph(BaseModel):
             adj[edge.source].append(edge.target)
             in_degree[edge.target] += 1
 
-        node_dict = {n.id: n for n in self.nodes}
         queue = deque([node_id for node_id, deg in in_degree.items() if deg == 0])
         ordered_nodes = []
         visited_ids = set()
@@ -90,7 +99,7 @@ class WorkflowGraph(BaseModel):
                 ordered_nodes.append(n)
 
         if visited_count != len(self.nodes):
-            errors.append("❌ Cycle detected in workflow graph. Workflows must be Directed Acyclic Graphs (DAGs) without circular loops.")
+            add_error("❌ Cycle detected in workflow graph. Workflows must be Directed Acyclic Graphs (DAGs) without circular loops.")
 
         # 3. Semantic Recipe Contract Compatibility Checks
         parent_map = defaultdict(list)
@@ -122,10 +131,11 @@ class WorkflowGraph(BaseModel):
                             pass
 
                     if not any(r in valid_train_providers for r in parent_recipes) and not has_train_data_output:
-                        errors.append(
+                        add_error(
                             f"❌ Incompatible Connection for '{node.id}' [{recipe.name}]: Model trainers expect split partitions (X_train, y_train). "
                             f"Currently connected directly to '{', '.join(parents)}'. "
-                            f"Fix: Insert a '✂️ Train / Test Splitter' between data preparation and this trainer."
+                            f"Fix: Insert a '✂️ Train / Test Splitter' between data preparation and this trainer.",
+                            node_id=node.id, recipe_id=node.recipe_id
                         )
 
         # 3b. Node Configuration & Required Schema Validation in sequential pipeline order (upstream -> downstream)
@@ -138,7 +148,7 @@ class WorkflowGraph(BaseModel):
             cfg = node.config or {}
             cfg_errors = recipe.validate_config(cfg)
             for ce in cfg_errors:
-                errors.append(f"❌ Configuration Error for '{node.id}' [{recipe.name}]: {ce}")
+                add_error(f"❌ Configuration Error for '{node.id}' [{recipe.name}]: {ce}", node_id=node.id, recipe_id=node.recipe_id)
 
         # 4. ML Best Practice Checks & Recommendations
         all_recipe_ids = {n.recipe_id for n in self.nodes}
@@ -151,10 +161,11 @@ class WorkflowGraph(BaseModel):
             # Check if ML Trainer is present without any Categorical Encoder in the pipeline
             if recipe.category == "training":
                 if "categorical_encoder" not in all_recipe_ids:
-                    errors.append(
+                    add_error(
                         f"💡 Pro-Tip for '{node.id}' [{recipe.name}]: No 'Categorical Feature Encoder' processor found in pipeline. "
                         f"If your dataset contains text/string categories (e.g. Region, Category, Status), "
-                        f"insert a 'Categorical Feature Encoder' before Train/Test Split to boost model accuracy."
+                        f"insert a 'Categorical Feature Encoder' before Train/Test Split to boost model accuracy.",
+                        node_id=node.id, recipe_id=node.recipe_id
                     )
 
         return errors
@@ -165,9 +176,9 @@ class WorkflowGraph(BaseModel):
         warnings, and actionable best-practice recommendations for frontend canvas display.
         """
         raw_items = self.validate_graph()
-        errors = [item for item in raw_items if item.startswith("❌") or (not item.startswith("⚠️") and not item.startswith("💡"))]
-        warnings = [item for item in raw_items if item.startswith("⚠️")]
-        recommendations = [item for item in raw_items if item.startswith("💡")]
+        errors = [item for item in raw_items if item["message"].startswith("❌") or (not item["message"].startswith("⚠️") and not item["message"].startswith("💡"))]
+        warnings = [item for item in raw_items if item["message"].startswith("⚠️")]
+        recommendations = [item for item in raw_items if item["message"].startswith("💡")]
 
         return {
             "is_valid": len(errors) == 0,
@@ -182,7 +193,7 @@ class WorkflowGraph(BaseModel):
         """
         diag = self.get_diagnostics()
         if not diag["is_valid"]:
-            error_details = " | ".join(diag["errors"])
+            error_details = " | ".join(e["message"] for e in diag["errors"])
             raise ValidationException(f"Invalid workflow DAG structure: {error_details}", errors=diag["errors"])
 
         in_degree = {n.id: 0 for n in self.nodes}
