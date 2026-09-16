@@ -148,6 +148,13 @@ class LLMRecommender:
         gemini_key = getattr(settings, "GEMINI_API_KEY", None)
         openai_key = getattr(settings, "OPENAI_API_KEY", None)
 
+        # If target_column is passed as a secondary trailing column (e.g. Unemployment) but the dataset
+        # contains a primary metric like Weekly_Sales, prioritize the primary metric unless explicitly locked.
+        primary_metrics = [c for c in df.columns if any(kw in c.lower() for kw in ["weekly_sales", "sales", "revenue", "demand", "price", "amount"])]
+        if target_column and target_column.lower() in ["unemployment", "cpi", "fuel_price", "temperature", "store"] and primary_metrics:
+            if not query or any(kw in query.lower() for kw in ["sale", "revenue", "demand", "weekly", "predict", "forecast"]):
+                target_column = primary_metrics[0]
+
         if gemini_key:
             endpoint = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
             api_key = gemini_key
