@@ -137,6 +137,32 @@ class PipelineJobManager:
         with self.lock:
             self.inference_bundles[execution_id] = bundle
 
+    def register_job_result(self, execution_id: str, result: Any, duration_ms: float = 0.0):
+        """Caches synchronous execution result in memory so subsequent save workbook calls can locate diagnostics."""
+        with self.lock:
+            self.jobs[execution_id] = {
+                "job_id": execution_id,
+                "status": getattr(result, "status", "SUCCESS") if not isinstance(result, dict) else result.get("status", "SUCCESS"),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "duration_ms": duration_ms or getattr(result, "total_duration_ms", 0.0) if not isinstance(result, dict) else result.get("total_duration_ms", 0.0),
+                "trigger_type": "sync_execute",
+                "trigger_id": None,
+                "result": result,
+                "results": result,
+                "logs": getattr(result, "logs", []) if not isinstance(result, dict) else result.get("logs", []),
+                "error": None
+            }
+
+    def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieves status, logs, and outputs for a job."""
+        with self.lock:
+            job = self.jobs.get(job_id)
+            if not job:
+                return None
+            return dict(job)
+
     def get_inference_bundle(self, execution_id: str) -> Optional[Dict[str, Any]]:
         """Retrieves cached fitted model and pipeline transformers by execution ID."""
         with self.lock:

@@ -3,6 +3,9 @@ import uuid
 from httpx import AsyncClient, ASGITransport
 from backend.app.main import app
 from backend.app.infrastructure.database.session import init_db
+from backend.app.core.security import get_current_user, TokenData
+
+app.dependency_overrides[get_current_user] = lambda: TokenData("test", 1, ["Tenant Admin", "Data Scientist", "ML Engineer"], ["*"])
 
 
 @pytest.mark.asyncio
