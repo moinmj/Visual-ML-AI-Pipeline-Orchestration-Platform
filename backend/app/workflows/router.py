@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Body, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Body, Query, Response
 from fastapi.encoders import jsonable_encoder
 from typing import Dict, Any, List, Optional, Union
 import math
@@ -1519,5 +1519,47 @@ async def predict_with_execution(
             detail=f"Prediction failed: {response.error_message}"
         )
     return response
+
+
+def _convert_prediction_to_csv(response: PredictionResponse) -> str:
+    trajectory = response.trajectory or response.forecast_records or []
+    if trajectory:
+        df_csv = pd.DataFrame(trajectory)
+        return df_csv.to_csv(index=False)
+    elif response.probabilities:
+        df_csv = pd.DataFrame([
+            {"class_label": k, "probability_pct": round(v * 100, 2), "is_predicted": (k == str(response.prediction))}
+            for k, v in response.probabilities.items()
+        ])
+        return df_csv.to_csv(index=False)
+    else:
+        record = response.inferred_inputs or {}
+        record[response.target_column or "prediction"] = response.prediction
+        if response.confidence is not None:
+            record["confidence_pct"] = round(response.confidence * (100 if response.confidence <= 1 else 1), 1)
+        if response.risk_level:
+            record["risk_level"] = response.risk_level
+        df_csv = pd.DataFrame([record])
+        return df_csv.to_csv(index=False)
+
+
+@router.post("/{execution_id}/predict/export-csv")
+async def export_prediction_csv(
+    execution_id: str,
+    payload: PredictionRequest = Body(...)
+):
+    """
+    Executes model inference and returns the predicted output directly as a downloadable CSV file.
+    """
+    response = await predict_with_execution(execution_id=execution_id, payload=payload)
+    csv_str = _convert_prediction_to_csv(response)
+    return Response(
+        content=csv_str,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f"attachment; filename=prediction_export_{execution_id}.csv"
+        }
+    )
+
 
 

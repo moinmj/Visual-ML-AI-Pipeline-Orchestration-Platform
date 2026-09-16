@@ -28,9 +28,11 @@ class Settings(BaseSettings):
     # MLflow Settings
     MLFLOW_TRACKING_URI: str = "sqlite:///./data/mlflow.db"
 
-    # Groq LLM Settings
+    # LLM Provider Settings (Groq, Gemini, OpenAI)
     GROQ_API_KEY: Optional[str] = None
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
+    GEMINI_API_KEY: Optional[str] = None
+    OPENAI_API_KEY: Optional[str] = None
 
     # Auth / JWT Settings
     # Tokens are expected to be issued by an identity provider (or the

@@ -21,7 +21,12 @@ class AIRecommender:
         task_type: Optional[str] = None,
         query: Optional[str] = None
     ) -> Dict[str, Any]:
-        if getattr(settings, "GROQ_API_KEY", None):
+        has_llm_key = any([
+            getattr(settings, "GROQ_API_KEY", None),
+            getattr(settings, "GEMINI_API_KEY", None),
+            getattr(settings, "OPENAI_API_KEY", None),
+        ])
+        if has_llm_key:
             try:
                 from backend.app.recommendation.llm_recommender import LLMRecommender
                 return LLMRecommender.recommend_pipeline(

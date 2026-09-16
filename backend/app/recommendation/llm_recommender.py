@@ -143,9 +143,25 @@ class LLMRecommender:
         Synthesize visual ML DAG using Groq LLM if API key is available,
         with seamless fallback to deterministic heuristic recommender.
         """
-        api_key = settings.GROQ_API_KEY
-        if not api_key:
-            logger.info("GROQ_API_KEY not configured. Falling back to heuristic AIRecommender.")
+        # Determine active LLM provider (Gemini, OpenAI, or Groq)
+        groq_key = getattr(settings, "GROQ_API_KEY", None)
+        gemini_key = getattr(settings, "GEMINI_API_KEY", None)
+        openai_key = getattr(settings, "OPENAI_API_KEY", None)
+
+        if gemini_key:
+            endpoint = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+            api_key = gemini_key
+            models_to_try = ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"]
+        elif openai_key:
+            endpoint = "https://api.openai.com/v1/chat/completions"
+            api_key = openai_key
+            models_to_try = ["gpt-4o-mini", "gpt-4o"]
+        elif groq_key:
+            endpoint = "https://api.groq.com/openai/v1/chat/completions"
+            api_key = groq_key
+            models_to_try = [m for m in [settings.GROQ_MODEL, "llama-3.3-70b-versatile", "llama-3.1-8b-instant"] if m]
+        else:
+            logger.info("No LLM API Key (GROQ, GEMINI, or OPENAI) configured. Falling back to heuristic AIRecommender.")
             return AIRecommender._heuristic_recommend_pipeline(df, target_column=target_column, task_type=task_type)
 
         try:
@@ -174,7 +190,6 @@ class LLMRecommender:
                 f"Synthesize the visual ML DAG and return valid JSON only."
             )
 
-            models_to_try = [m for m in [settings.GROQ_MODEL, "llama-3.3-70b-versatile", "llama-3.1-8b-instant"] if m and "gpt-oss" not in m]
             # Deduplicate preserving order
             models_to_try = list(dict.fromkeys(models_to_try))
 
@@ -185,7 +200,7 @@ class LLMRecommender:
                         continue
                     try:
                         response = await client.post(
-                            "https://api.groq.com/openai/v1/chat/completions",
+                            endpoint,
                             headers={"Authorization": f"Bearer {api_key}"},
                             json={
                                 "model": model_id,
@@ -203,10 +218,10 @@ class LLMRecommender:
                             import asyncio as a_io
                             await a_io.sleep(1.0)
                     except Exception as e:
-                        logger.warning(f"Groq model {model_id} failed: {str(e)}")
+                        logger.warning(f"LLM model {model_id} via {endpoint} failed: {str(e)}")
 
             if not response or response.status_code != 200:
-                logger.warning(f"Groq API returned status {response.status_code if response else 'None'}. Using fallback.")
+                logger.warning(f"LLM API returned status {response.status_code if response else 'None'}. Using fallback.")
                 return AIRecommender._heuristic_recommend_pipeline(df, target_column=target_column, task_type=task_type)
 
             resp_json = response.json()

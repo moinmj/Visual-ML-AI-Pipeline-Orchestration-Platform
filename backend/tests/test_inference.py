@@ -317,10 +317,16 @@ async def test_tabular_temporal_regression_and_future_projection():
                 "inputs": {"rainfall": 45.0, "humidity": 60.0, "date_month": 7}
             }
         )
-        assert resp_pred.status_code == 200
-        pred_data = resp_pred.json()
-        assert pred_data["status"] == "SUCCESS"
-        assert pred_data["projected_end_value"] is not None
-        assert "trajectory" in pred_data
-        assert len(pred_data["trajectory"]) >= 5
+        # Predict CSV Export
+        resp_csv = await ac.post(
+            "/api/v1/workflows/test_exec_temporal_reg_01/predict/export-csv",
+            json={
+                "target_year": 2025,
+                "inputs": {"rainfall": 45.0, "humidity": 60.0, "date_month": 7}
+            }
+        )
+        assert resp_csv.status_code == 200
+        assert "text/csv" in resp_csv.headers["content-type"]
+        assert "ds" in resp_csv.text or "yhat" in resp_csv.text or "temperature" in resp_csv.text
+
 

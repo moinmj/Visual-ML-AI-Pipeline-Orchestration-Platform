@@ -889,15 +889,35 @@ class PipelineInferencer:
             f"MODEL FEATURES:\n" + "\n".join(feat_descriptions)
         )
 
-        api_key = getattr(settings, "GROQ_API_KEY", None)
-        if api_key:
+        groq_key = getattr(settings, "GROQ_API_KEY", None)
+        gemini_key = getattr(settings, "GEMINI_API_KEY", None)
+        openai_key = getattr(settings, "OPENAI_API_KEY", None)
+
+        if gemini_key:
+            endpoint = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+            api_key = gemini_key
+            model_id = "gemini-1.5-flash"
+        elif openai_key:
+            endpoint = "https://api.openai.com/v1/chat/completions"
+            api_key = openai_key
+            model_id = "gpt-4o-mini"
+        elif groq_key:
+            endpoint = "https://api.groq.com/openai/v1/chat/completions"
+            api_key = groq_key
+            model_id = getattr(settings, "GROQ_MODEL", "llama-3.3-70b-versatile")
+        else:
+            endpoint = None
+            api_key = None
+            model_id = None
+
+        if api_key and endpoint:
             try:
                 with httpx.Client(timeout=8.0) as client:
                     resp = client.post(
-                        "https://api.groq.com/openai/v1/chat/completions",
+                        endpoint,
                         headers={"Authorization": f"Bearer {api_key}"},
                         json={
-                            "model": getattr(settings, "GROQ_MODEL", "llama-3.3-70b-versatile"),
+                            "model": model_id,
                             "messages": [
                                 {"role": "system", "content": prompt_system},
                                 {"role": "user", "content": user_content}
@@ -910,7 +930,7 @@ class PipelineInferencer:
                     parsed = json.loads(resp.json()["choices"][0]["message"]["content"])
                     return parsed
             except Exception as e:
-                logger.warning(f"Groq NL query parse warning: {str(e)}")
+                logger.warning(f"LLM NL query parse warning via {endpoint}: {str(e)}")
 
         # Fallback extraction: check for 4-digit years, period keywords, and requested metrics
         overrides = {}
