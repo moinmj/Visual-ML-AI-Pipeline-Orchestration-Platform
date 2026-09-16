@@ -46,7 +46,18 @@ class FeatureScalerRecipe(BaseRecipe):
         df = df.copy()
         method = config.get("method", "standard")
         target_cols = config.get("columns", [])
-        exclude_target = config.get("exclude_target", True)
+        exclude_target_cfg = config.get("exclude_target", True)
+
+        # Resolve target variable from config, exclude_target string, context, or inputs
+        target_var = config.get("target_column")
+        if not target_var and isinstance(exclude_target_cfg, str) and exclude_target_cfg.strip():
+            target_var = exclude_target_cfg.strip()
+        if not target_var and isinstance(context, dict):
+            target_var = context.get("target_column")
+        if not target_var and isinstance(inputs, dict):
+            target_var = inputs.get("target_column")
+
+        exclude_target = bool(exclude_target_cfg) if not isinstance(exclude_target_cfg, str) else True
 
         if isinstance(target_cols, str):
             if target_cols.strip():
@@ -62,12 +73,6 @@ class FeatureScalerRecipe(BaseRecipe):
         if not target_cols:
             # Auto-detect numeric columns
             numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
-
-            target_var = config.get("target_column")
-            if not target_var and isinstance(context, dict):
-                target_var = context.get("target_column")
-            if not target_var and isinstance(inputs, dict):
-                target_var = inputs.get("target_column")
 
             if exclude_target:
                 # Identify candidate targets to exclude
