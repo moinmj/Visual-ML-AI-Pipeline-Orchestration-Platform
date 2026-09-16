@@ -62,17 +62,28 @@ class FeatureScalerRecipe(BaseRecipe):
         if not target_cols:
             # Auto-detect numeric columns
             numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
-            
+
+            target_var = config.get("target_column")
+            if not target_var and isinstance(context, dict):
+                target_var = context.get("target_column")
+            if not target_var and isinstance(inputs, dict):
+                target_var = inputs.get("target_column")
+
             if exclude_target:
-                # Identify binary/categorical target candidates (e.g. 2-5 unique values or name matches target/churn/survived)
+                # Identify candidate targets to exclude
                 filtered_cols = []
                 for c in numeric_cols:
+                    if target_var and c == target_var:
+                        continue
                     is_candidate_target = (df[c].nunique() <= 2) or (c.lower() in ["target", "churn", "survived", "label", "class", "y"])
                     if not is_candidate_target:
                         filtered_cols.append(c)
-                target_cols = filtered_cols if filtered_cols else numeric_cols
+                target_cols = filtered_cols if filtered_cols else [c for c in numeric_cols if c != target_var]
             else:
                 target_cols = numeric_cols
+
+        if target_var and exclude_target and target_var in target_cols:
+            target_cols = [c for c in target_cols if c != target_var]
 
         if not target_cols:
             return {"dataframe": df}

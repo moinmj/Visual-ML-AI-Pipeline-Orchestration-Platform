@@ -127,6 +127,21 @@ class PipelineInferencer:
                         temporal_col = fn
                         break
 
+            unrecognized_features = []
+            if nl_query:
+                valid_features = set(bundle.get("feature_names", [])) | set(bundle.get("sample_row", {}).keys())
+                if inferred_inputs:
+                    for k in list(inferred_inputs.keys()):
+                        if not any(k.lower() == f.lower() for f in valid_features):
+                            unrecognized_features.append(k)
+                # Check prompt tokens for unmapped domain terms like 'rain'
+                q_words = [w.lower() for w in re.findall(r'\b[a-zA-Z]{3,}\b', nl_query)]
+                stopwords = {"predict", "for", "with", "high", "low", "medium", "forecast", "next", "years", "year", "months", "days", "trajectory", "trend", "show", "what", "will", "the", "and", "scenario", "baseline"}
+                for w in q_words:
+                    if w not in stopwords and not any(w in f.lower() for f in valid_features):
+                        if w not in [u.lower() for u in unrecognized_features]:
+                            unrecognized_features.append(w)
+
             if (request.future_periods or request.target_year) and temporal_col and task_type in ["regression", "classification"]:
                 inputs_dict = request.inputs if isinstance(request.inputs, dict) else dict(bundle.get("sample_row", {}))
                 res = cls._predict_tabular_future_projection(
@@ -144,6 +159,9 @@ class PipelineInferencer:
                         series_summary=res.series_summary
                     )
                     res.inferred_inputs = inferred_inputs
+                    if unrecognized_features:
+                        res.unrecognized_features = unrecognized_features
+                        res.ai_explanation += f"\n\nNote: The query referenced '{', '.join(unrecognized_features)}', which is not a feature in this dataset (Trained features: {', '.join(bundle.get('feature_names', []))}). Prediction pertains to trained target '{bundle.get('target_column')}'."
                 res.inference_latency_ms = round((time.time() - start_t) * 1000.0, 2)
                 return res
 

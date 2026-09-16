@@ -63,10 +63,16 @@ class AIRecommender:
         if target_column and target_column in df.columns:
             selected_target = target_column
         else:
-            # Pick logical target (non-date, prefer last column or columns named target/churn/sales/price)
+            # Pick logical target (prefer explicit business metrics: sales, revenue, demand, target, label)
             candidates = [c for c in df.columns if c not in date_cols]
-            named_candidates = [c for c in candidates if any(k in c.lower() for k in ["target", "churn", "survived", "label", "price", "sales", "revenue"])]
-            selected_target = named_candidates[0] if named_candidates else (candidates[-1] if candidates else list(df.columns)[-1])
+            priority_keywords = ["weekly_sales", "sales", "revenue", "demand", "target", "label", "churn", "survived", "price"]
+            found_target = None
+            for kw in priority_keywords:
+                matched = [c for c in candidates if kw in c.lower()]
+                if matched:
+                    found_target = matched[0]
+                    break
+            selected_target = found_target or (candidates[-1] if candidates else list(df.columns)[-1])
 
         # 2. Determine / Infer Task Type
         if task_type in ["classification", "regression", "time_series_forecasting", "anomaly_detection"]:

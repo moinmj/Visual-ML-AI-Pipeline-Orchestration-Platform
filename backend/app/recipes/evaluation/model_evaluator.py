@@ -153,7 +153,9 @@ class ModelEvaluatorRecipe(BaseRecipe):
                     _col_vals = X_test[_c]
                     # Try to parse as datetime – if it converts cleanly, use it
                     try:
-                        _parsed = pd.to_datetime(_col_vals, errors="coerce")
+                        _parsed = pd.to_datetime(_col_vals, dayfirst=True, errors="coerce")
+                        if _parsed.notna().sum() <= 0.5 * len(_col_vals):
+                            _parsed = pd.to_datetime(_col_vals, errors="coerce")
                         if _parsed.notna().sum() > 0.5 * len(_col_vals):
                             _temporal_snapshot = _parsed
                             _temporal_snap_col = _c
@@ -309,7 +311,9 @@ class ModelEvaluatorRecipe(BaseRecipe):
                 else:
                     # Raw strings – try to parse, else keep as-is
                     try:
-                        _parsed = pd.to_datetime(_temporal_snapshot, errors="coerce")
+                        _parsed = pd.to_datetime(_temporal_snapshot, dayfirst=True, errors="coerce")
+                        if _parsed.notna().sum() <= 0.5 * len(_temporal_snapshot):
+                            _parsed = pd.to_datetime(_temporal_snapshot, errors="coerce")
                         if _parsed.notna().sum() > 0.5 * len(_temporal_snapshot):
                             formatted_dates = [_fmt_date_val(v) for v in _parsed]
                             time_sort_key = _parsed.values
