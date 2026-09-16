@@ -82,6 +82,7 @@ class PredictionResponse(BaseModel):
     # AI Natural Language Query Outputs
     ai_explanation: Optional[str] = Field(default=None, description="Natural language conversational explanation synthesized by LLM")
     inferred_inputs: Optional[Dict[str, Any]] = Field(default=None, description="Feature inputs extracted/inferred by AI from prompt")
+    unrecognized_features: Optional[List[str]] = Field(default=None, description="Features mentioned in query prompt that do not exist in the dataset schema")
 
     # Anomaly Detection Outputs
     is_anomaly: Optional[int] = Field(default=None, description="1 if anomalous, 0 if normal")
