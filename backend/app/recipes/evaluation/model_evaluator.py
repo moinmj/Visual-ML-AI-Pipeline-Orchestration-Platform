@@ -139,30 +139,64 @@ class ModelEvaluatorRecipe(BaseRecipe):
         # Capture split_mode from upstream TrainTestSplit recipe for reporting
         split_mode = inputs.get("split_mode") or (context.get("split_mode") if isinstance(context, dict) else None)
 
-        # ── Snapshot temporal columns BEFORE encoding so trajectory x-axis uses
-        # real dates, not integer-encoded surrogates produced by safe_prepare_training_data.
-        # safe_prepare_training_data drops "Date" and replaces it with Date_year/month/day
-        # integers, so any temporal detection that runs on the post-encoded X_test sees
-        # only integers (or scaler-normalised floats) instead of actual date values.
-        _temporal_snapshot: Optional[pd.Series] = None  # raw date strings, pre-encoding
+        # ── Capture the date x-axis for the trajectory chart ───────────────
+        # Priority 0 (best): explicit test_dates list threaded from the splitter.
+        #   The splitter has access to the full df_test *before* the Date column
+        #   is dropped from the feature set, so it can reliably extract real dates.
+        #   Using this avoids any heuristic column-name scanning in the evaluator.
+        #
+        # Priority 1 (fallback): scan X_test columns with STRICT matching only
+        #   (exact match, prefix, or suffix on known date keywords — NOT substring).
+        #   This prevents "Weekly_Sales_lag_1" from matching the keyword "week",
+        #   which was the root cause of the "1970-01-01" epoch chart bug.
+        #
+        # Priority 2 (last resort): step indices ("Step 1", "Step 2", …).
+        _temporal_snapshot: Optional[pd.Series] = None
         _temporal_snap_col: Optional[str] = None
-        if isinstance(X_test, pd.DataFrame):
-            _date_keywords = ["date", "time", "timestamp", "period", "ds", "week", "month", "year"]
+
+        # Priority 0: explicit sidecar from splitter ────────────────────────
+        _explicit_test_dates = inputs.get("test_dates") or (
+            context.get("test_dates") if isinstance(context, dict) else None
+        )
+        _explicit_date_col = inputs.get("date_column_name") or (
+            context.get("date_column_name") if isinstance(context, dict) else None
+        )
+        if _explicit_test_dates and len(_explicit_test_dates) > 0:
+            _temporal_snapshot = pd.Series(_explicit_test_dates)
+            _temporal_snap_col = _explicit_date_col or "Date"
+
+        # Priority 1: strict column-name scan in X_test ─────────────────────
+        elif isinstance(X_test, pd.DataFrame):
+            # Strict keywords: a column qualifies only if the cleaned name IS one
+            # of these words, or starts/ends with one separated by an underscore.
+            # This deliberately excludes "Weekly_Sales_lag_1" (contains "week"
+            # as an interior substring of "Weekly").
+            _strict_kws = ["date", "timestamp", "period", "ds", "time", "datetime"]
             for _c in X_test.columns:
-                if any(k in _c.lower() for k in _date_keywords):
-                    _col_vals = X_test[_c]
-                    # Try to parse as datetime – if it converts cleanly, use it
-                    try:
-                        _parsed = pd.to_datetime(_col_vals, errors="coerce")
-                        if _parsed.notna().sum() > 0.5 * len(_col_vals):
-                            _temporal_snapshot = _parsed
-                            _temporal_snap_col = _c
-                            break
-                    except Exception:
-                        pass
-                    # Fallback: store raw string representation
-                    if _temporal_snapshot is None:
-                        _temporal_snapshot = _col_vals.astype(str)
+                _cl = _c.lower().strip()
+                _matches = any(
+                    _cl == kw
+                    or _cl.startswith(kw + "_")
+                    or _cl.endswith("_" + kw)
+                    for kw in _strict_kws
+                )
+                if not _matches:
+                    continue
+                _col_vals = X_test[_c]
+                # Also verify it's actually parseable as a date (not a number)
+                try:
+                    _parsed = pd.to_datetime(_col_vals, errors="coerce")
+                    if _parsed.notna().sum() > 0.5 * len(_col_vals):
+                        _temporal_snapshot = _parsed
+                        _temporal_snap_col = _c
+                        break
+                except Exception:
+                    pass
+            # Also check dtype-detected datetime columns as a final fallback
+            if _temporal_snapshot is None:
+                for _c in X_test.columns:
+                    if pd.api.types.is_datetime64_any_dtype(X_test[_c]):
+                        _temporal_snapshot = X_test[_c]
                         _temporal_snap_col = _c
                         break
 

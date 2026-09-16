@@ -126,7 +126,7 @@ class WalkForwardSplitRecipe(BaseRecipe):
         stride = effective_step
         num_folds = max(1, (n_total - effective_window) // stride) if stride > 0 else 1
 
-        return {
+        _wf_result = {
             "X_train": X_tr,
             "y_train": y_tr,
             "X_test": X_te,
@@ -164,6 +164,25 @@ class WalkForwardSplitRecipe(BaseRecipe):
                 "time_column": time_col
             }
         }
+
+        # ── Thread date sidecar to evaluator ────────────────────────────────
+        if time_col and time_col in df_test.columns:
+            try:
+                _raw = df_test[time_col].reset_index(drop=True)
+                _parsed = pd.to_datetime(_raw, errors="coerce")
+                if _parsed.notna().sum() > 0.5 * len(_parsed):
+                    _wf_result["test_dates"] = [
+                        v.strftime("%Y-%m-%d") if pd.notna(v) else str(_raw.iloc[i])
+                        for i, v in enumerate(_parsed)
+                    ]
+                else:
+                    _wf_result["test_dates"] = [str(v) for v in _raw]
+                _wf_result["date_column_name"] = time_col
+            except Exception:
+                pass
+
+        return _wf_result
+
 
     def to_code(self, config: Dict[str, Any]) -> str:
         tgt = config.get("target_column", "target")
