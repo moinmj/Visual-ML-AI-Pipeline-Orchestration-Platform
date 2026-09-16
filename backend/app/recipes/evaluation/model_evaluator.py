@@ -5,8 +5,57 @@ from sklearn.metrics import (
 )
 import numpy as np
 import pandas as pd
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 from backend.app.recipes.base.recipe import BaseRecipe
+
+
+def _is_valid_calendar_datetime_series(series: Optional[pd.Series]) -> Tuple[bool, Optional[pd.Series]]:
+    """
+    Production-grade validation for temporal calendar series.
+    Detects native datetime dtypes, ISO string dates, and valid epoch timestamps.
+    Rejects degenerate numeric nanosecond Epoch artifacts (e.g. small integers mapped to 1970-01-01).
+    """
+    if series is None or len(series) == 0:
+        return False, None
+
+    # Case 1: Native datetime64 dtype
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return True, series
+
+    # Case 2: Numeric dtype (integers or floats)
+    if pd.api.types.is_numeric_dtype(series):
+        s_clean = series.dropna()
+        if s_clean.empty:
+            return False, None
+        v_min = float(s_clean.min())
+        # Only values >= 1e8 can represent valid Unix timestamps in seconds (e.g. 1.6e9 -> year 2020+)
+        if v_min < 1e8:
+            return False, None
+        try:
+            parsed = pd.to_datetime(s_clean, unit="s", errors="coerce")
+            if parsed.notna().sum() > 0.5 * len(s_clean):
+                return True, parsed
+        except Exception:
+            return False, None
+
+    # Case 3: Object / String / Categorical series
+    try:
+        s_str = series.astype(str).str.strip()
+        parsed = pd.to_datetime(s_str, dayfirst=True, errors="coerce")
+        if parsed.notna().sum() <= 0.5 * len(s_str):
+            parsed = pd.to_datetime(s_str, errors="coerce")
+
+        valid_count = parsed.notna().sum()
+        if valid_count > 0.5 * len(s_str):
+            # Production Guard: Detect degenerate Epoch artifacts where all rows format to a single constant string "1970-01-01"
+            formatted_dates = parsed.dt.strftime("%Y-%m-%d").dropna()
+            if len(s_str) > 1 and formatted_dates.nunique() == 1 and formatted_dates.iloc[0] == "1970-01-01":
+                return False, None
+            return True, parsed
+    except Exception:
+        pass
+
+    return False, None
 
 
 class ModelEvaluatorRecipe(BaseRecipe):
@@ -182,23 +231,11 @@ class ModelEvaluatorRecipe(BaseRecipe):
                 )
                 if not _matches:
                     continue
-                _col_vals = X_test[_c]
-                # If column is numeric with small values (e.g. ordinal 57 or store IDs), it's not a real date timestamp
-                if pd.api.types.is_numeric_dtype(_col_vals):
-                    v_max = float(_col_vals.max()) if len(_col_vals) > 0 and not pd.isna(_col_vals.max()) else 0
-                    if v_max < 100000:  # Skip small numeric values (not Unix timestamps or year strings)
-                        continue
-                # Verify it's actually parseable as a real date (with dayfirst=True fallback)
-                try:
-                    _parsed = pd.to_datetime(_col_vals, dayfirst=True, errors="coerce")
-                    if _parsed.notna().sum() <= 0.5 * len(_col_vals):
-                        _parsed = pd.to_datetime(_col_vals, errors="coerce")
-                    if _parsed.notna().sum() > 0.5 * len(_col_vals) and _parsed.dt.year.min() > 1980:
-                        _temporal_snapshot = _parsed
-                        _temporal_snap_col = _c
-                        break
-                except Exception:
-                    pass
+                _is_valid, _parsed = _is_valid_calendar_datetime_series(X_test[_c])
+                if _is_valid and _parsed is not None:
+                    _temporal_snapshot = _parsed
+                    _temporal_snap_col = _c
+                    break
             # Also check dtype-detected datetime columns as a final fallback
             if _temporal_snapshot is None:
                 for _c in X_test.columns:
@@ -344,24 +381,13 @@ class ModelEvaluatorRecipe(BaseRecipe):
             # ── Priority 1: pre-encoding snapshot ────────────────────────────────
             if _temporal_snapshot is not None and _temporal_snap_col is not None:
                 time_col = _temporal_snap_col
-                if pd.api.types.is_datetime64_any_dtype(_temporal_snapshot):
-                    formatted_dates = [_fmt_date_val(v) for v in _temporal_snapshot]
-                    time_sort_key = _temporal_snapshot.values
+                _is_valid, _parsed = _is_valid_calendar_datetime_series(_temporal_snapshot)
+                if _is_valid and _parsed is not None:
+                    formatted_dates = [_fmt_date_val(v) for v in _parsed]
+                    time_sort_key = _parsed.values
                 else:
-                    # Raw strings – try to parse, else keep as-is
-                    try:
-                        _parsed = pd.to_datetime(_temporal_snapshot, dayfirst=True, errors="coerce")
-                        if _parsed.notna().sum() <= 0.5 * len(_temporal_snapshot):
-                            _parsed = pd.to_datetime(_temporal_snapshot, errors="coerce")
-                        if _parsed.notna().sum() > 0.5 * len(_temporal_snapshot) and _parsed.dt.year.min() > 1980:
-                            formatted_dates = [_fmt_date_val(v) for v in _parsed]
-                            time_sort_key = _parsed.values
-                        else:
-                            formatted_dates = list(_temporal_snapshot.astype(str))
-                            time_sort_key = list(range(len(formatted_dates)))
-                    except Exception:
-                        formatted_dates = list(_temporal_snapshot.astype(str))
-                        time_sort_key = list(range(len(formatted_dates)))
+                    formatted_dates = list(_temporal_snapshot.astype(str))
+                    time_sort_key = list(range(len(formatted_dates)))
 
             # ── Priority 2: post-encoded year/month/day columns ──────────────────
             elif isinstance(X_test, pd.DataFrame):
