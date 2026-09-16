@@ -75,3 +75,19 @@ async def test_llm_recommender_synthesis():
         assert recipe_registry.has(n["recipe_id"]), f"Recipe {n['recipe_id']} not found in registry"
 
 
+@pytest.mark.asyncio
+async def test_llm_recommender_provider_keys(monkeypatch):
+    from backend.app.recommendation.llm_recommender import LLMRecommender
+    from backend.app.core.config import settings
+
+    df = pd.DataFrame({"x": [1, 2, 3], "y": [4, 5, 6]})
+    monkeypatch.setattr(settings, "GEMINI_API_KEY", "test_gemini_key")
+    monkeypatch.setattr(settings, "GROQ_API_KEY", None)
+
+    # Calling with invalid test key falls back gracefully to AIRecommender
+    res = await LLMRecommender.recommend_pipeline_async(df=df, query="predict y")
+    assert "recommended_dag" in res
+    assert res["target_column"] == "y"
+
+
+
