@@ -216,7 +216,7 @@ class LLMRecommender:
                                     {"role": "user", "content": user_prompt}
                                 ],
                                 "response_format": {"type": "json_object"},
-                                "temperature": 0.2
+                                "temperature": 0.0
                             }
                         )
                         if response.status_code == 200:

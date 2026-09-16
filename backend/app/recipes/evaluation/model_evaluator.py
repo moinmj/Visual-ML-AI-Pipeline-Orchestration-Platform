@@ -183,12 +183,17 @@ class ModelEvaluatorRecipe(BaseRecipe):
                 if not _matches:
                     continue
                 _col_vals = X_test[_c]
-                # Also verify it's actually parseable as a date (with dayfirst=True fallback)
+                # If column is numeric with small values (e.g. ordinal 57 or store IDs), it's not a real date timestamp
+                if pd.api.types.is_numeric_dtype(_col_vals):
+                    v_max = float(_col_vals.max()) if len(_col_vals) > 0 and not pd.isna(_col_vals.max()) else 0
+                    if v_max < 100000:  # Skip small numeric values (not Unix timestamps or year strings)
+                        continue
+                # Verify it's actually parseable as a real date (with dayfirst=True fallback)
                 try:
                     _parsed = pd.to_datetime(_col_vals, dayfirst=True, errors="coerce")
                     if _parsed.notna().sum() <= 0.5 * len(_col_vals):
                         _parsed = pd.to_datetime(_col_vals, errors="coerce")
-                    if _parsed.notna().sum() > 0.5 * len(_col_vals):
+                    if _parsed.notna().sum() > 0.5 * len(_col_vals) and _parsed.dt.year.min() > 1980:
                         _temporal_snapshot = _parsed
                         _temporal_snap_col = _c
                         break
