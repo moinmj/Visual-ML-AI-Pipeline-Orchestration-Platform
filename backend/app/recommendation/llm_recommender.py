@@ -433,16 +433,14 @@ class LLMRecommender:
 
         m_rankings = result.get("model_rankings", [])
         if not m_rankings:
-            m_rankings = []
-            for n in valid_nodes:
-                r_id = n["recipe_id"]
-                if "trainer" in r_id or "forecaster" in r_id or r_id in ["isolation_forest", "random_forest_trainer"]:
-                    m_rankings.append({
-                        "recipe_id": r_id,
-                        "name": n.get("label", r_id),
-                        "tier": "Primary Model",
-                        "reason": f"LLM recommended model {r_id}."
-                    })
+            if task_type == "time_series_forecasting":
+                m_rankings = [{"recipe_id": "prophet_forecaster", "name": "Prophet Forecaster", "tier": "Primary Model", "reason": "Recommended for time-series forecasting."}]
+            elif task_type == "regression":
+                m_rankings = [{"recipe_id": "xgboost_trainer", "name": "XGBoost Regressor", "tier": "Primary Model", "reason": "Recommended for continuous regression."}]
+            elif task_type == "classification":
+                m_rankings = [{"recipe_id": "xgboost_trainer", "name": "XGBoost Classifier", "tier": "Primary Model", "reason": "Recommended for discrete classification."}]
+            else:
+                m_rankings = [{"recipe_id": "isolation_forest", "name": "Isolation Forest", "tier": "Primary Model", "reason": "Recommended for anomaly detection."}]
 
         return {
             "task_type": task_type,
