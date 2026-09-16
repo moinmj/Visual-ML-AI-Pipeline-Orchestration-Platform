@@ -108,12 +108,18 @@ class DatasetService:
                 "raw_type": raw_dtype
             })
 
+        inferred_target = (dataset.profile or {}).get("inferred_target_column")
+        if not inferred_target:
+            profile_res = DataProfiler.profile_dataframe(df)
+            inferred_target = profile_res.get("inferred_target_column")
+
         return {
             "id": dataset.id,
             "name": dataset.name,
             "columns": list(df.columns),
             "column_types": column_types,
             "columns_schema": columns_schema,
+            "inferred_target_column": inferred_target,
             "total_rows": total_rows,
             "limit": limit,
             "offset": start_idx,

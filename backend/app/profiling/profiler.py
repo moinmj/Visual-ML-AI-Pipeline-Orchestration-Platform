@@ -128,6 +128,27 @@ class DataProfiler:
         duplicate_penalty = min(duplicate_percentage * 1.0, 30.0)
         quality_score = max(round(100.0 - missing_penalty - duplicate_penalty, 1), 0.0)
 
+        # Infer primary target column using domain-agnostic metric keywords & variance
+        candidates = [c for c in df.columns if not any(kw in c.lower() for kw in ["date", "time", "year", "ds", "timestamp", "period", "month"])]
+        primary_keywords = ["weekly_sales", "sales", "revenue", "demand", "target", "label", "y", "class", "churn", "survived", "price", "amount", "score", "value"]
+        inferred_target = None
+        for kw in primary_keywords:
+            matched = [c for c in candidates if kw == c.lower().strip() or kw in c.lower()]
+            if matched:
+                inferred_target = matched[0]
+                break
+
+        if not inferred_target and candidates:
+            num_candidates = [c for c in candidates if pd.api.types.is_numeric_dtype(df[c]) and df[c].nunique() > 1]
+            if num_candidates:
+                non_id = [c for c in num_candidates if not (df[c].nunique() == len(df) and "id" in c.lower()) and df[c].nunique() > 2]
+                if non_id:
+                    variances = {c: float(df[c].var()) for c in non_id if not pd.isna(df[c].var())}
+                    if variances:
+                        inferred_target = max(variances, key=variances.get)
+
+        inferred_target = inferred_target or (candidates[-1] if candidates else (list(df.columns)[-1] if df.columns else None))
+
         return {
             "row_count": row_count,
             "column_count": col_count,
@@ -137,5 +158,6 @@ class DataProfiler:
             "total_missing_cells": total_missing,
             "missing_cells_percentage": missing_percentage,
             "quality_score": quality_score,
+            "inferred_target_column": inferred_target,
             "columns": columns_profile
         }
