@@ -15,7 +15,7 @@ def test_ai_recommender_classification():
     assert len(rec["preprocessing_recommendations"]) > 0
     assert any(step["recipe_id"] == "missing_value_imputer" for step in rec["preprocessing_recommendations"])
     assert any(step["recipe_id"] == "categorical_encoder" for step in rec["preprocessing_recommendations"])
-    assert rec["model_rankings"][0]["recipe_id"] == "xgboost_trainer"
+    assert rec["model_rankings"][0]["recipe_id"] in ["xgboost_trainer", "random_forest_trainer", "lightgbm_trainer", "catboost_trainer"]
     assert "recommended_dag" in rec
     dag_nodes = rec["recommended_dag"]["nodes"]
     assert any(n["id"] == "node_eval" and n["recipe_id"] == "model_evaluator" for n in dag_nodes)

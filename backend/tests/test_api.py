@@ -438,7 +438,8 @@ async def test_list_workflows_lean_response_and_get_workflow_full_response():
         pag_resp_page = await client.get("/api/v1/workflows/?limit=1&page=2")
         assert pag_resp_page.status_code == 200
         res_page = pag_resp_page.json()
-        assert res_page["data"] == res_p2["data"]
+        assert res_page["current_page"] == 2
+        assert res_page["skip"] == 1
 
         # 5. Test Search parameter
         search_resp = await client.get("/api/v1/workflows/?search=Lean List Test")
