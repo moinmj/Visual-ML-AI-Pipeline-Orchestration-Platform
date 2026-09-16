@@ -117,8 +117,8 @@ async def resolve_or_normalize_last_execution(
     if target_exec_id:
         # Check running/recent jobs
         job = job_manager.get_job(target_exec_id)
-        if job and job.get("results"):
-            res = job["results"]
+        if job and (job.get("results") or job.get("result")):
+            res = job.get("results") or job.get("result")
             norm_job = {
                 "execution_id": target_exec_id,
                 "status": job.get("status", "SUCCESS"),
@@ -128,6 +128,10 @@ async def resolve_or_normalize_last_execution(
                 "execution_logs": job.get("logs", []),
                 "logs": job.get("logs", []),
                 "step_snapshots": res.get("step_snapshots", {}) if isinstance(res, dict) else getattr(res, "step_snapshots", {}),
+                "anomaly_summary": res.get("anomaly_summary") if isinstance(res, dict) else getattr(res, "anomaly_summary", None),
+                "forecasting_summary": res.get("forecasting_summary") if isinstance(res, dict) else getattr(res, "forecasting_summary", None),
+                "governance_summary": res.get("governance_summary") if isinstance(res, dict) else getattr(res, "governance_summary", None),
+                "inference_schema": res.get("inference_schema") if isinstance(res, dict) else getattr(res, "inference_schema", None),
             }
             return jsonable_encoder(norm_job)
 
@@ -774,14 +778,14 @@ async def validate_workflow_by_id(
 async def execute_workflow(
     workflow: WorkflowGraph,
     include_node_outputs: bool = Query(False, description="Opt-in to include full raw data of every node (default: false for lean response)"),
-    auto_save: bool = Query(True, description="Automatically upsert/save current workflow to DB before executing"),
-    workflow_id: Optional[str] = Query(None, description="Optional workflow ID to link/update in database"),
+    auto_save: bool = Query(False, description="Automatically upsert/save current workflow to DB before executing"),
+    workflow_id: Optional[str] = Query(None, description="Optional workflow ID to link in execution result"),
     workflow_name: Optional[str] = Query(None, description="Optional workflow title if auto-saving to DB"),
     db: AsyncSession = Depends(get_db)
 ):
     """
     Execute a full workflow DAG end-to-end synchronously.
-    Supports auto-saving: saves/upserts the workflow, links its active dataset, and persists execution metrics/reports to DB.
+    Execution does NOT auto-save to DB by default; workflows and execution results are saved via the Save Workbook endpoint.
     """
     target_id = (
         workflow_id
@@ -789,7 +793,7 @@ async def execute_workflow(
         or getattr(workflow, "id", None)
         or getattr(workflow, "pipeline_id", None)
     )
-    if auto_save or target_id:
+    if auto_save:
         target_id = target_id or str(uuid.uuid4())
         nodes_payload, edges_payload, node_configs = workflow_graph_to_db_payload(workflow)
         
@@ -839,6 +843,14 @@ async def execute_workflow(
     )
     if target_id:
         result.workflow_id = target_id
+
+    # Cache execution result in memory for lookup if user subsequently saves the workbook
+    try:
+        job_manager.register_job_result(result.execution_id, result)
+    except Exception:
+        pass
+
+    if auto_save and target_id:
         res_wf = await db.execute(select(Workflow).where(Workflow.id == target_id))
         wf_rec = res_wf.scalar_one_or_none()
         if wf_rec:
@@ -894,11 +906,12 @@ async def execute_workflow_by_id(
     workflow_id: str,
     workflow: Optional[WorkflowGraph] = None,
     include_node_outputs: bool = Query(False, description="Opt-in to include full raw data of every node"),
+    auto_save: bool = Query(False, description="Automatically save updated graph and execution to DB"),
     db: AsyncSession = Depends(get_db)
 ):
     """
     Execute an existing workflow directly by ID.
-    If an updated workflow graph body is provided, it auto-updates the saved record in the database first.
+    If an updated workflow graph body is provided and auto_save=True, it updates the saved record in the database first.
     If no body is passed, it executes the saved configuration from the database.
     """
     result = await db.execute(select(Workflow).where(Workflow.id == workflow_id))
@@ -910,25 +923,26 @@ async def execute_workflow_by_id(
         )
 
     if workflow is not None:
-        nodes_payload, edges_payload, node_configs = workflow_graph_to_db_payload(workflow)
-        ds_id, ds_name = await resolve_workflow_dataset(
-            db=db,
-            dataset_id=workflow.dataset_id,
-            dataset_name=workflow.dataset_name,
-            nodes=nodes_payload,
-            node_configs=node_configs
-        )
-        if ds_id is not None:
-            wf.dataset_id = ds_id
-        if ds_name is not None:
-            wf.dataset_name = ds_name
-        wf.nodes = nodes_payload
-        wf.edges = edges_payload
-        wf.node_configs = node_configs
-        wf.is_active = True
-        wf.deleted_at = None
-        wf.updated_at = datetime.now(timezone.utc)
-        await db.commit()
+        if auto_save:
+            nodes_payload, edges_payload, node_configs = workflow_graph_to_db_payload(workflow)
+            ds_id, ds_name = await resolve_workflow_dataset(
+                db=db,
+                dataset_id=workflow.dataset_id,
+                dataset_name=workflow.dataset_name,
+                nodes=nodes_payload,
+                node_configs=node_configs
+            )
+            if ds_id is not None:
+                wf.dataset_id = ds_id
+            if ds_name is not None:
+                wf.dataset_name = ds_name
+            wf.nodes = nodes_payload
+            wf.edges = edges_payload
+            wf.node_configs = node_configs
+            wf.is_active = True
+            wf.deleted_at = None
+            wf.updated_at = datetime.now(timezone.utc)
+            await db.commit()
         graph_to_execute = workflow
     else:
         graph_to_execute = db_workflow_to_graph(wf)
@@ -940,46 +954,53 @@ async def execute_workflow_by_id(
         include_node_outputs=include_node_outputs
     )
     exec_result.workflow_id = workflow_id
-    wf.last_execution = jsonable_encoder({
-        "execution_id": exec_result.execution_id,
-        "status": exec_result.status,
-        "total_duration_ms": exec_result.total_duration_ms,
-        "final_metrics": exec_result.final_metrics,
-        "anomaly_summary": exec_result.anomaly_summary,
-        "forecasting_summary": exec_result.forecasting_summary,
-        "governance_summary": exec_result.governance_summary,
-        "node_results": exec_result.node_results,
-        "execution_logs": exec_result.logs,
-        "step_snapshots": exec_result.step_snapshots,
-        "inference_schema": getattr(exec_result, "inference_schema", None),
-    })
-    await db.commit()
 
-    # Record immutable history snapshot
     try:
-        await record_workflow_execution_history(
-            db=db,
-            workflow_id=workflow_id,
-            execution_id=exec_result.execution_id,
-            status_str=exec_result.status,
-            total_duration_ms=exec_result.total_duration_ms or 0.0,
-            nodes=wf.nodes or [],
-            edges=wf.edges or [],
-            node_configs=wf.node_configs or {},
-            metrics=exec_result.final_metrics,
-            reports={
-                "anomaly_summary": exec_result.anomaly_summary,
-                "forecasting_summary": exec_result.forecasting_summary,
-                "governance_summary": exec_result.governance_summary,
-                "node_results": exec_result.node_results,
-                "inference_schema": getattr(exec_result, "inference_schema", None),
-            },
-            step_snapshots=exec_result.step_snapshots,
-            logs=exec_result.logs,
-            run_label=wf.name
-        )
+        job_manager.register_job_result(exec_result.execution_id, exec_result)
     except Exception:
         pass
+
+    if auto_save:
+        wf.last_execution = jsonable_encoder({
+            "execution_id": exec_result.execution_id,
+            "status": exec_result.status,
+            "total_duration_ms": exec_result.total_duration_ms,
+            "final_metrics": exec_result.final_metrics,
+            "anomaly_summary": exec_result.anomaly_summary,
+            "forecasting_summary": exec_result.forecasting_summary,
+            "governance_summary": exec_result.governance_summary,
+            "node_results": exec_result.node_results,
+            "execution_logs": exec_result.logs,
+            "step_snapshots": exec_result.step_snapshots,
+            "inference_schema": getattr(exec_result, "inference_schema", None),
+        })
+        await db.commit()
+
+        # Record immutable history snapshot
+        try:
+            await record_workflow_execution_history(
+                db=db,
+                workflow_id=workflow_id,
+                execution_id=exec_result.execution_id,
+                status_str=exec_result.status,
+                total_duration_ms=exec_result.total_duration_ms or 0.0,
+                nodes=wf.nodes or [],
+                edges=wf.edges or [],
+                node_configs=wf.node_configs or {},
+                metrics=exec_result.final_metrics,
+                reports={
+                    "anomaly_summary": exec_result.anomaly_summary,
+                    "forecasting_summary": exec_result.forecasting_summary,
+                    "governance_summary": exec_result.governance_summary,
+                    "node_results": exec_result.node_results,
+                    "inference_schema": getattr(exec_result, "inference_schema", None),
+                },
+                step_snapshots=exec_result.step_snapshots,
+                logs=exec_result.logs,
+                run_label=wf.name
+            )
+        except Exception:
+            pass
 
     return exec_result
 
