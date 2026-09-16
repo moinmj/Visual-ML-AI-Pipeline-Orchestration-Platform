@@ -206,12 +206,13 @@ async def record_workflow_execution_history(
     max_ver_res = await db.execute(max_ver_stmt)
     current_max = max_ver_res.scalar() or 0
     next_ver = current_max + 1
+    default_label = "Run #1 (Initial Execution)" if next_ver == 1 else f"Run #{next_ver}"
 
     exec_record = WorkflowExecution(
         id=execution_id,
         workflow_id=workflow_id,
         version_number=next_ver,
-        run_label=run_label or f"Run #{next_ver}",
+        run_label=run_label or default_label,
         status=status_str or "SUCCESS",
         total_duration_ms=total_duration_ms or 0.0,
         snapshot_nodes=jsonable_encoder(nodes or []),
@@ -323,6 +324,35 @@ async def save_workflow(
 
     await db.commit()
     await db.refresh(wf)
+
+    # Record immutable history version snapshot when workbook is explicitly saved with execution results
+    if resolved_last_exec and isinstance(resolved_last_exec, dict):
+        try:
+            e_id = resolved_last_exec.get("execution_id") or str(uuid.uuid4())
+            await record_workflow_execution_history(
+                db=db,
+                workflow_id=wf.id,
+                execution_id=e_id,
+                status_str=resolved_last_exec.get("status", "SUCCESS"),
+                total_duration_ms=resolved_last_exec.get("total_duration_ms", 0.0),
+                nodes=wf.nodes or [],
+                edges=wf.edges or [],
+                node_configs=wf.node_configs or {},
+                metrics=resolved_last_exec.get("final_metrics") or resolved_last_exec.get("metrics"),
+                reports={
+                    "anomaly_summary": resolved_last_exec.get("anomaly_summary"),
+                    "forecasting_summary": resolved_last_exec.get("forecasting_summary"),
+                    "governance_summary": resolved_last_exec.get("governance_summary"),
+                    "node_results": resolved_last_exec.get("node_results"),
+                    "inference_schema": resolved_last_exec.get("inference_schema"),
+                },
+                step_snapshots=resolved_last_exec.get("step_snapshots"),
+                logs=resolved_last_exec.get("execution_logs") or resolved_last_exec.get("logs"),
+                run_label=None
+            )
+        except Exception:
+            pass
+
     return wf
 
 
