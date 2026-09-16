@@ -261,8 +261,13 @@ class LLMRecommender:
         ]
         detected_date_col = temporal_cols[0] if temporal_cols else None
 
-        target_col = result.get("target_column")
-        task_type = result.get("task_type", "classification")
+        target_col = result.get("target_column") or target_column
+        task_type = result.get("task_type") or task_type
+
+        # For datasets with a clear date/time column, auto-enforce time_series_forecasting if task is ambiguous or classification
+        if detected_date_col and (not task_type or task_type in ["classification", "auto", "Auto-Detect Task Type", ""]):
+            task_type = "time_series_forecasting"
+            result["task_type"] = task_type
 
         # Filter and validate each node
         valid_nodes = []
@@ -317,6 +322,9 @@ class LLMRecommender:
                 node_cfg["exclude_target"] = True
                 if "method" not in node_cfg:
                     node_cfg["method"] = "standard"
+                if detected_date_col and node_cfg.get("columns"):
+                    if isinstance(node_cfg["columns"], list):
+                        node_cfg["columns"] = [c for c in node_cfg["columns"] if c.lower().strip() != detected_date_col.lower().strip()]
 
             elif r_id == "data_type_converter":
                 if not node_cfg.get("conversions") and detected_date_col:
