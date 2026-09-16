@@ -49,22 +49,18 @@ async def _seed_environment(tenant_id: int):
 
 
 @pytest.mark.asyncio
-async def test_tenant_data_requires_auth_and_scopes_by_tenant(monkeypatch):
+async def test_tenant_data_requires_auth_and_scopes_by_tenant():
     await init_db()
     env_id, model_id, env_name, model_name = await _seed_environment(tenant_id=1)
+    from backend.app.core.security import get_current_user
+    saved_override = app.dependency_overrides.pop(get_current_user, None)
 
     try:
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            # Enforce strict auth mode for unauthenticated request test (clear any dependency_overrides)
-            from backend.app.core.security import get_current_user
-            saved_override = app.dependency_overrides.pop(get_current_user, None)
-            try:
-                resp = await client.get("/api/v1/tenant-data/environments")
-                assert resp.status_code in (401, 403)
-            finally:
-                if saved_override:
-                    app.dependency_overrides[get_current_user] = saved_override
+            # Unauthenticated request -> 401 or 403
+            resp = await client.get("/api/v1/tenant-data/environments")
+            assert resp.status_code in (401, 403)
 
             # Get a dev token for tenant 1
             resp = await client.post(
@@ -110,6 +106,8 @@ async def test_tenant_data_requires_auth_and_scopes_by_tenant(monkeypatch):
             )
             assert resp.status_code == 404
     finally:
+        if saved_override:
+            app.dependency_overrides[get_current_user] = saved_override
         # Clean up seeded environment
         async for db in get_tenant_db():
             env_obj = await db.get(EnvironmentV3, env_id)
