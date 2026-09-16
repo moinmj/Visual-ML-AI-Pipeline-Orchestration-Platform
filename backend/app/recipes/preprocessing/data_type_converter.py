@@ -93,17 +93,29 @@ class DataTypeConverterRecipe(BaseRecipe):
         # Support conversions as dict, JSON string, or list of dicts [{"column": "x", "target_type": "int"}]
         rule_map = {}
         if isinstance(conversions, str):
-            try:
-                import json
-                conversions = json.loads(conversions)
-            except Exception:
+            c_str = conversions.strip()
+            if c_str in ["[object Object]", "object Object", ""]:
                 conversions = {}
+            else:
+                try:
+                    import json
+                    conversions = json.loads(c_str)
+                except Exception:
+                    conversions = {}
         if isinstance(conversions, dict):
-            rule_map = conversions
+            rule_map = dict(conversions)
         elif isinstance(conversions, (list, tuple)):
             for item in conversions:
                 if isinstance(item, dict) and "column" in item and "target_type" in item:
                     rule_map[item["column"]] = item["target_type"]
+
+        # Auto-recovery: If no explicit datetime rule exists in rule_map, detect temporal columns automatically
+        has_datetime_rule = any(str(v).lower() in ["datetime", "date", "timestamp"] for v in rule_map.values())
+        if not has_datetime_rule:
+            for col in df_out.columns:
+                if any(kw in col.lower() for kw in ["date", "time", "timestamp", "ds", "period"]):
+                    if not pd.api.types.is_datetime64_any_dtype(df_out[col]):
+                        rule_map[col] = "datetime"
 
         for col_name, target_type in rule_map.items():
             if col_name not in df_out.columns:

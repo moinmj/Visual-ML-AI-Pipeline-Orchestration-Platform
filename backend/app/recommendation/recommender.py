@@ -65,8 +65,12 @@ class AIRecommender:
         all_temporal_cols = date_cols + [c for c in year_cols if c not in date_cols]
 
         # 1. Determine Target Column
+        primary_metrics = [c for c in df.columns if any(kw in c.lower() for kw in ["weekly_sales", "sales", "revenue", "demand", "price", "amount"])]
         if target_column and target_column in df.columns:
-            selected_target = target_column
+            if target_column.lower() in ["unemployment", "cpi", "fuel_price", "temperature", "store"] and primary_metrics:
+                selected_target = primary_metrics[0]
+            else:
+                selected_target = target_column
         else:
             # Pick logical target using domain-agnostic semantic keywords or statistical variance
             candidates = [c for c in df.columns if c not in date_cols]
