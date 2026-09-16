@@ -6,6 +6,7 @@ import uuid
 import pandas as pd
 from datetime import datetime, timezone, timedelta
 from sqlalchemy import func, or_
+from sqlalchemy.orm import load_only
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
@@ -224,6 +225,24 @@ async def record_workflow_execution_history(
     db.add(exec_record)
     await db.commit()
     await db.refresh(exec_record)
+
+    # Auto-prune older versions if exceeding MAX_SAVED_VERSIONS (keep last 5 runs to prevent DB bloat)
+    try:
+        all_vers_stmt = (
+            select(WorkflowExecution)
+            .where(WorkflowExecution.workflow_id == workflow_id)
+            .order_by(WorkflowExecution.version_number.desc())
+        )
+        all_vers_res = await db.execute(all_vers_stmt)
+        all_vers = all_vers_res.scalars().all()
+        MAX_SAVED_VERSIONS = 5
+        if len(all_vers) > MAX_SAVED_VERSIONS:
+            for old_ver in all_vers[MAX_SAVED_VERSIONS:]:
+                await db.delete(old_ver)
+            await db.commit()
+    except Exception:
+        pass
+
     return exec_record
 
 
@@ -1243,14 +1262,14 @@ async def compare_workflow_executions(
 )
 async def list_workflow_history(
     workflow_id: str,
-    limit: int = Query(50, ge=1, le=200, description="Max history runs to retrieve"),
+    limit: int = Query(20, ge=1, le=100, description="Max history runs to retrieve"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     db: AsyncSession = Depends(get_db)
 ):
     """
     Endpoint 1: Lightweight History Timeline List.
     Retrieves execution history sorted in descending version order.
-    Includes backward-compatibility auto-synthesis if the workflow has an existing last_execution.
+    Defers heavy columns (step_snapshots, reports, logs) to keep Swagger and client responses blazing fast.
     """
     # Verify workflow exists
     wf_res = await db.execute(select(Workflow).where(Workflow.id == workflow_id))
@@ -1263,6 +1282,20 @@ async def list_workflow_history(
 
     stmt = (
         select(WorkflowExecution)
+        .options(
+            load_only(
+                WorkflowExecution.id,
+                WorkflowExecution.workflow_id,
+                WorkflowExecution.version_number,
+                WorkflowExecution.run_label,
+                WorkflowExecution.status,
+                WorkflowExecution.total_duration_ms,
+                WorkflowExecution.metrics,
+                WorkflowExecution.snapshot_nodes,
+                WorkflowExecution.snapshot_edges,
+                WorkflowExecution.created_at,
+            )
+        )
         .where(WorkflowExecution.workflow_id == workflow_id)
         .order_by(WorkflowExecution.version_number.desc())
         .offset(offset)
@@ -1315,6 +1348,67 @@ async def list_workflow_history(
         )
         for ex in executions
     ]
+
+
+@router.delete(
+    "/{workflow_id}/history",
+    dependencies=[Depends(require_role("Tenant Admin", "Data Scientist"))]
+)
+async def prune_workflow_history(
+    workflow_id: str,
+    keep_latest: bool = Query(True, description="If true, keeps the latest execution as version 1; if false, deletes all versions"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Prunes execution history for a workflow to keep Swagger and history API lightweight.
+    When keep_latest=True, retains only the latest active execution as Version 1 and removes older bloated runs.
+    """
+    wf_res = await db.execute(select(Workflow).where(Workflow.id == workflow_id))
+    wf = wf_res.scalar_one_or_none()
+    if not wf:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Workflow workbook '{workflow_id}' not found."
+        )
+
+    stmt = (
+        select(WorkflowExecution)
+        .where(WorkflowExecution.workflow_id == workflow_id)
+        .order_by(WorkflowExecution.version_number.desc(), WorkflowExecution.created_at.desc())
+    )
+    res = await db.execute(stmt)
+    executions = res.scalars().all()
+
+    if not executions:
+        return {"workflow_id": workflow_id, "deleted_count": 0, "message": "No history versions found."}
+
+    if keep_latest:
+        latest = executions[0]
+        latest.version_number = 1
+        latest.run_label = "Run #1"
+        deleted_count = 0
+        for older in executions[1:]:
+            await db.delete(older)
+            deleted_count += 1
+        await db.commit()
+        await db.refresh(latest)
+        return {
+            "workflow_id": workflow_id,
+            "deleted_count": deleted_count,
+            "active_version": 1,
+            "execution_id": latest.id,
+            "message": f"Successfully deleted {deleted_count} older versions. Active version set to Version 1."
+        }
+    else:
+        deleted_count = len(executions)
+        for ex in executions:
+            await db.delete(ex)
+        await db.commit()
+        return {
+            "workflow_id": workflow_id,
+            "deleted_count": deleted_count,
+            "message": f"Successfully deleted all {deleted_count} versions."
+        }
 
 
 @router.get(
