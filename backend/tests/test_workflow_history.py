@@ -166,5 +166,92 @@ async def test_workflow_history_backward_compatibility_auto_synthesis():
         assert len(hist_list) == 1
         assert hist_list[0]["version_number"] == 1
         assert hist_list[0]["metrics"]["accuracy"] == 0.95
-        assert "Initial Execution" in hist_list[0]["run_label"]
+        assert "Run #1" in hist_list[0]["run_label"]
+
+
+@pytest.mark.asyncio
+async def test_workflow_history_unrun_and_failed_runs():
+    """Verify that UNRUN and FAILED runs always return the short, consistent summary format."""
+    await init_db()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test", headers=auth_headers()) as client:
+        # 1. Test UNRUN workflow history
+        unrun_id = f"wf_unrun_{uuid.uuid4().hex[:8]}"
+        create_resp = await client.post("/api/v1/workflows/", json={
+            "id": unrun_id,
+            "name": "Fresh Unrun Workbook",
+            "nodes": [
+                {"id": "n1", "recipe_id": "csv_loader"},
+                {"id": "n2", "recipe_id": "feature_scaler"}
+            ],
+            "edges": [{"source": "n1", "target": "n2"}],
+            "node_configs": {}
+        })
+        assert create_resp.status_code == 201
+
+        hist_unrun = await client.get(f"/api/v1/workflows/{unrun_id}/history")
+        assert hist_unrun.status_code == 200
+        unrun_list = hist_unrun.json()
+        assert len(unrun_list) == 1
+        unrun_item = unrun_list[0]
+        assert unrun_item["workflow_id"] == unrun_id
+        assert unrun_item["version_number"] == 1
+        assert unrun_item["run_label"] == "Run #1"
+        assert unrun_item["status"] == "UNRUN"
+        assert unrun_item["total_duration_ms"] == 0.0
+        assert unrun_item["metrics"] == {}
+        assert unrun_item["nodes_count"] == 2
+        assert unrun_item["edges_count"] == 1
+        assert "created_at" in unrun_item
+
+        # 2. Test FAILED workflow history
+        failed_wf_id = f"wf_failed_{uuid.uuid4().hex[:8]}"
+        fail_exec_id = str(uuid.uuid4())
+        fail_save_resp = await client.post("/api/v1/workflows/", json={
+            "id": failed_wf_id,
+            "name": "Failed Run Workbook",
+            "nodes": [
+                {"id": "n1", "recipe_id": "csv_loader"},
+                {"id": "n2", "recipe_id": "categorical_encoder"},
+                {"id": "n3", "recipe_id": "feature_scaler"}
+            ],
+            "edges": [
+                {"source": "n1", "target": "n2"},
+                {"source": "n2", "target": "n3"}
+            ],
+            "node_configs": {},
+            "last_execution": {
+                "execution_id": fail_exec_id,
+                "status": "FAILED",
+                "total_duration_ms": 215444.79,
+                "final_metrics": {
+                    "method_applied": "one_hot",
+                    "encoded_columns": ["Date"],
+                    "final_column_count": 8,
+                    "trajectory": [{"ds": "2020-01-01", "actual": 100}]  # Bulky data should be stripped
+                },
+                "execution_logs": ["Step 1 succeeded", "Step 2 succeeded", "Step 3 failed"]
+            }
+        })
+        assert fail_save_resp.status_code == 201
+
+        hist_fail = await client.get(f"/api/v1/workflows/{failed_wf_id}/history")
+        assert hist_fail.status_code == 200
+        fail_list = hist_fail.json()
+        assert len(fail_list) == 1
+        fail_item = fail_list[0]
+        assert fail_item["id"] == fail_exec_id
+        assert fail_item["workflow_id"] == failed_wf_id
+        assert fail_item["version_number"] == 1
+        assert fail_item["run_label"] == "Run #1"
+        assert fail_item["status"] == "FAILED"
+        assert fail_item["total_duration_ms"] == 215444.79
+        assert fail_item["nodes_count"] == 3
+        assert fail_item["edges_count"] == 2
+        # Verify compact metrics and bulky trajectory stripped
+        assert fail_item["metrics"]["method_applied"] == "one_hot"
+        assert fail_item["metrics"]["encoded_columns"] == ["Date"]
+        assert fail_item["metrics"]["final_column_count"] == 8
+        assert "trajectory" not in fail_item["metrics"]
+
 

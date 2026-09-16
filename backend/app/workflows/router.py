@@ -176,6 +176,79 @@ async def resolve_or_normalize_last_execution(
     return None
 
 
+BULKY_METRIC_KEYS = {
+    "trajectory",
+    "actual_vs_predicted_time_series",
+    "confusion_matrix",
+    "classification_report",
+    "predictions",
+    "predictions_sample",
+    "probabilities",
+    "residuals",
+    "raw_residuals",
+    "data_drift_report",
+    "step_snapshots",
+    "node_results",
+    "reports",
+    "logs",
+    "execution_logs",
+    "sample_payload",
+    "forecast_df",
+    "dataframe",
+}
+
+
+def normalize_history_status(status_str: Optional[str]) -> str:
+    """Normalizes status strings to standard 'SUCCESS', 'FAILED', or 'UNRUN'."""
+    if not status_str:
+        return "UNRUN"
+    s = str(status_str).strip().upper()
+    if "FAIL" in s or "ERR" in s or "UNSUCCESS" in s:
+        return "FAILED"
+    if "SUCC" in s or "PASS" in s or "DONE" in s:
+        return "SUCCESS"
+    if "UNRUN" in s or "DRAFT" in s or "NEVER" in s:
+        return "UNRUN"
+    return s
+
+
+def sanitize_summary_metrics(metrics: Any) -> Dict[str, Any]:
+    """
+    Sanitizes metrics dictionary for the lightweight history timeline summary.
+    Excludes heavy reports/time-series/matrices and preserves compact scalar and list attributes.
+    Keeps API responses shorter and prevents Swagger UI hanging.
+    """
+    if not isinstance(metrics, dict):
+        return {}
+
+    sanitized: Dict[str, Any] = {}
+    for k, v in metrics.items():
+        if k in BULKY_METRIC_KEYS:
+            continue
+        # Primitive scalars (int, float, bool, str)
+        if isinstance(v, (int, float, bool, str)) or v is None:
+            if isinstance(v, float):
+                sanitized[k] = round(v, 4)
+            else:
+                sanitized[k] = v
+        # Short primitive lists (e.g. encoded_columns: ["Date"], target_classes, feature names)
+        elif isinstance(v, list):
+            if len(v) <= 15 and all(isinstance(x, (int, float, bool, str)) for x in v):
+                sanitized[k] = v
+            elif len(v) > 15 and all(isinstance(x, (int, float, bool, str)) for x in v):
+                # Keep first 15 items to prevent huge payload
+                sanitized[k] = v[:15]
+        # Small flat sub-dictionaries (e.g. { class_0: 0.9, class_1: 0.8 })
+        elif isinstance(v, dict):
+            if len(v) <= 6 and all(isinstance(sub_v, (int, float, bool, str)) for sub_v in v.values()):
+                sanitized[k] = {
+                    sub_k: (round(sub_v, 4) if isinstance(sub_v, float) else sub_v)
+                    for sub_k, sub_v in v.items()
+                }
+
+    return sanitized
+
+
 async def record_workflow_execution_history(
     db: AsyncSession,
     workflow_id: str,
@@ -206,15 +279,15 @@ async def record_workflow_execution_history(
     max_ver_res = await db.execute(max_ver_stmt)
     current_max = max_ver_res.scalar() or 0
     next_ver = current_max + 1
-    default_label = "Run #1 (Initial Execution)" if next_ver == 1 else f"Run #{next_ver}"
+    default_label = f"Run #{next_ver}"
 
     exec_record = WorkflowExecution(
         id=execution_id,
         workflow_id=workflow_id,
         version_number=next_ver,
         run_label=run_label or default_label,
-        status=status_str or "SUCCESS",
-        total_duration_ms=total_duration_ms or 0.0,
+        status=normalize_history_status(status_str or "SUCCESS"),
+        total_duration_ms=round(float(total_duration_ms or 0.0), 2),
         snapshot_nodes=jsonable_encoder(nodes or []),
         snapshot_edges=jsonable_encoder(edges or []),
         snapshot_node_configs=jsonable_encoder(node_configs or {}),
@@ -1335,49 +1408,73 @@ async def list_workflow_history(
     executions = res.scalars().all()
 
     # Backward-compatibility fallback: synthesize Run #1 if none exist but last_execution exists
-    if not executions and wf.last_execution and isinstance(wf.last_execution, dict):
-        last_ex = wf.last_execution
-        synth_rec = WorkflowExecution(
-            id=last_ex.get("execution_id") or str(uuid.uuid4()),
-            workflow_id=workflow_id,
-            version_number=1,
-            run_label="Run #1 (Initial Execution)",
-            status=last_ex.get("status", "SUCCESS"),
-            total_duration_ms=last_ex.get("total_duration_ms", 0.0),
-            snapshot_nodes=jsonable_encoder(wf.nodes or []),
-            snapshot_edges=jsonable_encoder(wf.edges or []),
-            snapshot_node_configs=jsonable_encoder(wf.node_configs or {}),
-            metrics=jsonable_encoder(last_ex.get("final_metrics") or last_ex.get("metrics") or {}),
-            reports=jsonable_encoder({
-                "anomaly_summary": last_ex.get("anomaly_summary"),
-                "forecasting_summary": last_ex.get("forecasting_summary"),
-                "governance_summary": last_ex.get("governance_summary"),
-                "node_results": last_ex.get("node_results"),
-                "inference_schema": last_ex.get("inference_schema"),
-            }),
-            step_snapshots=jsonable_encoder(last_ex.get("step_snapshots") or {}),
-            logs=jsonable_encoder(last_ex.get("execution_logs") or last_ex.get("logs") or []),
-        )
-        db.add(synth_rec)
-        await db.commit()
-        await db.refresh(synth_rec)
-        executions = [synth_rec]
+    if not executions:
+        if wf.last_execution and isinstance(wf.last_execution, dict) and wf.last_execution.get("status") not in ("UNRUN", "unrun", None):
+            last_ex = wf.last_execution
+            norm_status = normalize_history_status(last_ex.get("status"))
+            synth_rec = WorkflowExecution(
+                id=last_ex.get("execution_id") or str(uuid.uuid4()),
+                workflow_id=workflow_id,
+                version_number=1,
+                run_label="Run #1",
+                status=norm_status,
+                total_duration_ms=round(float(last_ex.get("total_duration_ms", 0.0)), 2),
+                snapshot_nodes=jsonable_encoder(wf.nodes or []),
+                snapshot_edges=jsonable_encoder(wf.edges or []),
+                snapshot_node_configs=jsonable_encoder(wf.node_configs or {}),
+                metrics=jsonable_encoder(last_ex.get("final_metrics") or last_ex.get("metrics") or {}),
+                reports=jsonable_encoder({
+                    "anomaly_summary": last_ex.get("anomaly_summary"),
+                    "forecasting_summary": last_ex.get("forecasting_summary"),
+                    "governance_summary": last_ex.get("governance_summary"),
+                    "node_results": last_ex.get("node_results"),
+                    "inference_schema": last_ex.get("inference_schema"),
+                }),
+                step_snapshots=jsonable_encoder(last_ex.get("step_snapshots") or {}),
+                logs=jsonable_encoder(last_ex.get("execution_logs") or last_ex.get("logs") or []),
+            )
+            db.add(synth_rec)
+            await db.commit()
+            await db.refresh(synth_rec)
+            executions = [synth_rec]
+        else:
+            # UNRUN workbook fallback: Always return standard lightweight UNRUN history summary
+            return [
+                WorkflowExecutionSummaryResponse(
+                    id=f"unrun_{wf.id}",
+                    workflow_id=wf.id,
+                    version_number=1,
+                    run_label="Run #1",
+                    status="UNRUN",
+                    total_duration_ms=0.0,
+                    metrics={},
+                    nodes_count=len(wf.nodes or []),
+                    edges_count=len(wf.edges or []),
+                    created_at=wf.created_at or datetime.now(timezone.utc)
+                )
+            ]
 
-    return [
-        WorkflowExecutionSummaryResponse(
-            id=ex.id,
-            workflow_id=ex.workflow_id,
-            version_number=ex.version_number,
-            run_label=ex.run_label,
-            status=ex.status,
-            total_duration_ms=ex.total_duration_ms,
-            metrics=ex.metrics,
-            nodes_count=len(ex.snapshot_nodes or []),
-            edges_count=len(ex.snapshot_edges or []),
-            created_at=ex.created_at
+    response_items: List[WorkflowExecutionSummaryResponse] = []
+    for ex in executions:
+        label = ex.run_label or f"Run #{ex.version_number}"
+        if " (Initial Execution)" in label:
+            label = label.replace(" (Initial Execution)", "")
+
+        response_items.append(
+            WorkflowExecutionSummaryResponse(
+                id=ex.id,
+                workflow_id=ex.workflow_id,
+                version_number=ex.version_number,
+                run_label=label,
+                status=normalize_history_status(ex.status),
+                total_duration_ms=round(float(ex.total_duration_ms or 0.0), 2),
+                metrics=sanitize_summary_metrics(ex.metrics),
+                nodes_count=len(ex.snapshot_nodes or []),
+                edges_count=len(ex.snapshot_edges or []),
+                created_at=ex.created_at
+            )
         )
-        for ex in executions
-    ]
+    return response_items
 
 
 @router.delete(
@@ -1462,6 +1559,26 @@ async def get_workflow_execution_detail(
     res = await db.execute(stmt)
     ex = res.scalar_one_or_none()
     if not ex:
+        if execution_id.startswith("unrun_") or execution_id == "unrun":
+            wf_res = await db.execute(select(Workflow).where(Workflow.id == workflow_id))
+            wf = wf_res.scalar_one_or_none()
+            if wf:
+                return WorkflowExecutionDetailResponse(
+                    id=execution_id,
+                    workflow_id=workflow_id,
+                    version_number=1,
+                    run_label="Run #1",
+                    status="UNRUN",
+                    total_duration_ms=0.0,
+                    snapshot_nodes=wf.nodes or [],
+                    snapshot_edges=wf.edges or [],
+                    snapshot_node_configs=wf.node_configs or {},
+                    metrics={},
+                    reports={},
+                    step_snapshots={},
+                    logs=[],
+                    created_at=wf.created_at or datetime.now(timezone.utc)
+                )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Execution '{execution_id}' not found for workflow '{workflow_id}'."
