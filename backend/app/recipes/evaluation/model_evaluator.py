@@ -353,7 +353,7 @@ class ModelEvaluatorRecipe(BaseRecipe):
                         _parsed = pd.to_datetime(_temporal_snapshot, dayfirst=True, errors="coerce")
                         if _parsed.notna().sum() <= 0.5 * len(_temporal_snapshot):
                             _parsed = pd.to_datetime(_temporal_snapshot, errors="coerce")
-                        if _parsed.notna().sum() > 0.5 * len(_temporal_snapshot):
+                        if _parsed.notna().sum() > 0.5 * len(_temporal_snapshot) and _parsed.dt.year.min() > 1980:
                             formatted_dates = [_fmt_date_val(v) for v in _parsed]
                             time_sort_key = _parsed.values
                         else:
