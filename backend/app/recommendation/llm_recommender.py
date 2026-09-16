@@ -321,6 +321,9 @@ class LLMRecommender:
             elif r_id == "data_type_converter":
                 if not node_cfg.get("conversions") and detected_date_col:
                     node_cfg["conversions"] = {detected_date_col: "datetime"}
+                elif isinstance(node_cfg.get("conversions"), str) and node_cfg["conversions"].strip() in ["[object Object]", "object Object", ""]:
+                    if detected_date_col:
+                        node_cfg["conversions"] = {detected_date_col: "datetime"}
 
             elif r_id in ["train_test_split", "stratified_split", "time_series_split", "walk_forward_split"]:
                 if target_col and not node_cfg.get("target_column"):
@@ -360,6 +363,47 @@ class LLMRecommender:
         for e in edges:
             if isinstance(e, dict) and e.get("source") in valid_node_ids and e.get("target") in valid_node_ids:
                 valid_edges.append(e)
+
+        # AUTO-WIRE GUARANTEE: If edges are empty or incomplete, build complete topological edges connecting all nodes sequentially
+        existing_targets = {e["target"] for e in valid_edges}
+        needs_autowire = len(valid_edges) == 0 or (len(valid_nodes) >= 2 and any(valid_nodes[i]["id"] not in existing_targets for i in range(1, len(valid_nodes))))
+
+        if needs_autowire and len(valid_nodes) >= 2:
+            auto_edges = []
+            split_node_id = None
+            eval_node_id = None
+
+            for i in range(len(valid_nodes) - 1):
+                src_id = valid_nodes[i]["id"]
+                tgt_id = valid_nodes[i+1]["id"]
+                auto_edges.append({
+                    "id": f"e_{src_id}_{tgt_id}",
+                    "source": src_id,
+                    "target": tgt_id,
+                    "animated": True
+                })
+
+                r_src = valid_nodes[i]["recipe_id"]
+                r_tgt = valid_nodes[i+1]["recipe_id"]
+                if "split" in r_src:
+                    split_node_id = src_id
+                if r_tgt == "model_evaluator":
+                    eval_node_id = tgt_id
+
+            if "split" in valid_nodes[-1]["recipe_id"]:
+                split_node_id = valid_nodes[-1]["id"]
+            if valid_nodes[-1]["recipe_id"] == "model_evaluator":
+                eval_node_id = valid_nodes[-1]["id"]
+
+            if split_node_id and eval_node_id and split_node_id != eval_node_id:
+                if not any(e["source"] == split_node_id and e["target"] == eval_node_id for e in auto_edges):
+                    auto_edges.append({
+                        "id": f"e_{split_node_id}_{eval_node_id}",
+                        "source": split_node_id,
+                        "target": eval_node_id,
+                        "animated": True
+                    })
+            valid_edges = auto_edges
 
         dag["nodes"] = valid_nodes
         dag["edges"] = valid_edges
