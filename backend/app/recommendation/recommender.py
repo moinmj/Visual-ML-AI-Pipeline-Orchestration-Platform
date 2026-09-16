@@ -63,15 +63,27 @@ class AIRecommender:
         if target_column and target_column in df.columns:
             selected_target = target_column
         else:
-            # Pick logical target (prefer explicit business metrics: sales, revenue, demand, target, label)
+            # Pick logical target using domain-agnostic semantic keywords or statistical variance
             candidates = [c for c in df.columns if c not in date_cols]
-            priority_keywords = ["weekly_sales", "sales", "revenue", "demand", "target", "label", "churn", "survived", "price"]
+            general_keywords = ["target", "label", "y", "class", "churn", "survived", "sales", "revenue", "demand", "price", "amount", "score", "value"]
             found_target = None
-            for kw in priority_keywords:
+            for kw in general_keywords:
                 matched = [c for c in candidates if kw in c.lower()]
                 if matched:
                     found_target = matched[0]
                     break
+
+            if not found_target and candidates:
+                # Statistical dynamic fallback: pick candidate numeric feature with highest variance (excluding static ID columns)
+                num_candidates = [c for c in candidates if pd.api.types.is_numeric_dtype(df[c]) and df[c].nunique() > 1]
+                if num_candidates:
+                    # Filter out likely ID columns (sequential ints with unique count == row count)
+                    non_id = [c for c in num_candidates if not (df[c].nunique() == len(df) and "id" in c.lower())]
+                    if non_id:
+                        variances = {c: float(df[c].var()) for c in non_id if not pd.isna(df[c].var())}
+                        if variances:
+                            found_target = max(variances, key=variances.get)
+
             selected_target = found_target or (candidates[-1] if candidates else list(df.columns)[-1])
 
         # 2. Determine / Infer Task Type
