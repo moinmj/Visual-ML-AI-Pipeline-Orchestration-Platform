@@ -412,17 +412,13 @@ class ModelEvaluatorRecipe(BaseRecipe):
                 elif candidates:
                     time_col = candidates[0]
                     t_vals = X_test[time_col]
-                    try:
-                        parsed_dt = pd.to_datetime(t_vals, errors="coerce")
-                        if parsed_dt.notna().sum() > len(parsed_dt) * 0.5:
-                            formatted_dates = [_fmt_date_val(v) for v in parsed_dt]
-                            time_sort_key = parsed_dt.values
-                        else:
-                            formatted_dates = [str(v) for v in t_vals.values]
-                            time_sort_key = pd.to_numeric(t_vals, errors="coerce").fillna(0).values
-                    except Exception:
+                    _is_v, _parsed_dt = _is_valid_calendar_datetime_series(t_vals)
+                    if _is_v and _parsed_dt is not None:
+                        formatted_dates = [_fmt_date_val(v) for v in _parsed_dt]
+                        time_sort_key = _parsed_dt.values
+                    else:
                         formatted_dates = [str(v) for v in t_vals.values]
-                        time_sort_key = list(range(len(t_vals)))
+                        time_sort_key = pd.to_numeric(t_vals, errors="coerce").fillna(0).values
                 elif isinstance(X_test.index, pd.DatetimeIndex):
                     time_col = "__index__"
                     formatted_dates = [_fmt_date_val(v) for v in X_test.index]
