@@ -410,16 +410,15 @@ class ModelEvaluatorRecipe(BaseRecipe):
                             formatted_dates = [f"{y}-{m:02d}" for y, m in zip(y_s, m_s)]
                             time_sort_key = [y * 100 + m for y, m in zip(y_s, m_s)]
                 elif candidates:
-                    time_col = candidates[0]
-                    t_vals = X_test[time_col]
-                    _is_v, _parsed_dt = _is_valid_calendar_datetime_series(t_vals)
-                    if _is_v and _parsed_dt is not None:
-                        formatted_dates = [_fmt_date_val(v) for v in _parsed_dt]
-                        time_sort_key = _parsed_dt.values
-                    else:
-                        formatted_dates = [str(v) for v in t_vals.values]
-                        time_sort_key = pd.to_numeric(t_vals, errors="coerce").fillna(0).values
-                elif isinstance(X_test.index, pd.DatetimeIndex):
+                    for cand in candidates:
+                        t_vals = X_test[cand]
+                        _is_v, _parsed_dt = _is_valid_calendar_datetime_series(t_vals)
+                        if _is_v and _parsed_dt is not None:
+                            time_col = cand
+                            formatted_dates = [_fmt_date_val(v) for v in _parsed_dt]
+                            time_sort_key = _parsed_dt.values
+                            break
+                if formatted_dates is None and isinstance(X_test.index, pd.DatetimeIndex):
                     time_col = "__index__"
                     formatted_dates = [_fmt_date_val(v) for v in X_test.index]
                     time_sort_key = X_test.index.values

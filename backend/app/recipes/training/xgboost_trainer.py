@@ -110,7 +110,7 @@ class XGBoostTrainerRecipe(BaseRecipe):
         if not XGBOOST_AVAILABLE:
             raise ValueError("XGBoost is not installed in the environment. Please run 'pip install xgboost' or choose Random Forest / Logistic Regression.")
 
-        from backend.app.recipes.training.encoder_utils import safe_prepare_training_data, extract_train_test_data
+        from backend.app.recipes.training.encoder_utils import safe_prepare_training_data, extract_train_test_data, pass_through_metadata
         X_train, y_train, X_test, y_test = extract_train_test_data(inputs)
 
         if X_train is None or y_train is None:
@@ -208,7 +208,7 @@ class XGBoostTrainerRecipe(BaseRecipe):
         if y_test is not None:
             output["y_test"] = y_test
 
-        return output
+        return pass_through_metadata(inputs, output, context)
 
     def to_code(self, config: Dict[str, Any]) -> str:
         n_est = config.get("n_estimators", 100)
