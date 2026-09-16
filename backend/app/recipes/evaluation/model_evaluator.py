@@ -47,9 +47,9 @@ def _is_valid_calendar_datetime_series(series: Optional[pd.Series]) -> Tuple[boo
 
         valid_count = parsed.notna().sum()
         if valid_count > 0.5 * len(s_str):
-            # Production Guard: Detect degenerate Epoch artifacts where all rows format to a single constant string "1970-01-01"
+            # Production Guard: Detect degenerate conversions where distinct input features collapse to 1 constant date
             formatted_dates = parsed.dt.strftime("%Y-%m-%d").dropna()
-            if len(s_str) > 1 and formatted_dates.nunique() == 1 and formatted_dates.iloc[0] == "1970-01-01":
+            if len(s_str) > 1 and s_str.nunique() > 1 and formatted_dates.nunique() == 1:
                 return False, None
             return True, parsed
     except Exception:
