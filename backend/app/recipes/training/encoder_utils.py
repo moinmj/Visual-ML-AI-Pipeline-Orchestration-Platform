@@ -18,23 +18,32 @@ def safe_prepare_training_data(
     non_numeric = [c for c in X_tr.columns if not pd.api.types.is_numeric_dtype(X_tr[c])]
     
     for col in non_numeric:
-        # Check if date
+        is_date_col_name = any(kw in col.lower() for kw in ["date", "time", "year", "period", "timestamp", "ds", "month"])
+        # Check if date by name or content
         try:
-            dt_s = pd.to_datetime(X_tr[col], errors="coerce")
-            if dt_s.notna().sum() > 0.5 * len(X_tr):
-                X_tr[f"{col}_year"] = dt_s.dt.year.fillna(0).astype(int)
-                X_tr[f"{col}_month"] = dt_s.dt.month.fillna(0).astype(int)
-                X_tr[f"{col}_day"] = dt_s.dt.day.fillna(0).astype(int)
+            dt_s = pd.to_datetime(X_tr[col], errors="coerce", format="mixed")
+            if dt_s.notna().sum() > 0.3 * len(X_tr) or is_date_col_name:
+                dt_s_valid = dt_s.fillna(pd.Timestamp("2020-01-01"))
+                X_tr[f"{col}_year"] = dt_s_valid.dt.year.astype(int)
+                X_tr[f"{col}_month"] = dt_s_valid.dt.month.astype(int)
+                X_tr[f"{col}_day"] = dt_s_valid.dt.day.astype(int)
+                X_tr[f"{col}_dayofweek"] = dt_s_valid.dt.dayofweek.astype(int)
                 X_tr = X_tr.drop(columns=[col])
+
                 if X_te is not None and col in X_te.columns:
-                    dt_te = pd.to_datetime(X_te[col], errors="coerce")
-                    X_te[f"{col}_year"] = dt_te.dt.year.fillna(0).astype(int)
-                    X_te[f"{col}_month"] = dt_te.dt.month.fillna(0).astype(int)
-                    X_te[f"{col}_day"] = dt_te.dt.day.fillna(0).astype(int)
+                    dt_te = pd.to_datetime(X_te[col], errors="coerce", format="mixed").fillna(pd.Timestamp("2020-01-01"))
+                    X_te[f"{col}_year"] = dt_te.dt.year.astype(int)
+                    X_te[f"{col}_month"] = dt_te.dt.month.astype(int)
+                    X_te[f"{col}_day"] = dt_te.dt.day.astype(int)
+                    X_te[f"{col}_dayofweek"] = dt_te.dt.dayofweek.astype(int)
                     X_te = X_te.drop(columns=[col])
                 continue
         except Exception:
-            pass
+            if is_date_col_name:
+                X_tr = X_tr.drop(columns=[col])
+                if X_te is not None and col in X_te.columns:
+                    X_te = X_te.drop(columns=[col])
+                continue
 
         nunique = X_tr[col].nunique()
         if nunique <= 30 and nunique < (len(X_tr) * 0.3):
