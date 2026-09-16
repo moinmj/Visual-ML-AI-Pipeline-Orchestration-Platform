@@ -56,13 +56,15 @@ async def test_tenant_data_requires_auth_and_scopes_by_tenant(monkeypatch):
     try:
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            # Enforce strict auth mode for unauthenticated request test
-            monkeypatch.setattr("backend.app.core.security.settings.ENVIRONMENT", "production")
-            monkeypatch.setattr("backend.app.core.security.settings.DEBUG", False)
-            resp = await client.get("/api/v1/tenant-data/environments")
-            assert resp.status_code in (401, 403)
-            monkeypatch.setattr("backend.app.core.security.settings.ENVIRONMENT", "development")
-            monkeypatch.setattr("backend.app.core.security.settings.DEBUG", True)
+            # Enforce strict auth mode for unauthenticated request test (clear any dependency_overrides)
+            from backend.app.core.security import get_current_user
+            saved_override = app.dependency_overrides.pop(get_current_user, None)
+            try:
+                resp = await client.get("/api/v1/tenant-data/environments")
+                assert resp.status_code in (401, 403)
+            finally:
+                if saved_override:
+                    app.dependency_overrides[get_current_user] = saved_override
 
             # Get a dev token for tenant 1
             resp = await client.post(
