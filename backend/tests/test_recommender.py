@@ -71,6 +71,7 @@ async def test_llm_recommender_synthesis():
     assert "recommended_dag" in res
     assert len(res["recommended_dag"]["nodes"]) >= 3
     assert "explanation" in res
+    assert res.get("llm_generated") is True
     for n in res["recommended_dag"]["nodes"]:
         assert recipe_registry.has(n["recipe_id"]), f"Recipe {n['recipe_id']} not found in registry"
 

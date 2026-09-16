@@ -159,7 +159,7 @@ class LLMRecommender:
         elif groq_key:
             endpoint = "https://api.groq.com/openai/v1/chat/completions"
             api_key = groq_key
-            models_to_try = [m for m in [settings.GROQ_MODEL, "llama-3.3-70b-versatile", "llama-3.1-8b-instant"] if m]
+            models_to_try = [m for m in [settings.GROQ_MODEL, "openai/gpt-oss-20b", "openai/gpt-oss-120b", "groq/compound", "qwen/qwen3.8-27b"] if m]
         else:
             logger.info("No LLM API Key (GROQ, GEMINI, or OPENAI) configured. Falling back to heuristic AIRecommender.")
             return AIRecommender._heuristic_recommend_pipeline(df, target_column=target_column, task_type=task_type)
@@ -194,7 +194,7 @@ class LLMRecommender:
             models_to_try = list(dict.fromkeys(models_to_try))
 
             response = None
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=30.0) as client:
                 for model_id in models_to_try:
                     if not model_id:
                         continue
@@ -217,6 +217,8 @@ class LLMRecommender:
                         elif response.status_code == 429:
                             import asyncio as a_io
                             await a_io.sleep(1.0)
+                        else:
+                            logger.warning(f"LLM model {model_id} returned status {response.status_code}: {response.text[:200]}")
                     except Exception as e:
                         logger.warning(f"LLM model {model_id} via {endpoint} failed: {str(e)}")
 
@@ -233,7 +235,7 @@ class LLMRecommender:
 
         except Exception as e:
             logger.error(f"Error during LLM pipeline recommendation: {str(e)}. Falling back to heuristic recommender.", exc_info=True)
-            return AIRecommender.recommend_pipeline(df, target_column=target_column, task_type=task_type)
+            return AIRecommender._heuristic_recommend_pipeline(df, target_column=target_column, task_type=task_type)
 
     @classmethod
     def _validate_and_enrich_dag(cls, result: Dict[str, Any], df: pd.DataFrame) -> Dict[str, Any]:
@@ -245,11 +247,24 @@ class LLMRecommender:
         nodes = dag.get("nodes", [])
         edges = dag.get("edges", [])
 
-        # Validate each recipe_id against the registry
+        # Infer temporal column from DataFrame if available
+        temporal_cols = [
+            c for c in df.columns
+            if any(kw in c.lower() for kw in ["date", "time", "year", "ds", "period", "month", "week"])
+        ]
+        detected_date_col = temporal_cols[0] if temporal_cols else None
+
+        target_col = result.get("target_column")
+        task_type = result.get("task_type", "classification")
+
+        # Filter and validate each node
         valid_nodes = []
         node_configs = {}
 
         for n in nodes:
+            if not isinstance(n, dict):
+                continue
+
             r_id = n.get("recipe_id", "")
             # If alias or known typo, resolve it
             if r_id in ["classification_evaluator", "regression_evaluator"]:
@@ -287,13 +302,42 @@ class LLMRecommender:
                 n["position"] = {"x": 40 + len(valid_nodes) * 240, "y": 100}
 
             node_cfg = dict(n.get("config", {}))
-            target_col = result.get("target_column")
-            if r_id == "feature_scaler" and target_col:
-                node_cfg["target_column"] = target_col
-                node_cfg["exclude_target"] = True
-            elif r_id in ["train_test_split", "stratified_split", "time_series_split", "walk_forward_split"] and target_col:
-                if not node_cfg.get("target_column"):
+
+            # Enrich specific recipe node configs with dataset context
+            if r_id == "feature_scaler":
+                if target_col:
                     node_cfg["target_column"] = target_col
+                node_cfg["exclude_target"] = True
+                if "method" not in node_cfg:
+                    node_cfg["method"] = "standard"
+
+            elif r_id == "data_type_converter":
+                if not node_cfg.get("conversions") and detected_date_col:
+                    node_cfg["conversions"] = {detected_date_col: "datetime"}
+
+            elif r_id in ["train_test_split", "stratified_split", "time_series_split", "walk_forward_split"]:
+                if target_col and not node_cfg.get("target_column"):
+                    node_cfg["target_column"] = target_col
+                if r_id == "time_series_split" and detected_date_col and not node_cfg.get("date_column"):
+                    node_cfg["date_column"] = detected_date_col
+                if "test_size" not in node_cfg:
+                    node_cfg["test_size"] = 0.2
+
+            elif r_id in ["prophet_forecaster", "arima_forecaster"]:
+                if target_col and not node_cfg.get("target_column"):
+                    node_cfg["target_column"] = target_col
+                if detected_date_col and not node_cfg.get("date_column"):
+                    node_cfg["date_column"] = detected_date_col
+                if "horizon_periods" not in node_cfg:
+                    node_cfg["horizon_periods"] = 30
+
+            elif r_id in ["xgboost_trainer", "lightgbm_trainer", "catboost_trainer", "random_forest_trainer"]:
+                if "task_type" not in node_cfg:
+                    node_cfg["task_type"] = task_type if task_type in ["classification", "regression"] else "regression"
+
+            elif r_id == "model_evaluator":
+                if "report_type" not in node_cfg:
+                    node_cfg["report_type"] = "Comprehensive"
 
             n["config"] = node_cfg
             valid_nodes.append(n)
@@ -303,13 +347,20 @@ class LLMRecommender:
                 "config": node_cfg
             }
 
+        # Filter edges to only include valid node connections
+        valid_node_ids = {n["id"] for n in valid_nodes}
+        valid_edges = []
+        for e in edges:
+            if isinstance(e, dict) and e.get("source") in valid_node_ids and e.get("target") in valid_node_ids:
+                valid_edges.append(e)
+
         dag["nodes"] = valid_nodes
-        dag["edges"] = edges
+        dag["edges"] = valid_edges
         dag["node_configs"] = node_configs
 
         return {
-            "task_type": result.get("task_type", "classification"),
-            "target_column": result.get("target_column"),
+            "task_type": task_type,
+            "target_column": target_col,
             "explanation": result.get("explanation", "Custom AI-architected pipeline generated by Groq LLM."),
             "preprocessing_recommendations": result.get("preprocessing_recommendations", []),
             "model_rankings": result.get("model_rankings", []),
