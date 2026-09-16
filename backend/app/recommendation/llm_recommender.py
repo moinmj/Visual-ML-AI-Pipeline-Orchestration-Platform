@@ -286,11 +286,21 @@ class LLMRecommender:
             if "position" not in n:
                 n["position"] = {"x": 40 + len(valid_nodes) * 240, "y": 100}
 
+            node_cfg = dict(n.get("config", {}))
+            target_col = result.get("target_column")
+            if r_id == "feature_scaler" and target_col:
+                node_cfg["target_column"] = target_col
+                node_cfg["exclude_target"] = True
+            elif r_id in ["train_test_split", "stratified_split", "time_series_split", "walk_forward_split"] and target_col:
+                if not node_cfg.get("target_column"):
+                    node_cfg["target_column"] = target_col
+
+            n["config"] = node_cfg
             valid_nodes.append(n)
             node_configs[node_id] = {
                 "recipe_id": r_id,
                 "label": n.get("label", r_id),
-                "config": n.get("config", {})
+                "config": node_cfg
             }
 
         dag["nodes"] = valid_nodes

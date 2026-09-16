@@ -70,25 +70,39 @@ class FeatureScalerRecipe(BaseRecipe):
         else:
             target_cols = []
 
+        date_kws = ["date", "year", "ds", "timestamp", "time", "month", "period"]
+        domain_target_kws = ["target", "churn", "survived", "label", "class", "y", "sales", "weekly_sales", "revenue", "demand", "price", "amount", "score", "value", "unemployment"]
+
         if not target_cols:
             # Auto-detect numeric columns
             numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
 
+            # Always exclude date/year/time columns from z-score scaling
+            numeric_cols = [
+                c for c in numeric_cols
+                if not any(_kw == c.lower().strip() or c.lower().strip().startswith(_kw + "_") or c.lower().strip().endswith("_" + _kw) for _kw in date_kws)
+            ]
+
             if exclude_target:
-                # Identify candidate targets to exclude
                 filtered_cols = []
                 for c in numeric_cols:
-                    if target_var and c == target_var:
+                    if target_var and c.lower().strip() == target_var.lower().strip():
                         continue
-                    is_candidate_target = (df[c].nunique() <= 2) or (c.lower() in ["target", "churn", "survived", "label", "class", "y"])
+                    is_candidate_target = (df[c].nunique() <= 2) or any(_kw in c.lower() for _kw in domain_target_kws)
                     if not is_candidate_target:
                         filtered_cols.append(c)
-                target_cols = filtered_cols if filtered_cols else [c for c in numeric_cols if c != target_var]
+                target_cols = filtered_cols if filtered_cols else [c for c in numeric_cols if not (target_var and c.lower().strip() == target_var.lower().strip())]
             else:
                 target_cols = numeric_cols
 
-        if target_var and exclude_target and target_var in target_cols:
-            target_cols = [c for c in target_cols if c != target_var]
+        # Final safety filter: remove target_var and date columns from target_cols
+        if target_var and exclude_target:
+            target_cols = [c for c in target_cols if c.lower().strip() != target_var.lower().strip()]
+        
+        target_cols = [
+            c for c in target_cols
+            if not any(_kw == c.lower().strip() or c.lower().strip().startswith(_kw + "_") or c.lower().strip().endswith("_" + _kw) for _kw in date_kws)
+        ]
 
         if not target_cols:
             return {"dataframe": df}

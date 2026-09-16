@@ -90,8 +90,14 @@ class DataTypeConverterRecipe(BaseRecipe):
         dt_format = config.get("datetime_format", "") or None
         errors = config.get("errors", "coerce")
 
-        # Support conversions as dict or list of dicts [{"column": "x", "target_type": "int"}]
+        # Support conversions as dict, JSON string, or list of dicts [{"column": "x", "target_type": "int"}]
         rule_map = {}
+        if isinstance(conversions, str):
+            try:
+                import json
+                conversions = json.loads(conversions)
+            except Exception:
+                conversions = {}
         if isinstance(conversions, dict):
             rule_map = conversions
         elif isinstance(conversions, (list, tuple)):
