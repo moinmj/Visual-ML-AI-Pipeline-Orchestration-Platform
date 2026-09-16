@@ -255,3 +255,114 @@ async def test_workflow_history_unrun_and_failed_runs():
         assert "trajectory" not in fail_item["metrics"]
 
 
+@pytest.mark.asyncio
+async def test_workflow_history_re_run_and_save_creates_version_2():
+    """Verify that making changes, executing in memory, and saving via PUT or POST generates Run #2."""
+    await init_db()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test", headers=auth_headers()) as client:
+        # 1. Upload dataset
+        csv_bytes = b"f1,f2,target\n1.0,2.0,10\n2.0,4.0,20\n3.0,6.0,30\n4.0,8.0,40\n5.0,10.0,50\n"
+        files = {"file": ("re_run_test.csv", csv_bytes, "text/csv")}
+        up_resp = await client.post("/api/v1/datasets/upload", files=files, data={"name": "Re-run Test Dataset"})
+        assert up_resp.status_code == 201
+        dataset_id = up_resp.json()["id"]
+
+        wf_id = f"wf_rerun_{uuid.uuid4().hex[:8]}"
+
+        # 2. Initial Run (Run 1) executed in memory
+        dag_v1 = {
+            "name": "Pipeline V1",
+            "dataset_id": dataset_id,
+            "nodes": [
+                {"id": "n_csv", "recipe_id": "csv_loader", "config": {"dataset_id": dataset_id}},
+                {"id": "n_split", "recipe_id": "train_test_split", "config": {"target_column": "target", "test_size": 0.4, "random_state": 42}},
+                {"id": "n_model", "recipe_id": "random_forest_trainer", "config": {"target_column": "target", "n_estimators": 5}},
+                {"id": "n_eval", "recipe_id": "model_evaluator", "config": {}}
+            ],
+            "edges": [
+                {"source": "n_csv", "target": "n_split"},
+                {"source": "n_split", "target": "n_model"},
+                {"source": "n_split", "target": "n_eval"},
+                {"source": "n_model", "target": "n_eval"}
+            ]
+        }
+
+        exec1_resp = await client.post(f"/api/v1/workflows/execute?workflow_id={wf_id}", json=dag_v1)
+        assert exec1_resp.status_code == 200
+        exec1_data = exec1_resp.json()
+        exec1_id = exec1_data["execution_id"]
+
+        # Save workbook (version 1)
+        save1_resp = await client.post("/api/v1/workflows/", json={
+            "id": wf_id,
+            "name": "Pipeline V1",
+            "dataset_id": dataset_id,
+            "nodes": dag_v1["nodes"],
+            "edges": dag_v1["edges"],
+            "node_configs": {},
+            "last_execution": exec1_data
+        })
+        assert save1_resp.status_code == 201
+
+        # Verify history has Version 1
+        hist1 = (await client.get(f"/api/v1/workflows/{wf_id}/history")).json()
+        assert len(hist1) == 1
+        assert hist1[0]["version_number"] == 1
+        assert hist1[0]["id"] == exec1_id
+        assert hist1[0]["run_label"] == "Run #1"
+
+        # 3. User makes changes in canvas, runs again in memory (Run 2)
+        dag_v2 = {
+            "name": "Pipeline V2 Updated",
+            "dataset_id": dataset_id,
+            "nodes": [
+                {"id": "n_csv", "recipe_id": "csv_loader", "config": {"dataset_id": dataset_id}},
+                {"id": "n_scaler", "recipe_id": "feature_scaler", "config": {"method": "standard"}},
+                {"id": "n_split", "recipe_id": "train_test_split", "config": {"target_column": "target", "test_size": 0.33, "random_state": 42}},
+                {"id": "n_model", "recipe_id": "random_forest_trainer", "config": {"target_column": "target", "n_estimators": 15}},
+                {"id": "n_eval", "recipe_id": "model_evaluator", "config": {}}
+            ],
+            "edges": [
+                {"source": "n_csv", "target": "n_scaler"},
+                {"source": "n_scaler", "target": "n_split"},
+                {"source": "n_split", "target": "n_model"},
+                {"source": "n_split", "target": "n_eval"},
+                {"source": "n_model", "target": "n_eval"}
+            ]
+        }
+
+        exec2_resp = await client.post(f"/api/v1/workflows/execute?workflow_id={wf_id}", json=dag_v2)
+        assert exec2_resp.status_code == 200
+        exec2_data = exec2_resp.json()
+        exec2_id = exec2_data["execution_id"]
+        assert exec2_id != exec1_id
+
+        # User clicks "Save Workbook" on existing workbook via PUT (standard update)
+        put_resp = await client.put(f"/api/v1/workflows/{wf_id}", json={
+            "id": wf_id,
+            "name": "Pipeline V2 Updated",
+            "dataset_id": dataset_id,
+            "nodes": dag_v2["nodes"],
+            "edges": dag_v2["edges"],
+            "node_configs": {}
+        })
+        assert put_resp.status_code == 200
+
+        # 4. Check history: MUST HAVE VERSION 2 AND VERSION 1!
+        hist2_resp = await client.get(f"/api/v1/workflows/{wf_id}/history")
+        assert hist2_resp.status_code == 200
+        hist2 = hist2_resp.json()
+        assert len(hist2) == 2, f"Expected 2 versions in history, got {len(hist2)}: {hist2}"
+        assert hist2[0]["version_number"] == 2
+        assert hist2[0]["id"] == exec2_id
+        assert hist2[0]["run_label"] == "Run #2"
+        assert hist2[0]["nodes_count"] == 5
+
+        assert hist2[1]["version_number"] == 1
+        assert hist2[1]["id"] == exec1_id
+        assert hist2[1]["run_label"] == "Run #1"
+        assert hist2[1]["nodes_count"] == 4
+
+
+

@@ -87,16 +87,20 @@ async def resolve_or_normalize_last_execution(
     last_execution: Optional[Dict[str, Any]] = None,
     execution_id: Optional[str] = None,
     existing_wf: Optional[Workflow] = None,
-    dataset_id: Optional[str] = None
+    dataset_id: Optional[str] = None,
+    workflow_id: Optional[str] = None
 ) -> Optional[Dict[str, Any]]:
     """
     Resolves, normalizes, and protects last_execution diagnostics and reports:
     1. If a valid, non-empty last_execution dictionary is supplied, normalizes logs and returns it JSON-safe.
     2. If execution_id is provided, searches DB workflows and job_manager for the matching execution report.
-    3. If updating an existing workflow and no new execution is provided, preserves the existing last_execution.
-    4. Auto-adoption fallback: If user executed an unsaved canvas workflow and then clicked Save Workflow,
+    3. If no execution payload was supplied, checks if a newer in-memory execution exists in job_manager for this workflow.
+    4. If updating an existing workflow and no newer execution is found, preserves the existing last_execution.
+    5. Auto-adoption fallback: If user executed an unsaved canvas workflow and then clicked Save Workflow,
        locates the recent auto-saved execution run and adopts its reports.
     """
+    wf_target_id = workflow_id or (existing_wf.id if existing_wf else None)
+
     # 1. Normalize provided dictionary if it contains execution content
     if last_execution and isinstance(last_execution, dict):
         has_content = any(k in last_execution for k in [
@@ -144,11 +148,37 @@ async def resolve_or_normalize_last_execution(
             if isinstance(cand_exec, dict) and cand_exec.get("execution_id") == target_exec_id:
                 return jsonable_encoder(cand_exec)
 
-    # 3. If updating an existing workflow, preserve existing last_execution
+    # 3. Check if a newer in-memory execution exists for this workflow in job_manager
+    if wf_target_id:
+        recent_job = job_manager.get_latest_execution_for_workflow(wf_target_id)
+        if recent_job and (recent_job.get("results") or recent_job.get("result")):
+            existing_exec_id = None
+            if existing_wf and isinstance(existing_wf.last_execution, dict):
+                existing_exec_id = existing_wf.last_execution.get("execution_id")
+
+            if not existing_exec_id or recent_job.get("job_id") != existing_exec_id:
+                res = recent_job.get("results") or recent_job.get("result")
+                norm_job = {
+                    "execution_id": recent_job.get("job_id"),
+                    "status": recent_job.get("status", "SUCCESS"),
+                    "total_duration_ms": recent_job.get("duration_ms", 0.0),
+                    "final_metrics": res.get("final_metrics") if isinstance(res, dict) else getattr(res, "final_metrics", None),
+                    "node_results": res.get("node_results") if isinstance(res, dict) else getattr(res, "node_results", []),
+                    "execution_logs": recent_job.get("logs", []),
+                    "logs": recent_job.get("logs", []),
+                    "step_snapshots": res.get("step_snapshots", {}) if isinstance(res, dict) else getattr(res, "step_snapshots", {}),
+                    "anomaly_summary": res.get("anomaly_summary") if isinstance(res, dict) else getattr(res, "anomaly_summary", None),
+                    "forecasting_summary": res.get("forecasting_summary") if isinstance(res, dict) else getattr(res, "forecasting_summary", None),
+                    "governance_summary": res.get("governance_summary") if isinstance(res, dict) else getattr(res, "governance_summary", None),
+                    "inference_schema": res.get("inference_schema") if isinstance(res, dict) else getattr(res, "inference_schema", None),
+                }
+                return jsonable_encoder(norm_job)
+
+    # 4. If updating an existing workflow, preserve existing last_execution
     if existing_wf and existing_wf.last_execution:
         return existing_wf.last_execution
 
-    # 4. Auto-adoption: Find recent auto-saved execution run (within last 30 minutes)
+    # 5. Auto-adoption: Find recent auto-saved execution run (within last 30 minutes)
     try:
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=30)
         auto_q = select(Workflow).where(
@@ -278,6 +308,44 @@ async def record_workflow_execution_history(
     max_ver_stmt = select(func.max(WorkflowExecution.version_number)).where(WorkflowExecution.workflow_id == workflow_id)
     max_ver_res = await db.execute(max_ver_stmt)
     current_max = max_ver_res.scalar() or 0
+
+    # If no executions recorded yet, but workflow already had an earlier last_execution,
+    # preserve that prior run as Version 1 so it isn't overwritten by the new run
+    if current_max == 0:
+        wf_chk = await db.execute(select(Workflow).where(Workflow.id == workflow_id))
+        existing_wf_rec = wf_chk.scalar_one_or_none()
+        if (
+            existing_wf_rec
+            and isinstance(existing_wf_rec.last_execution, dict)
+            and existing_wf_rec.last_execution.get("execution_id")
+            and existing_wf_rec.last_execution.get("execution_id") != execution_id
+        ):
+            prior_ex = existing_wf_rec.last_execution
+            prior_rec = WorkflowExecution(
+                id=prior_ex.get("execution_id"),
+                workflow_id=workflow_id,
+                version_number=1,
+                run_label="Run #1",
+                status=normalize_history_status(prior_ex.get("status") or "SUCCESS"),
+                total_duration_ms=round(float(prior_ex.get("total_duration_ms") or 0.0), 2),
+                snapshot_nodes=jsonable_encoder(existing_wf_rec.nodes or []),
+                snapshot_edges=jsonable_encoder(existing_wf_rec.edges or []),
+                snapshot_node_configs=jsonable_encoder(existing_wf_rec.node_configs or {}),
+                metrics=jsonable_encoder(prior_ex.get("final_metrics") or prior_ex.get("metrics") or {}),
+                reports=jsonable_encoder({
+                    "anomaly_summary": prior_ex.get("anomaly_summary"),
+                    "forecasting_summary": prior_ex.get("forecasting_summary"),
+                    "governance_summary": prior_ex.get("governance_summary"),
+                    "node_results": prior_ex.get("node_results"),
+                    "inference_schema": prior_ex.get("inference_schema"),
+                }),
+                step_snapshots=jsonable_encoder(prior_ex.get("step_snapshots") or {}),
+                logs=jsonable_encoder(prior_ex.get("execution_logs") or prior_ex.get("logs") or [])
+            )
+            db.add(prior_rec)
+            await db.commit()
+            current_max = 1
+
     next_ver = current_max + 1
     default_label = f"Run #{next_ver}"
 
@@ -355,7 +423,8 @@ async def save_workflow(
         last_execution=payload.last_execution,
         execution_id=payload.execution_id,
         existing_wf=wf,
-        dataset_id=ds_id
+        dataset_id=ds_id,
+        workflow_id=target_id
     )
 
     if wf:
@@ -426,6 +495,7 @@ async def save_workflow(
         except Exception:
             pass
 
+    await db.refresh(wf)
     return wf
 
 
@@ -627,7 +697,8 @@ async def upsert_workflow(
         last_execution=payload.last_execution,
         execution_id=payload.execution_id,
         existing_wf=wf,
-        dataset_id=ds_id
+        dataset_id=ds_id,
+        workflow_id=target_id
     )
 
     if wf:
@@ -668,6 +739,36 @@ async def upsert_workflow(
         db.add(wf)
 
     await db.commit()
+    await db.refresh(wf)
+
+    # Record immutable history version snapshot when workbook is saved with execution results
+    if resolved_last_exec and isinstance(resolved_last_exec, dict):
+        try:
+            e_id = resolved_last_exec.get("execution_id") or str(uuid.uuid4())
+            await record_workflow_execution_history(
+                db=db,
+                workflow_id=wf.id,
+                execution_id=e_id,
+                status_str=resolved_last_exec.get("status", "SUCCESS"),
+                total_duration_ms=resolved_last_exec.get("total_duration_ms", 0.0),
+                nodes=wf.nodes or [],
+                edges=wf.edges or [],
+                node_configs=wf.node_configs or {},
+                metrics=resolved_last_exec.get("final_metrics") or resolved_last_exec.get("metrics"),
+                reports={
+                    "anomaly_summary": resolved_last_exec.get("anomaly_summary"),
+                    "forecasting_summary": resolved_last_exec.get("forecasting_summary"),
+                    "governance_summary": resolved_last_exec.get("governance_summary"),
+                    "node_results": resolved_last_exec.get("node_results"),
+                    "inference_schema": resolved_last_exec.get("inference_schema"),
+                },
+                step_snapshots=resolved_last_exec.get("step_snapshots"),
+                logs=resolved_last_exec.get("execution_logs") or resolved_last_exec.get("logs"),
+                run_label=None
+            )
+        except Exception:
+            pass
+
     await db.refresh(wf)
     return wf
 
@@ -968,7 +1069,7 @@ async def execute_workflow(
 
     # Cache execution result in memory for lookup if user subsequently saves the workbook
     try:
-        job_manager.register_job_result(result.execution_id, result)
+        job_manager.register_job_result(result.execution_id, result, workflow_id=target_id)
     except Exception:
         pass
 
@@ -1078,7 +1179,7 @@ async def execute_workflow_by_id(
     exec_result.workflow_id = workflow_id
 
     try:
-        job_manager.register_job_result(exec_result.execution_id, exec_result)
+        job_manager.register_job_result(exec_result.execution_id, exec_result, workflow_id=workflow_id)
     except Exception:
         pass
 

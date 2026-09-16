@@ -33,7 +33,8 @@ class PipelineJobManager:
         self.jobs: Dict[str, Dict[str, Any]] = {}
         self.job_futures: Dict[str, Any] = {}
         self.inference_bundles: Dict[str, Dict[str, Any]] = {}
-        self.lock = threading.Lock()
+        self.workflow_latest_executions: Dict[str, str] = {}
+        self.lock = threading.RLock()
 
     def submit_job(
         self,
@@ -137,16 +138,18 @@ class PipelineJobManager:
         with self.lock:
             self.inference_bundles[execution_id] = bundle
 
-    def register_job_result(self, execution_id: str, result: Any, duration_ms: float = 0.0):
+    def register_job_result(self, execution_id: str, result: Any, duration_ms: float = 0.0, workflow_id: Optional[str] = None):
         """Caches synchronous execution result in memory so subsequent save workbook calls can locate diagnostics."""
         with self.lock:
+            wf_id = workflow_id or (getattr(result, "workflow_id", None) if not isinstance(result, dict) else result.get("workflow_id"))
             self.jobs[execution_id] = {
                 "job_id": execution_id,
+                "workflow_id": wf_id,
                 "status": getattr(result, "status", "SUCCESS") if not isinstance(result, dict) else result.get("status", "SUCCESS"),
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "started_at": datetime.now(timezone.utc).isoformat(),
                 "completed_at": datetime.now(timezone.utc).isoformat(),
-                "duration_ms": duration_ms or getattr(result, "total_duration_ms", 0.0) if not isinstance(result, dict) else result.get("total_duration_ms", 0.0),
+                "duration_ms": duration_ms or (getattr(result, "total_duration_ms", 0.0) if not isinstance(result, dict) else result.get("total_duration_ms", 0.0)),
                 "trigger_type": "sync_execute",
                 "trigger_id": None,
                 "result": result,
@@ -154,6 +157,17 @@ class PipelineJobManager:
                 "logs": getattr(result, "logs", []) if not isinstance(result, dict) else result.get("logs", []),
                 "error": None
             }
+            if wf_id:
+                self.workflow_latest_executions[str(wf_id)] = execution_id
+
+    def get_latest_execution_for_workflow(self, workflow_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieves the most recent in-memory execution job for a workflow ID."""
+        with self.lock:
+            exec_id = self.workflow_latest_executions.get(str(workflow_id))
+            if not exec_id:
+                return None
+            job = self.jobs.get(exec_id)
+            return dict(job) if job else None
 
     def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
         """Retrieves status, logs, and outputs for a job."""
@@ -174,6 +188,7 @@ class PipelineJobManager:
             self.jobs.clear()
             self.job_futures.clear()
             self.inference_bundles.clear()
+            self.workflow_latest_executions.clear()
 
 
 # Global singleton instance
