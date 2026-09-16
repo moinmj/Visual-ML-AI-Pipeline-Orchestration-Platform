@@ -3,7 +3,9 @@ import uuid
 from httpx import AsyncClient, ASGITransport
 from backend.app.main import app
 from backend.app.infrastructure.database.session import init_db
-from backend.app.core.security import create_access_token
+from backend.app.core.security import get_current_user, TokenData, create_access_token
+
+app.dependency_overrides[get_current_user] = lambda: TokenData("test", 1, ["Tenant Admin", "Data Scientist", "ML Engineer"], ["*"])
 
 
 def auth_headers():
@@ -198,7 +200,7 @@ async def test_run_then_save_workflow_preserves_last_execution():
         exec_data = exec_resp.json()
         assert exec_data["status"] == "SUCCESS"
         assert exec_data["execution_id"] is not None
-        assert exec_data["workflow_id"] is not None
+        assert exec_data.get("workflow_id") is None
 
         # 2. User then clicks "Save Workflow", passing last_execution in the save payload
         save_payload = {

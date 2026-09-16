@@ -3,7 +3,9 @@ import uuid
 from httpx import AsyncClient, ASGITransport
 from backend.app.main import app
 from backend.app.infrastructure.database.session import init_db
-from backend.app.core.security import create_access_token
+from backend.app.core.security import get_current_user, TokenData, create_access_token
+
+app.dependency_overrides[get_current_user] = lambda: TokenData("test", 1, ["Tenant Admin", "Data Scientist", "ML Engineer"], ["*"])
 
 
 def auth_headers():

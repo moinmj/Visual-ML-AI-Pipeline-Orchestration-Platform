@@ -116,7 +116,7 @@ class TimeSeriesSplitRecipe(BaseRecipe):
         X_te = df_test.drop(columns=[target_col])
         y_te = df_test[target_col]
 
-        return {
+        return_dict = {
             "X_train": X_tr,
             "y_train": y_tr,
             "X_test": X_te,
@@ -152,6 +152,28 @@ class TimeSeriesSplitRecipe(BaseRecipe):
                 "time_column": time_col
             }
         }
+
+        # ── Thread date sidecar to evaluator ────────────────────────────────
+        # time_col already points to the real date column (used for sorting).
+        # df_test still has it before the target/feature drop, so we can
+        # extract aligned ISO date strings for the x-axis without heuristics.
+        if time_col and time_col in df_test.columns:
+            try:
+                _raw = df_test[time_col].reset_index(drop=True)
+                _parsed = pd.to_datetime(_raw, errors="coerce")
+                if _parsed.notna().sum() > 0.5 * len(_parsed):
+                    return_dict["test_dates"] = [
+                        v.strftime("%Y-%m-%d") if pd.notna(v) else str(_raw.iloc[i])
+                        for i, v in enumerate(_parsed)
+                    ]
+                else:
+                    return_dict["test_dates"] = [str(v) for v in _raw]
+                return_dict["date_column_name"] = time_col
+            except Exception:
+                pass
+
+        return return_dict
+
 
     def to_code(self, config: Dict[str, Any]) -> str:
         tgt = config.get("target_column", "target")
