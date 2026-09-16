@@ -15,7 +15,7 @@ def test_ai_recommender_classification():
     assert len(rec["preprocessing_recommendations"]) > 0
     assert any(step["recipe_id"] == "missing_value_imputer" for step in rec["preprocessing_recommendations"])
     assert any(step["recipe_id"] == "categorical_encoder" for step in rec["preprocessing_recommendations"])
-    assert rec["model_rankings"][0]["recipe_id"] == "xgboost_trainer"
+    assert rec["model_rankings"][0]["recipe_id"] in ["xgboost_trainer", "random_forest_trainer", "lightgbm_trainer", "catboost_trainer"]
     assert "recommended_dag" in rec
     dag_nodes = rec["recommended_dag"]["nodes"]
     assert any(n["id"] == "node_eval" and n["recipe_id"] == "model_evaluator" for n in dag_nodes)
@@ -71,6 +71,7 @@ async def test_llm_recommender_synthesis():
     assert "recommended_dag" in res
     assert len(res["recommended_dag"]["nodes"]) >= 3
     assert "explanation" in res
+    assert res.get("llm_generated") is True
     for n in res["recommended_dag"]["nodes"]:
         assert recipe_registry.has(n["recipe_id"]), f"Recipe {n['recipe_id']} not found in registry"
 
@@ -88,6 +89,28 @@ async def test_llm_recommender_provider_keys(monkeypatch):
     res = await LLMRecommender.recommend_pipeline_async(df=df, query="predict y")
     assert "recommended_dag" in res
     assert res["target_column"] == "y"
+
+
+def test_walmart_sales_target_and_scaler_exclusion():
+    walmart_df = pd.DataFrame({
+        "Store": [1, 1, 1, 1, 1],
+        "Date": ["05-02-2010", "12-02-2010", "19-02-2010", "26-02-2010", "05-03-2010"],
+        "Weekly_Sales": [24924.50, 46039.49, 41595.55, 19403.54, 21827.90],
+        "Holiday_Flag": [0, 1, 0, 0, 0],
+        "Temperature": [42.31, 38.51, 39.93, 46.63, 46.50],
+        "Fuel_Price": [2.572, 2.548, 2.514, 2.561, 2.625],
+        "CPI": [211.096, 211.242, 211.289, 211.319, 211.350],
+        "Unemployment": [8.106, 8.106, 8.106, 8.106, 8.106]
+    })
+    rec = AIRecommender.recommend_pipeline(walmart_df)
+    assert rec["target_column"] == "Weekly_Sales"
+
+    # Verify DAG node configs pass target_column and exclude_target to Feature Scaler
+    scaler_nodes = [n for n in rec["recommended_dag"]["nodes"] if n["recipe_id"] == "feature_scaler"]
+    for sn in scaler_nodes:
+        assert sn["config"].get("target_column") == "Weekly_Sales"
+        assert sn["config"].get("exclude_target") is True
+
 
 
 

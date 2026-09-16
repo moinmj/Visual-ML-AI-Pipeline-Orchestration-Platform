@@ -30,7 +30,7 @@ class Settings(BaseSettings):
 
     # LLM Provider Settings (Groq, Gemini, OpenAI)
     GROQ_API_KEY: Optional[str] = None
-    GROQ_MODEL: str = "llama-3.3-70b-versatile"
+    GROQ_MODEL: str = "openai/gpt-oss-20b"
     GEMINI_API_KEY: Optional[str] = None
     OPENAI_API_KEY: Optional[str] = None
 
