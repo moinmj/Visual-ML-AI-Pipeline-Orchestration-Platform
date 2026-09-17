@@ -7,55 +7,10 @@ import numpy as np
 import pandas as pd
 from typing import Dict, Any, Optional, Tuple
 from backend.app.recipes.base.recipe import BaseRecipe
+from backend.app.recipes.training.encoder_utils import _is_valid_calendar_datetime_series
 
 
-def _is_valid_calendar_datetime_series(series: Optional[pd.Series]) -> Tuple[bool, Optional[pd.Series]]:
-    """
-    Production-grade validation for temporal calendar series.
-    Detects native datetime dtypes, ISO string dates, and valid epoch timestamps.
-    Rejects degenerate numeric nanosecond Epoch artifacts (e.g. small integers mapped to 1970-01-01).
-    """
-    if series is None or len(series) == 0:
-        return False, None
-
-    # Case 1: Native datetime64 dtype
-    if pd.api.types.is_datetime64_any_dtype(series):
-        return True, series
-
-    # Case 2: Numeric dtype (integers or floats)
-    if pd.api.types.is_numeric_dtype(series):
-        s_clean = series.dropna()
-        if s_clean.empty:
-            return False, None
-        v_min = float(s_clean.min())
-        # Only values >= 1e8 can represent valid Unix timestamps in seconds (e.g. 1.6e9 -> year 2020+)
-        if v_min < 1e8:
-            return False, None
-        try:
-            parsed = pd.to_datetime(s_clean, unit="s", errors="coerce")
-            if parsed.notna().sum() > 0.5 * len(s_clean):
-                return True, parsed
-        except Exception:
-            return False, None
-
-    # Case 3: Object / String / Categorical series
-    try:
-        s_str = series.astype(str).str.strip()
-        parsed = pd.to_datetime(s_str, dayfirst=True, errors="coerce")
-        if parsed.notna().sum() <= 0.5 * len(s_str):
-            parsed = pd.to_datetime(s_str, errors="coerce")
-
-        valid_count = parsed.notna().sum()
-        if valid_count > 0.5 * len(s_str):
-            # Production Guard: Detect degenerate conversions where distinct input features collapse to 1 constant date
-            formatted_dates = parsed.dt.strftime("%Y-%m-%d").dropna()
-            if len(s_str) > 1 and s_str.nunique() > 1 and formatted_dates.nunique() == 1:
-                return False, None
-            return True, parsed
-    except Exception:
-        pass
-
-    return False, None
+# _is_valid_calendar_datetime_series is imported from encoder_utils (shared utility)
 
 
 class ModelEvaluatorRecipe(BaseRecipe):
@@ -204,6 +159,11 @@ class ModelEvaluatorRecipe(BaseRecipe):
         _temporal_snap_col: Optional[str] = None
 
         # Priority 0: explicit sidecar from splitter ────────────────────────
+        # Guard: reject sidecars that are epoch artifacts (all/mostly "1970-01-01").
+        # These come from old cached splitter code that called pd.to_datetime()
+        # on integer year columns without specifying unit, collapsing everything
+        # to the Unix epoch. Our fixed splitters no longer produce these, but any
+        # pipeline run before the fix may have stored them in context.
         _explicit_test_dates = inputs.get("test_dates") or (
             context.get("test_dates") if isinstance(context, dict) else None
         )
@@ -211,8 +171,14 @@ class ModelEvaluatorRecipe(BaseRecipe):
             context.get("date_column_name") if isinstance(context, dict) else None
         )
         if _explicit_test_dates and len(_explicit_test_dates) > 0:
-            _temporal_snapshot = pd.Series(_explicit_test_dates)
-            _temporal_snap_col = _explicit_date_col or "Date"
+            # Epoch-collapse guard: if >50% of dates are 1970-01-01 → discard sidecar
+            _epoch_count = sum(1 for d in _explicit_test_dates if str(d).startswith("1970-01-01") or str(d).startswith("1970-0"))
+            _epoch_ratio = _epoch_count / len(_explicit_test_dates)
+            if _epoch_ratio <= 0.5:
+                # Sidecar is valid → use it
+                _temporal_snapshot = pd.Series(_explicit_test_dates)
+                _temporal_snap_col = _explicit_date_col or "Date"
+            # else: sidecar is poisoned with epoch artifacts → fall through to column scan
 
         # Priority 1: strict column-name scan in X_test ─────────────────────
         elif isinstance(X_test, pd.DataFrame):
@@ -391,9 +357,12 @@ class ModelEvaluatorRecipe(BaseRecipe):
 
             # ── Priority 2: post-encoded year/month/day columns ──────────────────
             elif isinstance(X_test, pd.DataFrame):
-                year_cols = [c for c in X_test.columns if "year" in c.lower()]
-                month_cols = [c for c in X_test.columns if "month" in c.lower()]
-                day_cols = [c for c in X_test.columns if "day" in c.lower()]
+                # Precise column matching: must end in _year, _month, _day (not _dayofweek)
+                year_cols = [c for c in X_test.columns if c.lower().endswith("_year") or c.lower() == "year"]
+                month_cols = [c for c in X_test.columns if c.lower().endswith("_month") or c.lower() == "month"]
+                # Explicitly exclude dayofweek: day column must end in _day (not _dayofweek)
+                day_cols = [c for c in X_test.columns if (c.lower().endswith("_day") or c.lower() == "day")
+                            and "dayofweek" not in c.lower() and "weekday" not in c.lower()]
                 candidates = [c for c in X_test.columns if any(k in c.lower() for k in ["date", "time", "timestamp", "period", "ds"])]
 
                 if year_cols and month_cols:
@@ -404,8 +373,13 @@ class ModelEvaluatorRecipe(BaseRecipe):
                     if y_s.between(1990, 2100).mean() > 0.5:
                         if day_cols:
                             d_s = pd.to_numeric(X_test[day_cols[0]], errors="coerce").fillna(1).astype(int)
-                            formatted_dates = [f"{y}-{m:02d}-{d:02d}" for y, m, d in zip(y_s, m_s, d_s)]
-                            time_sort_key = [y * 10000 + m * 100 + d for y, m, d in zip(y_s, m_s, d_s)]
+                            # Validate day values are real days (1-31), not dayofweek (0-6)
+                            if d_s.between(1, 31).mean() > 0.5:
+                                formatted_dates = [f"{y}-{m:02d}-{d:02d}" for y, m, d in zip(y_s, m_s, d_s)]
+                                time_sort_key = [y * 10000 + m * 100 + d for y, m, d in zip(y_s, m_s, d_s)]
+                            else:
+                                formatted_dates = [f"{y}-{m:02d}-01" for y, m in zip(y_s, m_s)]
+                                time_sort_key = [y * 100 + m for y, m in zip(y_s, m_s)]
                         else:
                             formatted_dates = [f"{y}-{m:02d}" for y, m in zip(y_s, m_s)]
                             time_sort_key = [y * 100 + m for y, m in zip(y_s, m_s)]
