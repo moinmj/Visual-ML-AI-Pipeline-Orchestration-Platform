@@ -4,6 +4,7 @@ from typing import Dict, Any, List, Optional
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from backend.app.recipes.base.recipe import BaseRecipe
+from backend.app.recipes.training.encoder_utils import find_date_column, extract_test_dates_from_column
 
 
 class TrainTestSplitRecipe(BaseRecipe):
@@ -188,48 +189,28 @@ class TrainTestSplitRecipe(BaseRecipe):
                 res["target_classes"] = target_classes
                 res["target_encoder"] = target_encoder
 
-            # ── Thread date column to evaluator as an explicit sidecar ──────
-            # Use the full test_df (still has Date before drop) with strict
-            # keyword matching so "Weekly_Sales_lag_1" doesn't get picked up.
-            _strict_date_kws = ["date", "timestamp", "period", "ds"]
-            _date_col_eval = None
-            # Priority 1: the time_col that was used for sorting (most reliable)
-            if time_col and time_col in test_df.columns:
-                _candidate_vals = test_df[time_col]
-                try:
-                    _parsed = pd.to_datetime(_candidate_vals, errors="coerce")
-                    if _parsed.notna().sum() > 0.5 * len(_parsed):
-                        _date_col_eval = time_col
-                except Exception:
-                    pass
-            # Priority 2: strict keyword scan over all df columns
-            if _date_col_eval is None:
-                for _c in test_df.columns:
-                    _cl = _c.lower()
-                    if any(kw == _cl or _cl.startswith(kw + "_") or _cl.endswith("_" + kw)
-                           for kw in _strict_date_kws):
-                        _date_col_eval = _c
-                        break
-            # Priority 3: datetime-dtype columns
-            if _date_col_eval is None:
-                _dt_cols = [c for c in test_df.columns if pd.api.types.is_datetime64_any_dtype(test_df[c])]
-                if _dt_cols:
-                    _date_col_eval = _dt_cols[0]
+            # ── Thread date sidecar to evaluator ─────────────────────────────
+            # extract_test_dates_from_column validates via _is_valid_calendar_datetime_series
+            # which REJECTS integer columns (Date_year 2010..2025 < 1e8) → no 1970-01-01.
+            _test_dates = None
+            _date_col_used = None
 
-            if _date_col_eval and _date_col_eval in test_df.columns:
-                try:
-                    _raw = test_df[_date_col_eval].reset_index(drop=True)
-                    _parsed = pd.to_datetime(_raw, errors="coerce")
-                    if _parsed.notna().sum() > 0.5 * len(_parsed):
-                        res["test_dates"] = [
-                            v.strftime("%Y-%m-%d") if pd.notna(v) else str(_raw.iloc[i])
-                            for i, v in enumerate(_parsed)
-                        ]
-                    else:
-                        res["test_dates"] = [str(v) for v in _raw]
-                    res["date_column_name"] = _date_col_eval
-                except Exception:
-                    pass
+            if time_col and time_col in test_df.columns:
+                _test_dates = extract_test_dates_from_column(test_df[time_col].reset_index(drop=True))
+                if _test_dates is not None:
+                    _date_col_used = time_col
+
+            if _test_dates is None:
+                # time_col might be an integer sort column — re-scan for real date column
+                _real_date_col = find_date_column(test_df, exclude_cols=[target_col])
+                if _real_date_col:
+                    _test_dates = extract_test_dates_from_column(test_df[_real_date_col].reset_index(drop=True))
+                    if _test_dates is not None:
+                        _date_col_used = _real_date_col
+
+            if _test_dates is not None:
+                res["test_dates"] = _test_dates
+                res["date_column_name"] = _date_col_used
 
             return res
 
@@ -255,27 +236,9 @@ class TrainTestSplitRecipe(BaseRecipe):
             X, y, test_size=test_size, random_state=random_state, stratify=strat
         )
 
-        # ── Thread date column through to evaluator (as an explicit parallel array)
-        # Detect any datetime / date-typed column in X before it gets dropped,
-        # extract the test-partition values, and surface them as `test_dates`.
-        # This prevents the evaluator from having to guess the date axis from
-        # feature column names (which false-matches on e.g. "Weekly_Sales_lag_1"
-        # because the keyword "week" is a substring of "Weekly").
-        _date_col_for_eval = None
-        _test_dates_for_eval = None
-        _strict_date_kws = ["date", "timestamp", "period", "ds"]
-        for _c in X.columns:
-            _cl = _c.lower()
-            if any(kw == _cl or _cl.startswith(kw + "_") or _cl.endswith("_" + kw)
-                   for kw in _strict_date_kws):
-                _date_col_for_eval = _c
-                break
-        if _date_col_for_eval is None:
-            # Secondary: accept columns whose dtype is already datetime
-            _dt_typed = [c for c in X.columns if pd.api.types.is_datetime64_any_dtype(X[c])]
-            if _dt_typed:
-                _date_col_for_eval = _dt_typed[0]
-
+        # ── Thread date sidecar for random split (non-temporal) ───────────────
+        # Use find_date_column + extract_test_dates_from_column to safely extract
+        # real date strings. Integer-only columns like Date_year will be rejected.
         res = {
             "X_train":         X_train,
             "X_test":          X_test,
@@ -289,19 +252,11 @@ class TrainTestSplitRecipe(BaseRecipe):
             res["target_classes"] = target_classes
             res["target_encoder"] = target_encoder
 
-        # Attach date sidecar if a date column was found
-        if _date_col_for_eval and _date_col_for_eval in X_test.columns:
-            try:
-                _raw = X_test[_date_col_for_eval]
-                _parsed = pd.to_datetime(_raw, errors="coerce")
-                if _parsed.notna().sum() > 0.5 * len(_parsed):
-                    _test_dates_for_eval = [v.strftime("%Y-%m-%d") if pd.notna(v) else str(_raw.iloc[i])
-                                            for i, v in enumerate(_parsed)]
-                else:
-                    _test_dates_for_eval = [str(v) for v in _raw]
-                res["test_dates"] = _test_dates_for_eval
-                res["date_column_name"] = _date_col_for_eval
-            except Exception:
-                pass
+        _real_date_col = find_date_column(X, exclude_cols=[])
+        if _real_date_col and _real_date_col in X_test.columns:
+            _test_dates = extract_test_dates_from_column(X_test[_real_date_col].reset_index(drop=True))
+            if _test_dates is not None:
+                res["test_dates"] = _test_dates
+                res["date_column_name"] = _real_date_col
 
         return res

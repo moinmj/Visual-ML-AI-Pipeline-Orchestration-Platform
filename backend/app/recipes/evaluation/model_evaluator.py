@@ -7,55 +7,10 @@ import numpy as np
 import pandas as pd
 from typing import Dict, Any, Optional, Tuple
 from backend.app.recipes.base.recipe import BaseRecipe
+from backend.app.recipes.training.encoder_utils import _is_valid_calendar_datetime_series
 
 
-def _is_valid_calendar_datetime_series(series: Optional[pd.Series]) -> Tuple[bool, Optional[pd.Series]]:
-    """
-    Production-grade validation for temporal calendar series.
-    Detects native datetime dtypes, ISO string dates, and valid epoch timestamps.
-    Rejects degenerate numeric nanosecond Epoch artifacts (e.g. small integers mapped to 1970-01-01).
-    """
-    if series is None or len(series) == 0:
-        return False, None
-
-    # Case 1: Native datetime64 dtype
-    if pd.api.types.is_datetime64_any_dtype(series):
-        return True, series
-
-    # Case 2: Numeric dtype (integers or floats)
-    if pd.api.types.is_numeric_dtype(series):
-        s_clean = series.dropna()
-        if s_clean.empty:
-            return False, None
-        v_min = float(s_clean.min())
-        # Only values >= 1e8 can represent valid Unix timestamps in seconds (e.g. 1.6e9 -> year 2020+)
-        if v_min < 1e8:
-            return False, None
-        try:
-            parsed = pd.to_datetime(s_clean, unit="s", errors="coerce")
-            if parsed.notna().sum() > 0.5 * len(s_clean):
-                return True, parsed
-        except Exception:
-            return False, None
-
-    # Case 3: Object / String / Categorical series
-    try:
-        s_str = series.astype(str).str.strip()
-        parsed = pd.to_datetime(s_str, dayfirst=True, errors="coerce")
-        if parsed.notna().sum() <= 0.5 * len(s_str):
-            parsed = pd.to_datetime(s_str, errors="coerce")
-
-        valid_count = parsed.notna().sum()
-        if valid_count > 0.5 * len(s_str):
-            # Production Guard: Detect degenerate conversions where distinct input features collapse to 1 constant date
-            formatted_dates = parsed.dt.strftime("%Y-%m-%d").dropna()
-            if len(s_str) > 1 and s_str.nunique() > 1 and formatted_dates.nunique() == 1:
-                return False, None
-            return True, parsed
-    except Exception:
-        pass
-
-    return False, None
+# _is_valid_calendar_datetime_series is imported from encoder_utils (shared utility)
 
 
 class ModelEvaluatorRecipe(BaseRecipe):

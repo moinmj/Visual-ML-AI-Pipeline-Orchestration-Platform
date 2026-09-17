@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 from typing import Dict, Any, List, Optional
 from backend.app.recipes.base.recipe import BaseRecipe
+from backend.app.recipes.training.encoder_utils import find_date_column, extract_test_dates_from_column
 
 
 class TimeSeriesSplitRecipe(BaseRecipe):
@@ -76,20 +77,31 @@ class TimeSeriesSplitRecipe(BaseRecipe):
 
         test_size = float(config.get("test_size", 0.2))
         gap = max(0, int(config.get("gap", 0)))
-        time_col = (config.get("date_column") or "").strip()
+        time_col_cfg = (config.get("date_column") or "").strip()
 
-        # 1. Resolve date / chronological column
-        if not time_col or time_col not in df.columns:
-            temporal_keywords = ["year", "date", "time", "period", "timestamp", "month", "ds", "week", "day"]
-            candidates = [c for c in df.columns if c != target_col and any(kw in c.lower() for kw in temporal_keywords)]
-            if candidates:
-                time_col = candidates[0]
+        # ── 1. Resolve date / chronological column ──────────────────────────
+        # find_date_column uses _is_valid_calendar_datetime_series internally,
+        # so it will SKIP integer columns like Date_year (values < 1e8)
+        # and only return a column that contains real ISO date strings or datetime64.
+        from backend.app.recipes.training.encoder_utils import _is_valid_calendar_datetime_series
+
+        if time_col_cfg and time_col_cfg in df.columns:
+            # Validate user-specified column — reject if it's a year integer column
+            is_v, _ = _is_valid_calendar_datetime_series(df[time_col_cfg])
+            if is_v:
+                time_col = time_col_cfg
             else:
-                # Check for datetime dtypes
-                dt_cols = [c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c])]
-                time_col = dt_cols[0] if dt_cols else None
+                # Fall back to auto-detection
+                time_col = find_date_column(df, exclude_cols=[target_col]) or time_col_cfg
+        else:
+            time_col = find_date_column(df, exclude_cols=[target_col])
+            if not time_col:
+                # Last resort: use any temporal-named column for sorting only
+                temporal_keywords = ["year", "date", "time", "period", "timestamp", "month", "ds", "week", "day"]
+                cands = [c for c in df.columns if c != target_col and any(kw in c.lower() for kw in temporal_keywords)]
+                time_col = cands[0] if cands else None
 
-        # 2. Sort chronologically
+        # ── 2. Sort chronologically ──────────────────────────────────────────
         if time_col and time_col in df.columns:
             try:
                 num_s = pd.to_numeric(df[time_col], errors="coerce")
@@ -153,27 +165,30 @@ class TimeSeriesSplitRecipe(BaseRecipe):
             }
         }
 
-        # ── Thread date sidecar to evaluator ────────────────────────────────
-        # time_col already points to the real date column (used for sorting).
-        # df_test still has it before the target/feature drop, so we can
-        # extract aligned ISO date strings for the x-axis without heuristics.
+        # ── Thread date sidecar to evaluator ─────────────────────────────────
+        # extract_test_dates_from_column calls _is_valid_calendar_datetime_series,
+        # which REJECTS integer columns (values < 1e8) to prevent 1970-01-01 artifacts.
+        _test_dates = None
+        _date_col_used = None
+
         if time_col and time_col in df_test.columns:
-            try:
-                _raw = df_test[time_col].reset_index(drop=True)
-                _parsed = pd.to_datetime(_raw, errors="coerce")
-                if _parsed.notna().sum() > 0.5 * len(_parsed):
-                    return_dict["test_dates"] = [
-                        v.strftime("%Y-%m-%d") if pd.notna(v) else str(_raw.iloc[i])
-                        for i, v in enumerate(_parsed)
-                    ]
-                else:
-                    return_dict["test_dates"] = [str(v) for v in _raw]
-                return_dict["date_column_name"] = time_col
-            except Exception:
-                pass
+            _test_dates = extract_test_dates_from_column(df_test[time_col].reset_index(drop=True))
+            if _test_dates is not None:
+                _date_col_used = time_col
+
+        if _test_dates is None:
+            # time_col might be an integer sort column — do a fresh search for a real date column
+            _real_date_col = find_date_column(df_test, exclude_cols=[target_col])
+            if _real_date_col:
+                _test_dates = extract_test_dates_from_column(df_test[_real_date_col].reset_index(drop=True))
+                if _test_dates is not None:
+                    _date_col_used = _real_date_col
+
+        if _test_dates is not None:
+            return_dict["test_dates"] = _test_dates
+            return_dict["date_column_name"] = _date_col_used
 
         return return_dict
-
 
     def to_code(self, config: Dict[str, Any]) -> str:
         tgt = config.get("target_column", "target")
