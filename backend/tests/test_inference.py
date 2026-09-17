@@ -330,3 +330,68 @@ async def test_tabular_temporal_regression_and_future_projection():
         assert "ds" in resp_csv.text or "yhat" in resp_csv.text or "temperature" in resp_csv.text
 
 
+def test_flat_tree_extrapolation_and_prediction_labels():
+    """
+    Verify that when a tree model produces flat predictions across future years
+    (tree saturation or zero temporal variance), the extrapolation fallback
+    projects dynamic yearly values and sets descriptive prediction_label.
+    """
+    class ConstantDummyModel:
+        def predict(self, X):
+            return np.array([439305.1562] * len(X))
+
+    bundle = {
+        "execution_id": "test_constant_tree_exec",
+        "task_type": "regression",
+        "model": ConstantDummyModel(),
+        "target_column": "Weekly_Sales",
+        "feature_names": ["Store", "Date_year", "CPI"],
+        "training_feature_summary": {
+            "Store": {"data_type": "numeric", "min_value": 1, "max_value": 45, "default_value": 20},
+            "Date_year": {"data_type": "numeric", "min_value": 2012, "max_value": 2012, "default_value": 2012},
+            "CPI": {"data_type": "numeric", "min_value": 130.0, "max_value": 220.0, "default_value": 190.0}
+        },
+        "sample_row": {"Store": 22, "Date_year": 2012, "CPI": 191.0},
+        "annual_trend_pct": 3.0
+    }
+
+    # 1. Single tabular regression test
+    single_req = PredictionRequest(inputs={"Store": 22, "Date_year": 2012, "CPI": 191.0})
+    single_res = PipelineInferencer.predict(bundle=bundle, request=single_req)
+    assert single_res.status == "SUCCESS"
+    assert single_res.prediction_label == "Predicted Weekly_Sales"
+    assert single_res.prediction == 439305.1562
+
+    # 2. Future year projection test (2012 -> 2016)
+    proj_req = PredictionRequest(
+        target_year=2016,
+        inputs={"Store": 22, "Date_year": 2012, "CPI": 191.0}
+    )
+    proj_res = PipelineInferencer._predict_tabular_future_projection(
+        bundle=bundle,
+        base_inputs=proj_req.inputs,
+        temporal_col="Date_year",
+        future_periods=4,
+        target_year=2016
+    )
+
+    assert proj_res.status == "SUCCESS"
+    assert proj_res.prediction_label == "Projected Weekly_Sales (2016)"
+    assert proj_res.trend == "Upward"
+    assert proj_res.projected_change_pct > 0
+
+    # Ensure every year has a distinct, progressive value (NOT flat 439305.1562)
+    traj = proj_res.trajectory
+    assert len(traj) == 5  # 2012, 2013, 2014, 2015, 2016
+    assert traj[0]["ds"] == "2012"
+    assert traj[0]["yhat"] == 439305.1562
+
+    for i in range(1, len(traj)):
+        assert traj[i]["yhat"] > traj[i - 1]["yhat"], f"Step {i} must extrapolate upward"
+
+    # Verify final year 2016 matches projected_end_value
+    assert traj[-1]["ds"] == "2016"
+    assert proj_res.projected_end_value == traj[-1]["yhat"]
+
+
+
