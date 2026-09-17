@@ -64,7 +64,7 @@ class CatBoostTrainerRecipe(BaseRecipe):
         if not CATBOOST_AVAILABLE:
             raise ValueError("CatBoost is not installed. Please run 'pip install catboost'.")
 
-        from backend.app.recipes.training.encoder_utils import extract_train_test_data
+        from backend.app.recipes.training.encoder_utils import extract_train_test_data, pass_through_metadata
         X_train, y_train, X_test, y_test = extract_train_test_data(inputs)
 
         if X_train is None or y_train is None:
@@ -141,4 +141,4 @@ class CatBoostTrainerRecipe(BaseRecipe):
         if y_test is not None:
             output["y_test"] = y_test
 
-        return output
+        return pass_through_metadata(inputs, output, context)

@@ -63,7 +63,7 @@ class LogisticRegressionTrainerRecipe(BaseRecipe):
         }
 
     def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
-        from backend.app.recipes.training.encoder_utils import safe_prepare_training_data, extract_train_test_data
+        from backend.app.recipes.training.encoder_utils import safe_prepare_training_data, extract_train_test_data, pass_through_metadata
         X_train, y_train, X_test, y_test = extract_train_test_data(inputs)
 
         if X_train is None or y_train is None:
@@ -138,7 +138,7 @@ class LogisticRegressionTrainerRecipe(BaseRecipe):
         if y_test is not None:
             output["y_test"] = y_test
 
-        return output
+        return pass_through_metadata(inputs, output, context)
 
     def to_code(self, config: Dict[str, Any]) -> str:
         max_iter = config.get("max_iter", 200)
