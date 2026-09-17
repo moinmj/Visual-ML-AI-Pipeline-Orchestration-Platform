@@ -591,6 +591,10 @@ def execute_pipeline():
     }
     st.session_state["inference_bundle"] = job_manager.get_inference_bundle(exec_result.execution_id)
     st.session_state["inference_schema"] = exec_result.inference_schema
+    try:
+        job_manager.register_job_result(exec_result.execution_id, exec_result, workflow_id=st.session_state.get("active_saved_workflow_id"))
+    except Exception:
+        pass
 
     # Record Telemetry for Workflow Execution API
     record_api_telemetry(
@@ -1249,6 +1253,34 @@ def save_workflow_to_backend(name: str, description: str = "") -> dict:
                 )
                 session.add(wf)
             await session.commit()
+
+            last_ex = st.session_state.get("last_execution")
+            if last_ex and isinstance(last_ex, dict):
+                try:
+                    from backend.app.workflows.router import record_workflow_execution_history
+                    await record_workflow_execution_history(
+                        db=session,
+                        workflow_id=wf_id,
+                        execution_id=last_ex.get("execution_id") or str(uuid.uuid4()),
+                        status_str=last_ex.get("status", "SUCCESS"),
+                        total_duration_ms=last_ex.get("total_duration_ms", 0.0),
+                        nodes=nodes_payload,
+                        edges=edges_payload,
+                        node_configs=persisted_configs,
+                        metrics=last_ex.get("final_metrics") or last_ex.get("metrics"),
+                        reports={
+                            "anomaly_summary": last_ex.get("anomaly_summary"),
+                            "forecasting_summary": last_ex.get("forecasting_summary"),
+                            "governance_summary": last_ex.get("governance_summary"),
+                            "node_results": last_ex.get("node_results"),
+                            "inference_schema": last_ex.get("inference_schema"),
+                        },
+                        step_snapshots=last_ex.get("step_snapshots"),
+                        logs=last_ex.get("execution_logs") or last_ex.get("logs"),
+                        run_label=name
+                    )
+                except Exception:
+                    pass
 
     try:
         asyncio.run(_async_save())
