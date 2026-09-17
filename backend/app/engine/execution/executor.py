@@ -372,7 +372,30 @@ class DAGExecutor:
         features_schema = []
         sample_payload = {}
         fn_list = list(pipeline_context.get("feature_names", []))
-        X_eval = pipeline_context.get("X_test") if pipeline_context.get("X_test") is not None else pipeline_context.get("X_train")
+        
+        # Combine train and test splits to compute feature bounds over the full dataset
+        X_tr = pipeline_context.get("X_train")
+        X_te = pipeline_context.get("X_test")
+        if X_tr is not None and X_te is not None and isinstance(X_tr, pd.DataFrame) and isinstance(X_te, pd.DataFrame):
+            X_eval = pd.concat([X_tr, X_te], ignore_index=True)
+        elif X_te is not None and isinstance(X_te, pd.DataFrame):
+            X_eval = X_te
+        else:
+            X_eval = X_tr
+
+        y_tr = pipeline_context.get("y_train")
+        y_te = pipeline_context.get("y_test")
+        if y_tr is not None and y_te is not None:
+            try:
+                y_eval = pd.concat([pd.Series(y_tr), pd.Series(y_te)], ignore_index=True)
+            except Exception:
+                y_eval = pd.Series(y_tr)
+        elif y_tr is not None:
+            y_eval = pd.Series(y_tr)
+        elif y_te is not None:
+            y_eval = pd.Series(y_te)
+        else:
+            y_eval = None
 
         if X_eval is not None and isinstance(X_eval, pd.DataFrame):
             if not fn_list:
@@ -419,6 +442,7 @@ class DAGExecutor:
         temporal_col = None
         min_year = None
         max_year = None
+        annual_trend_pct = None
 
         for f in features_schema:
             fn_low = f["name"].lower()
@@ -430,6 +454,22 @@ class DAGExecutor:
                     if 1900 <= f["min_value"] <= 2100:
                         min_year = int(f["min_value"])
                         max_year = int(f["max_value"])
+
+        # Compute empirical annual trend % if temporal regression target exists
+        if has_temporal and temporal_col and y_eval is not None and X_eval is not None and temporal_col in X_eval.columns:
+            try:
+                t_series = pd.to_numeric(X_eval[temporal_col], errors="coerce")
+                y_series = pd.to_numeric(y_eval, errors="coerce")
+                valid_mask = t_series.notna() & y_series.notna()
+                if valid_mask.sum() >= 5:
+                    t_clean = t_series[valid_mask].values
+                    y_clean = y_series[valid_mask].values
+                    if np.std(t_clean) > 0 and abs(np.mean(y_clean)) > 1e-6:
+                        slope, _ = np.polyfit(t_clean, y_clean, 1)
+                        calc_trend = (slope / abs(np.mean(y_clean))) * 100.0
+                        annual_trend_pct = round(float(calc_trend), 2)
+            except Exception as e:
+                logger.warning(f"Could not compute annual_trend_pct: {str(e)}")
 
         inference_schema = {
             "execution_id": execution_id,
@@ -443,6 +483,7 @@ class DAGExecutor:
             "temporal_column": temporal_col,
             "min_year": min_year,
             "max_year": max_year,
+            "annual_trend_pct": annual_trend_pct,
         }
 
         # Ensure model is preserved even if a downstream node produced outputs or was ordered differently
@@ -473,6 +514,7 @@ class DAGExecutor:
             "temporal_column": temporal_col,
             "min_year": min_year,
             "max_year": max_year,
+            "annual_trend_pct": annual_trend_pct,
             "split_mode": pipeline_context.get("split_mode"),
             "categorical_maps": pipeline_context.get("categorical_maps", {}),
         }
