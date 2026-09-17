@@ -139,16 +139,25 @@ class AIRecommender:
                 "reason": f"Dataset contains {missing_cells} missing cells requiring imputation."
             })
 
-        # Exclude target from encoding/scaling lists
-        feature_cats = [c for c in cat_cols if c != selected_target]
-        feature_nums = [c for c in num_cols if c != selected_target]
+        # Exclude target and temporal date/time columns from encoding/scaling lists
+        date_kws = ["date", "time", "timestamp", "period", "ds", "datetime"]
+        feature_cats = [
+            c for c in cat_cols 
+            if c != selected_target 
+            and not any(kw == c.lower().strip() or c.lower().strip().startswith(kw + "_") or c.lower().strip().endswith("_" + kw) for kw in date_kws)
+        ]
+        feature_nums = [
+            c for c in num_cols 
+            if c != selected_target 
+            and not any(kw == c.lower().strip() or c.lower().strip().startswith(kw + "_") or c.lower().strip().endswith("_" + kw) for kw in date_kws)
+        ]
 
         if feature_cats:
             cleaning_steps.append({
                 "recipe_id": "categorical_encoder",
                 "name": "Categorical One-Hot Encoder",
                 "recipe_name": "Categorical One-Hot Encoder",
-                "config": {"method": "one_hot"},
+                "config": {"method": "one_hot", "columns": feature_cats},
                 "reason": f"Found {len(feature_cats)} categorical features ({', '.join(feature_cats[:3])}) requiring numerical encoding."
             })
 

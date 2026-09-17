@@ -5,6 +5,30 @@ from sklearn.preprocessing import LabelEncoder, OrdinalEncoder
 from backend.app.recipes.base.recipe import BaseRecipe
 
 
+def _is_temporal_column(col_name: str, s: pd.Series) -> bool:
+    """Helper to detect if a column is a date/time/temporal column that should not be categorially encoded."""
+    if pd.api.types.is_datetime64_any_dtype(s):
+        return True
+    
+    cl = str(col_name).lower().strip()
+    date_kws = ["date", "timestamp", "period", "ds", "datetime", "time"]
+    if any(cl == kw or cl.startswith(kw + "_") or cl.endswith("_" + kw) for kw in date_kws):
+        return True
+        
+    if s.dtype == object or str(s.dtype) == "category":
+        sample = s.dropna().head(20)
+        if not sample.empty:
+            try:
+                parsed = pd.to_datetime(sample, errors="coerce")
+                if parsed.notna().mean() > 0.7:
+                    years = parsed.dropna().dt.year
+                    if not years.empty and years.between(1950, 2100).mean() > 0.7:
+                        return True
+            except Exception:
+                pass
+    return False
+
+
 class CategoricalEncoderRecipe(BaseRecipe):
     recipe_id = "categorical_encoder"
     name = "Categorical Encoder"
@@ -87,8 +111,20 @@ class CategoricalEncoderRecipe(BaseRecipe):
                     feature_cols.append(c)
             target_cols = feature_cols
 
+        # Guard: NEVER encode datetime / temporal columns as categories!
+        skipped_date_cols = [c for c in target_cols if _is_temporal_column(c, df[c])]
+        target_cols = [c for c in target_cols if c not in skipped_date_cols]
+
         if not target_cols:
-            return {"dataframe": df}
+            return {
+                "dataframe": df,
+                "metrics": {
+                    "method_applied": method,
+                    "encoded_columns": [],
+                    "skipped_date_columns": skipped_date_cols,
+                    "final_column_count": len(df.columns)
+                }
+            }
 
         # Resolve Target Column for Target/WoE encodings
         target_series = None
