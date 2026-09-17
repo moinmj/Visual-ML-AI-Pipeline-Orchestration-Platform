@@ -148,6 +148,13 @@ class LLMRecommender:
         gemini_key = getattr(settings, "GEMINI_API_KEY", None)
         openai_key = getattr(settings, "OPENAI_API_KEY", None)
 
+        # If target_column is passed as a secondary trailing column (e.g. Unemployment) but the dataset
+        # contains a primary metric like Weekly_Sales, prioritize the primary metric unless explicitly locked.
+        primary_metrics = [c for c in df.columns if any(kw in c.lower() for kw in ["weekly_sales", "sales", "revenue", "demand", "price", "amount"])]
+        if target_column and target_column.lower() in ["unemployment", "cpi", "fuel_price", "temperature", "store"] and primary_metrics:
+            if not query or any(kw in query.lower() for kw in ["sale", "revenue", "demand", "weekly", "predict", "forecast"]):
+                target_column = primary_metrics[0]
+
         if gemini_key:
             endpoint = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
             api_key = gemini_key
@@ -209,7 +216,7 @@ class LLMRecommender:
                                     {"role": "user", "content": user_prompt}
                                 ],
                                 "response_format": {"type": "json_object"},
-                                "temperature": 0.2
+                                "temperature": 0.0
                             }
                         )
                         if response.status_code == 200:
@@ -254,8 +261,13 @@ class LLMRecommender:
         ]
         detected_date_col = temporal_cols[0] if temporal_cols else None
 
-        target_col = result.get("target_column")
-        task_type = result.get("task_type", "classification")
+        target_col = result.get("target_column") or target_column
+        task_type = result.get("task_type") or task_type
+
+        # For datasets with a clear date/time column, auto-enforce time_series_forecasting if task is ambiguous or classification
+        if detected_date_col and (not task_type or task_type in ["classification", "auto", "Auto-Detect Task Type", ""]):
+            task_type = "time_series_forecasting"
+            result["task_type"] = task_type
 
         # Filter and validate each node
         valid_nodes = []
@@ -310,10 +322,16 @@ class LLMRecommender:
                 node_cfg["exclude_target"] = True
                 if "method" not in node_cfg:
                     node_cfg["method"] = "standard"
+                if detected_date_col and node_cfg.get("columns"):
+                    if isinstance(node_cfg["columns"], list):
+                        node_cfg["columns"] = [c for c in node_cfg["columns"] if c.lower().strip() != detected_date_col.lower().strip()]
 
             elif r_id == "data_type_converter":
                 if not node_cfg.get("conversions") and detected_date_col:
                     node_cfg["conversions"] = {detected_date_col: "datetime"}
+                elif isinstance(node_cfg.get("conversions"), str) and node_cfg["conversions"].strip() in ["[object Object]", "object Object", ""]:
+                    if detected_date_col:
+                        node_cfg["conversions"] = {detected_date_col: "datetime"}
 
             elif r_id in ["train_test_split", "stratified_split", "time_series_split", "walk_forward_split"]:
                 if target_col and not node_cfg.get("target_column"):
@@ -354,6 +372,47 @@ class LLMRecommender:
             if isinstance(e, dict) and e.get("source") in valid_node_ids and e.get("target") in valid_node_ids:
                 valid_edges.append(e)
 
+        # AUTO-WIRE GUARANTEE: If edges are empty or incomplete, build complete topological edges connecting all nodes sequentially
+        existing_targets = {e["target"] for e in valid_edges}
+        needs_autowire = len(valid_edges) == 0 or (len(valid_nodes) >= 2 and any(valid_nodes[i]["id"] not in existing_targets for i in range(1, len(valid_nodes))))
+
+        if needs_autowire and len(valid_nodes) >= 2:
+            auto_edges = []
+            split_node_id = None
+            eval_node_id = None
+
+            for i in range(len(valid_nodes) - 1):
+                src_id = valid_nodes[i]["id"]
+                tgt_id = valid_nodes[i+1]["id"]
+                auto_edges.append({
+                    "id": f"e_{src_id}_{tgt_id}",
+                    "source": src_id,
+                    "target": tgt_id,
+                    "animated": True
+                })
+
+                r_src = valid_nodes[i]["recipe_id"]
+                r_tgt = valid_nodes[i+1]["recipe_id"]
+                if "split" in r_src:
+                    split_node_id = src_id
+                if r_tgt == "model_evaluator":
+                    eval_node_id = tgt_id
+
+            if "split" in valid_nodes[-1]["recipe_id"]:
+                split_node_id = valid_nodes[-1]["id"]
+            if valid_nodes[-1]["recipe_id"] == "model_evaluator":
+                eval_node_id = valid_nodes[-1]["id"]
+
+            if split_node_id and eval_node_id and split_node_id != eval_node_id:
+                if not any(e["source"] == split_node_id and e["target"] == eval_node_id for e in auto_edges):
+                    auto_edges.append({
+                        "id": f"e_{split_node_id}_{eval_node_id}",
+                        "source": split_node_id,
+                        "target": eval_node_id,
+                        "animated": True
+                    })
+            valid_edges = auto_edges
+
         dag["nodes"] = valid_nodes
         dag["edges"] = valid_edges
         dag["node_configs"] = node_configs
@@ -374,16 +433,14 @@ class LLMRecommender:
 
         m_rankings = result.get("model_rankings", [])
         if not m_rankings:
-            m_rankings = []
-            for n in valid_nodes:
-                r_id = n["recipe_id"]
-                if "trainer" in r_id or "forecaster" in r_id or r_id in ["isolation_forest", "random_forest_trainer"]:
-                    m_rankings.append({
-                        "recipe_id": r_id,
-                        "name": n.get("label", r_id),
-                        "tier": "Primary Model",
-                        "reason": f"LLM recommended model {r_id}."
-                    })
+            if task_type == "time_series_forecasting":
+                m_rankings = [{"recipe_id": "prophet_forecaster", "name": "Prophet Forecaster", "tier": "Primary Model", "reason": "Recommended for time-series forecasting."}]
+            elif task_type == "regression":
+                m_rankings = [{"recipe_id": "xgboost_trainer", "name": "XGBoost Regressor", "tier": "Primary Model", "reason": "Recommended for continuous regression."}]
+            elif task_type == "classification":
+                m_rankings = [{"recipe_id": "xgboost_trainer", "name": "XGBoost Classifier", "tier": "Primary Model", "reason": "Recommended for discrete classification."}]
+            else:
+                m_rankings = [{"recipe_id": "isolation_forest", "name": "Isolation Forest", "tier": "Primary Model", "reason": "Recommended for anomaly detection."}]
 
         return {
             "task_type": task_type,
