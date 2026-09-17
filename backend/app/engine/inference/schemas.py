@@ -134,3 +134,4 @@ class InferenceSchemaResponse(BaseModel):
     temporal_column: Optional[str] = Field(default=None, description="Name of the detected date/time/year column.")
     min_year: Optional[int] = Field(default=None, description="Minimum year found in training data.")
     max_year: Optional[int] = Field(default=None, description="Maximum year found in training data.")
+    annual_trend_pct: Optional[float] = Field(default=None, description="Empirical historical annual trend/growth rate percentage for regression.")

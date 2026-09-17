@@ -1345,7 +1345,8 @@ async def get_execution_inference_schema(execution_id: str):
         has_temporal_feature=bool(bundle.get("has_temporal_feature", False)),
         temporal_column=bundle.get("temporal_column"),
         min_year=bundle.get("min_year"),
-        max_year=bundle.get("max_year")
+        max_year=bundle.get("max_year"),
+        annual_trend_pct=bundle.get("annual_trend_pct")
     )
 
 
