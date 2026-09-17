@@ -1,7 +1,10 @@
+import logging
 import pandas as pd
 import numpy as np
 from typing import Dict, Any, List, Optional
 from backend.app.recipes.base.recipe import BaseRecipe
+
+logger = logging.getLogger(__name__)
 
 try:
     from prophet import Prophet
@@ -9,6 +12,25 @@ try:
 except (ImportError, OSError, Exception):
     Prophet = None
     PROPHET_AVAILABLE = False
+
+
+def normalize_frequency(freq_str: Optional[str]) -> str:
+    if not freq_str:
+        return "D"
+    s = str(freq_str).strip().upper()
+    if s.startswith("W"):
+        return "W"
+    elif s.startswith("M"):
+        return "M"
+    elif s.startswith("H"):
+        return "h"
+    elif s.startswith("Y") or s.startswith("A"):
+        return "Y"
+    elif s.startswith("B"):
+        return "B"
+    elif s.startswith("D"):
+        return "D"
+    return s.split()[0]
 
 
 class ProphetForecasterRecipe(BaseRecipe):
@@ -158,9 +180,8 @@ class ProphetForecasterRecipe(BaseRecipe):
             )
 
         horizon = int(config.get("horizon_periods", 14))
-        freq_code = config.get("frequency", "D (Daily)").split()[0]
-        seas_mode = config.get("seasonality_mode", "additive")
-        test_size_pct = float(config.get("test_size_pct", 0.2))
+        raw_freq = config.get("frequency") or config.get("freq") or config.get("data_frequency") or ""
+        freq_code = normalize_frequency(raw_freq) if raw_freq else ""
 
         # Build clean chronologically sorted dataframe for Prophet
         prophet_df = pd.DataFrame({
@@ -170,6 +191,42 @@ class ProphetForecasterRecipe(BaseRecipe):
 
         if len(prophet_df) < 5:
             raise ValueError(f"Prophet requires at least 5 valid time-series observations, found {len(prophet_df)}.")
+
+        # Auto-detect frequency from dataset timestamps if not explicitly set or to verify default
+        inferred_freq = None
+        if len(prophet_df) >= 2:
+            try:
+                diff_sec = prophet_df["ds"].diff().dropna().dt.total_seconds().median()
+                diff_days = diff_sec / 86400.0
+                if 6.0 <= diff_days <= 8.0:
+                    inferred_freq = "W"
+                elif 27.0 <= diff_days <= 32.0:
+                    inferred_freq = "M"
+                elif 0.8 <= diff_days <= 1.2:
+                    inferred_freq = "D"
+                elif 0.03 <= diff_days <= 0.05:
+                    inferred_freq = "h"
+            except Exception:
+                pass
+
+        if not freq_code:
+            freq_code = inferred_freq or "D"
+        elif freq_code == "D" and inferred_freq in ["W", "M"]:
+            # If user left config on default "D (Daily)" but data is clearly weekly/monthly (e.g. 7-day jumps)
+            logger.info(f"Auto-adapting frequency from default 'D' to detected series frequency '{inferred_freq}'")
+            freq_code = inferred_freq
+
+        seas_mode = config.get("seasonality_mode", "additive")
+        test_size_pct = float(config.get("test_size_pct", 0.2))
+
+        # Smart seasonality configuration based on data frequency
+        is_weekly_data = (freq_code == "W")
+        is_monthly_data = (freq_code == "M")
+
+        # When data is weekly or monthly, daily seasonality is completely meaningless and causes errors
+        use_daily_seasonality = False if (is_weekly_data or is_monthly_data) else "auto"
+        # When data is weekly (1 observation per week), weekly seasonality (day-of-week) has zero variation and creates severe distortion
+        use_weekly_seasonality = False if (is_weekly_data or is_monthly_data) else "auto"
 
         # ─────────────────────────────────────────────────────────────
         # CHRONOLOGICAL OUT-OF-SAMPLE BACKTESTING
@@ -196,8 +253,8 @@ class ProphetForecasterRecipe(BaseRecipe):
         eval_model = Prophet(
             seasonality_mode=seas_mode,
             yearly_seasonality="auto",
-            weekly_seasonality="auto",
-            daily_seasonality="auto"
+            weekly_seasonality=use_weekly_seasonality,
+            daily_seasonality=use_daily_seasonality
         )
         eval_model.fit(train_df)
         test_forecast = eval_model.predict(test_df[["ds"]])
@@ -226,10 +283,13 @@ class ProphetForecasterRecipe(BaseRecipe):
         model = Prophet(
             seasonality_mode=seas_mode,
             yearly_seasonality="auto",
-            weekly_seasonality="auto",
-            daily_seasonality="auto"
+            weekly_seasonality=use_weekly_seasonality,
+            daily_seasonality=use_daily_seasonality
         )
         model.fit(prophet_df)
+
+        # Record frequency on model for inference persistence
+        model.saved_freq = freq_code
 
         # Generate Future Dataframe
         future   = model.make_future_dataframe(periods=horizon, freq=freq_code)
@@ -244,6 +304,9 @@ class ProphetForecasterRecipe(BaseRecipe):
             "eval_type":          eval_type,
             "date_column":        date_col,
             "target_column":      target_col,
+            "frequency":          freq_code,
+            "freq":               freq_code,
+            "data_frequency":     freq_code,
             "historical_points":  len(prophet_df),
             "train_size":         len(train_df),
             "test_size":          len(test_df),
@@ -284,6 +347,8 @@ class ProphetForecasterRecipe(BaseRecipe):
             "metrics":            metrics,
             "forecasting_summary": metrics,
             "model":              model,
+            "frequency":          freq_code,
+            "freq":               freq_code,
             "task_type":          "time_series_forecasting"
         }
 

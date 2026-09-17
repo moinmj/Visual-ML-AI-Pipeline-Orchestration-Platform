@@ -471,6 +471,15 @@ class DAGExecutor:
             except Exception as e:
                 logger.warning(f"Could not compute annual_trend_pct: {str(e)}")
 
+        # Resolve time-series frequency if available
+        resolved_freq = (
+            pipeline_context.get("frequency")
+            or pipeline_context.get("freq")
+            or pipeline_context.get("forecasting_summary", {}).get("frequency")
+            or pipeline_context.get("forecasting_summary", {}).get("freq")
+            or pipeline_context.get("forecasting_summary", {}).get("data_frequency")
+        )
+
         inference_schema = {
             "execution_id": execution_id,
             "task_type": pipeline_context.get("task_type", "classification"),
@@ -484,6 +493,8 @@ class DAGExecutor:
             "min_year": min_year,
             "max_year": max_year,
             "annual_trend_pct": annual_trend_pct,
+            "frequency": resolved_freq,
+            "freq": resolved_freq,
         }
 
         # Ensure model is preserved even if a downstream node produced outputs or was ordered differently
@@ -493,6 +504,9 @@ class DAGExecutor:
                 if isinstance(n_out, dict) and n_out.get("model") is not None:
                     resolved_model = n_out["model"]
                     break
+
+        if resolved_model is not None and not resolved_freq:
+            resolved_freq = getattr(resolved_model, "saved_freq", None)
 
         inference_bundle = {
             "execution_id": execution_id,
@@ -515,6 +529,8 @@ class DAGExecutor:
             "min_year": min_year,
             "max_year": max_year,
             "annual_trend_pct": annual_trend_pct,
+            "frequency": resolved_freq,
+            "freq": resolved_freq,
             "split_mode": pipeline_context.get("split_mode"),
             "categorical_maps": pipeline_context.get("categorical_maps", {}),
         }
