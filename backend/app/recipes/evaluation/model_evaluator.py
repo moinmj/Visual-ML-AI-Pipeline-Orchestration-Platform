@@ -159,6 +159,11 @@ class ModelEvaluatorRecipe(BaseRecipe):
         _temporal_snap_col: Optional[str] = None
 
         # Priority 0: explicit sidecar from splitter ────────────────────────
+        # Guard: reject sidecars that are epoch artifacts (all/mostly "1970-01-01").
+        # These come from old cached splitter code that called pd.to_datetime()
+        # on integer year columns without specifying unit, collapsing everything
+        # to the Unix epoch. Our fixed splitters no longer produce these, but any
+        # pipeline run before the fix may have stored them in context.
         _explicit_test_dates = inputs.get("test_dates") or (
             context.get("test_dates") if isinstance(context, dict) else None
         )
@@ -166,8 +171,14 @@ class ModelEvaluatorRecipe(BaseRecipe):
             context.get("date_column_name") if isinstance(context, dict) else None
         )
         if _explicit_test_dates and len(_explicit_test_dates) > 0:
-            _temporal_snapshot = pd.Series(_explicit_test_dates)
-            _temporal_snap_col = _explicit_date_col or "Date"
+            # Epoch-collapse guard: if >50% of dates are 1970-01-01 → discard sidecar
+            _epoch_count = sum(1 for d in _explicit_test_dates if str(d).startswith("1970-01-01") or str(d).startswith("1970-0"))
+            _epoch_ratio = _epoch_count / len(_explicit_test_dates)
+            if _epoch_ratio <= 0.5:
+                # Sidecar is valid → use it
+                _temporal_snapshot = pd.Series(_explicit_test_dates)
+                _temporal_snap_col = _explicit_date_col or "Date"
+            # else: sidecar is poisoned with epoch artifacts → fall through to column scan
 
         # Priority 1: strict column-name scan in X_test ─────────────────────
         elif isinstance(X_test, pd.DataFrame):
@@ -346,9 +357,12 @@ class ModelEvaluatorRecipe(BaseRecipe):
 
             # ── Priority 2: post-encoded year/month/day columns ──────────────────
             elif isinstance(X_test, pd.DataFrame):
-                year_cols = [c for c in X_test.columns if "year" in c.lower()]
-                month_cols = [c for c in X_test.columns if "month" in c.lower()]
-                day_cols = [c for c in X_test.columns if "day" in c.lower()]
+                # Precise column matching: must end in _year, _month, _day (not _dayofweek)
+                year_cols = [c for c in X_test.columns if c.lower().endswith("_year") or c.lower() == "year"]
+                month_cols = [c for c in X_test.columns if c.lower().endswith("_month") or c.lower() == "month"]
+                # Explicitly exclude dayofweek: day column must end in _day (not _dayofweek)
+                day_cols = [c for c in X_test.columns if (c.lower().endswith("_day") or c.lower() == "day")
+                            and "dayofweek" not in c.lower() and "weekday" not in c.lower()]
                 candidates = [c for c in X_test.columns if any(k in c.lower() for k in ["date", "time", "timestamp", "period", "ds"])]
 
                 if year_cols and month_cols:
@@ -359,8 +373,13 @@ class ModelEvaluatorRecipe(BaseRecipe):
                     if y_s.between(1990, 2100).mean() > 0.5:
                         if day_cols:
                             d_s = pd.to_numeric(X_test[day_cols[0]], errors="coerce").fillna(1).astype(int)
-                            formatted_dates = [f"{y}-{m:02d}-{d:02d}" for y, m, d in zip(y_s, m_s, d_s)]
-                            time_sort_key = [y * 10000 + m * 100 + d for y, m, d in zip(y_s, m_s, d_s)]
+                            # Validate day values are real days (1-31), not dayofweek (0-6)
+                            if d_s.between(1, 31).mean() > 0.5:
+                                formatted_dates = [f"{y}-{m:02d}-{d:02d}" for y, m, d in zip(y_s, m_s, d_s)]
+                                time_sort_key = [y * 10000 + m * 100 + d for y, m, d in zip(y_s, m_s, d_s)]
+                            else:
+                                formatted_dates = [f"{y}-{m:02d}-01" for y, m in zip(y_s, m_s)]
+                                time_sort_key = [y * 100 + m for y, m in zip(y_s, m_s)]
                         else:
                             formatted_dates = [f"{y}-{m:02d}" for y, m in zip(y_s, m_s)]
                             time_sort_key = [y * 100 + m for y, m in zip(y_s, m_s)]
