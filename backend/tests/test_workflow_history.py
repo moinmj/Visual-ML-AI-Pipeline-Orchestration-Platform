@@ -365,4 +365,143 @@ async def test_workflow_history_re_run_and_save_creates_version_2():
         assert hist2[1]["nodes_count"] == 4
 
 
+@pytest.mark.asyncio
+async def test_multiple_runs_without_autosave_persisted_to_history():
+    """
+    Verifies that running a workbook multiple times with different parameters
+    (without auto_save=True) persists Run #1, Run #2, and Run #3 directly in history,
+    and subsequent Save Workbook preserves all versions and updates last_execution.
+    """
+    await init_db()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test", headers=auth_headers()) as client:
+        # 1. Upload dataset
+        csv_bytes = b"feat1,feat2,target\n1.0,2.0,1\n2.0,3.0,0\n3.0,4.0,1\n4.0,5.0,0\n5.0,6.0,1\n"
+        files = {"file": ("runs_test.csv", csv_bytes, "text/csv")}
+        up_resp = await client.post("/api/v1/datasets/upload", files=files, data={"name": "Runs Test Dataset"})
+        assert up_resp.status_code == 201
+        dataset_id = up_resp.json()["id"]
+
+        wf_id = f"wf_runs_{uuid.uuid4().hex[:8]}"
+
+        # 2. Save initial workbook
+        initial_dag = {
+            "id": wf_id,
+            "name": "Multi-Run Workbook",
+            "dataset_id": dataset_id,
+            "nodes": [
+                {"id": "n_csv", "recipe_id": "csv_loader", "config": {"dataset_id": dataset_id}},
+                {"id": "n_split", "recipe_id": "train_test_split", "config": {"target_column": "target", "test_size": 0.33, "random_state": 42}},
+                {"id": "n_model", "recipe_id": "random_forest_trainer", "config": {"target_column": "target", "n_estimators": 5}},
+                {"id": "n_eval", "recipe_id": "model_evaluator", "config": {}}
+            ],
+            "edges": [
+                {"source": "n_csv", "target": "n_split"},
+                {"source": "n_split", "target": "n_model"},
+                {"source": "n_split", "target": "n_eval"},
+                {"source": "n_model", "target": "n_eval"}
+            ],
+            "node_configs": {}
+        }
+        create_resp = await client.post("/api/v1/workflows/", json=initial_dag)
+        assert create_resp.status_code == 201
+
+        # 3. First execution (Run #1) via execute endpoint WITHOUT auto_save
+        exec1_resp = await client.post(
+            f"/api/v1/workflows/{wf_id}/execute",
+            json=None
+        )
+        assert exec1_resp.status_code == 200
+        exec1_id = exec1_resp.json()["execution_id"]
+
+        # History must immediately contain Run #1
+        hist1_resp = await client.get(f"/api/v1/workflows/{wf_id}/history")
+        assert hist1_resp.status_code == 200
+        hist1 = hist1_resp.json()
+        assert len(hist1) == 1
+        assert hist1[0]["version_number"] == 1
+        assert hist1[0]["id"] == exec1_id
+        assert hist1[0]["run_label"] == "Run #1"
+
+        # 4. Second execution (Run #2) with modified parameter (n_estimators=20) WITHOUT auto_save
+        modified_dag_1 = dict(initial_dag)
+        modified_dag_1["nodes"] = [
+            {"id": "n_csv", "recipe_id": "csv_loader", "config": {"dataset_id": dataset_id}},
+            {"id": "n_split", "recipe_id": "train_test_split", "config": {"target_column": "target", "test_size": 0.33, "random_state": 42}},
+            {"id": "n_model", "recipe_id": "random_forest_trainer", "config": {"target_column": "target", "n_estimators": 20}},
+            {"id": "n_eval", "recipe_id": "model_evaluator", "config": {}}
+        ]
+        exec2_resp = await client.post(
+            f"/api/v1/workflows/{wf_id}/execute",
+            json=modified_dag_1
+        )
+        assert exec2_resp.status_code == 200
+        exec2_id = exec2_resp.json()["execution_id"]
+        assert exec2_id != exec1_id
+
+        # History must now contain BOTH Run #2 and Run #1!
+        hist2_resp = await client.get(f"/api/v1/workflows/{wf_id}/history")
+        assert hist2_resp.status_code == 200
+        hist2 = hist2_resp.json()
+        assert len(hist2) == 2, f"Expected 2 runs in history, got {len(hist2)}: {hist2}"
+        assert hist2[0]["version_number"] == 2
+        assert hist2[0]["id"] == exec2_id
+        assert hist2[0]["run_label"] == "Run #2"
+        assert hist2[1]["version_number"] == 1
+        assert hist2[1]["id"] == exec1_id
+        assert hist2[1]["run_label"] == "Run #1"
+
+        # 5. Third execution (Run #3) with another parameter (test_size=0.5, n_estimators=30)
+        modified_dag_2 = dict(initial_dag)
+        modified_dag_2["nodes"] = [
+            {"id": "n_csv", "recipe_id": "csv_loader", "config": {"dataset_id": dataset_id}},
+            {"id": "n_split", "recipe_id": "train_test_split", "config": {"target_column": "target", "test_size": 0.5, "random_state": 42}},
+            {"id": "n_model", "recipe_id": "random_forest_trainer", "config": {"target_column": "target", "n_estimators": 30}},
+            {"id": "n_eval", "recipe_id": "model_evaluator", "config": {}}
+        ]
+        exec3_resp = await client.post(
+            f"/api/v1/workflows/execute?workflow_id={wf_id}",
+            json=modified_dag_2
+        )
+        assert exec3_resp.status_code == 200
+        exec3_id = exec3_resp.json()["execution_id"]
+        assert exec3_id != exec2_id
+
+        # History must contain all 3 runs!
+        hist3_resp = await client.get(f"/api/v1/workflows/{wf_id}/history")
+        assert hist3_resp.status_code == 200
+        hist3 = hist3_resp.json()
+        assert len(hist3) == 3, f"Expected 3 runs in history, got {len(hist3)}: {hist3}"
+        assert hist3[0]["version_number"] == 3
+        assert hist3[0]["id"] == exec3_id
+        assert hist3[0]["run_label"] == "Run #3"
+        assert hist3[1]["version_number"] == 2
+        assert hist3[1]["id"] == exec2_id
+        assert hist3[1]["run_label"] == "Run #2"
+        assert hist3[2]["version_number"] == 1
+        assert hist3[2]["id"] == exec1_id
+        assert hist3[2]["run_label"] == "Run #1"
+
+        # 6. Save Workbook (PUT) with client passing back the initial last_execution
+        save_put_resp = await client.put(f"/api/v1/workflows/{wf_id}", json={
+            "id": wf_id,
+            "name": "Multi-Run Workbook Updated",
+            "dataset_id": dataset_id,
+            "nodes": modified_dag_2["nodes"],
+            "edges": modified_dag_2["edges"],
+            "node_configs": {},
+            "last_execution": {"execution_id": exec1_id}  # Client sending older execution
+        })
+        assert save_put_resp.status_code == 200
+
+        # Verify history still has all 3 versions and latest execution is preserved
+        hist_final_resp = await client.get(f"/api/v1/workflows/{wf_id}/history")
+        assert hist_final_resp.status_code == 200
+        hist_final = hist_final_resp.json()
+        assert len(hist_final) == 3
+        assert hist_final[0]["version_number"] == 3
+        assert hist_final[0]["id"] == exec3_id
+
+
+
 

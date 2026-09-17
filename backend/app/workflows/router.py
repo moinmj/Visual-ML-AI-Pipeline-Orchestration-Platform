@@ -3,12 +3,15 @@ from fastapi.encoders import jsonable_encoder
 from typing import Dict, Any, List, Optional, Union
 import math
 import uuid
+import logging
 import pandas as pd
 from datetime import datetime, timezone, timedelta
 from sqlalchemy import func, or_
 from sqlalchemy.orm import load_only
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+
+logger = logging.getLogger(__name__)
 
 from backend.app.infrastructure.database.session import get_db
 from backend.app.engine.dag.graph import WorkflowGraph
@@ -48,28 +51,27 @@ async def resolve_workflow_dataset(
     node_configs: Optional[Dict[str, Any]] = None
 ) -> tuple[Optional[str], Optional[str]]:
     """
-    Resolves dataset_id and dataset_name from payload or by inspecting
-    the workflow's ingestion nodes (e.g. csv_loader).
+    Intelligently discovers and links the active dataset ID and dataset name
+    for a workflow by checking the payload, CSV loader nodes, and saved configs.
     """
     resolved_id = dataset_id
     resolved_name = dataset_name
 
-    # If dataset_id was not explicitly passed, inspect node configs for csv_loader
-    if not resolved_id:
-        if node_configs and isinstance(node_configs, dict):
-            for n_id, n_data in node_configs.items():
-                cfg = n_data.get("config", {}) if isinstance(n_data, dict) else {}
-                if "dataset_id" in cfg and cfg["dataset_id"]:
-                    resolved_id = str(cfg["dataset_id"])
-                    break
-        if not resolved_id and nodes and isinstance(nodes, list):
-            for n in nodes:
-                cfg = n.get("config", {}) if isinstance(n, dict) else {}
-                if "dataset_id" in cfg and cfg["dataset_id"]:
+    if not resolved_id and nodes:
+        for n in nodes:
+            cfg = n.get("config", {})
+            if n.get("recipe_id") == "csv_loader" or "dataset_id" in cfg:
+                if cfg.get("dataset_id"):
                     resolved_id = str(cfg["dataset_id"])
                     break
 
-    # Look up human-readable dataset_name if we have an ID
+    if not resolved_id and node_configs:
+        for nid, n_cfg in node_configs.items():
+            cfg = n_cfg.get("config", {}) if isinstance(n_cfg, dict) else {}
+            if cfg.get("dataset_id"):
+                resolved_id = str(cfg["dataset_id"])
+                break
+
     if resolved_id and not resolved_name:
         try:
             ds_res = await db.execute(select(Dataset).where(Dataset.id == resolved_id))
@@ -91,17 +93,47 @@ async def resolve_or_normalize_last_execution(
     workflow_id: Optional[str] = None
 ) -> Optional[Dict[str, Any]]:
     """
-    Resolves, normalizes, and protects last_execution diagnostics and reports:
-    1. If a valid, non-empty last_execution dictionary is supplied, normalizes logs and returns it JSON-safe.
-    2. If execution_id is provided, searches DB workflows and job_manager for the matching execution report.
-    3. If no execution payload was supplied, checks if a newer in-memory execution exists in job_manager for this workflow.
-    4. If updating an existing workflow and no newer execution is found, preserves the existing last_execution.
-    5. Auto-adoption fallback: If user executed an unsaved canvas workflow and then clicked Save Workflow,
-       locates the recent auto-saved execution run and adopts its reports.
+    Ensures that last_execution is correctly populated and normalized.
+    Prioritizes fresh execution runs from job_manager, validates incoming payload,
+    or preserves existing execution data across saves.
     """
     wf_target_id = workflow_id or (existing_wf.id if existing_wf else None)
 
-    # 1. Normalize provided dictionary if it contains execution content
+    # 1. Check if a newer in-memory execution exists for this workflow in job_manager
+    if wf_target_id:
+        recent_job = job_manager.get_latest_execution_for_workflow(wf_target_id)
+        if recent_job and (recent_job.get("results") or recent_job.get("result")):
+            existing_exec_id = None
+            if existing_wf and isinstance(existing_wf.last_execution, dict):
+                existing_exec_id = existing_wf.last_execution.get("execution_id")
+
+            payload_exec_id = None
+            if last_execution and isinstance(last_execution, dict):
+                payload_exec_id = last_execution.get("execution_id")
+
+            # If recent_job is newer than what was stored, or matches payload, use recent_job
+            if (
+                recent_job.get("job_id") != existing_exec_id
+                and (not payload_exec_id or payload_exec_id == existing_exec_id or payload_exec_id == recent_job.get("job_id"))
+            ):
+                res = recent_job.get("results") or recent_job.get("result")
+                norm_job = {
+                    "execution_id": recent_job.get("job_id"),
+                    "status": recent_job.get("status", "SUCCESS"),
+                    "total_duration_ms": recent_job.get("duration_ms", 0.0),
+                    "final_metrics": res.get("final_metrics") if isinstance(res, dict) else getattr(res, "final_metrics", None),
+                    "node_results": res.get("node_results") if isinstance(res, dict) else getattr(res, "node_results", []),
+                    "execution_logs": recent_job.get("logs", []),
+                    "logs": recent_job.get("logs", []),
+                    "step_snapshots": res.get("step_snapshots", {}) if isinstance(res, dict) else getattr(res, "step_snapshots", {}),
+                    "anomaly_summary": res.get("anomaly_summary") if isinstance(res, dict) else getattr(res, "anomaly_summary", None),
+                    "forecasting_summary": res.get("forecasting_summary") if isinstance(res, dict) else getattr(res, "forecasting_summary", None),
+                    "governance_summary": res.get("governance_summary") if isinstance(res, dict) else getattr(res, "governance_summary", None),
+                    "inference_schema": res.get("inference_schema") if isinstance(res, dict) else getattr(res, "inference_schema", None),
+                }
+                return jsonable_encoder(norm_job)
+
+    # 2. Normalize provided dictionary if it contains execution content
     if last_execution and isinstance(last_execution, dict):
         has_content = any(k in last_execution for k in [
             "execution_id", "status", "final_metrics", "node_results", "reports", "metrics", "logs", "execution_logs"
@@ -118,7 +150,7 @@ async def resolve_or_normalize_last_execution(
     if not target_exec_id and isinstance(last_execution, dict):
         target_exec_id = last_execution.get("execution_id")
 
-    # 2. Look up by execution_id if provided
+    # 3. Look up by execution_id if provided
     if target_exec_id:
         # Check running/recent jobs
         job = job_manager.get_job(target_exec_id)
@@ -147,32 +179,6 @@ async def resolve_or_normalize_last_execution(
             cand_exec = cand.last_execution
             if isinstance(cand_exec, dict) and cand_exec.get("execution_id") == target_exec_id:
                 return jsonable_encoder(cand_exec)
-
-    # 3. Check if a newer in-memory execution exists for this workflow in job_manager
-    if wf_target_id:
-        recent_job = job_manager.get_latest_execution_for_workflow(wf_target_id)
-        if recent_job and (recent_job.get("results") or recent_job.get("result")):
-            existing_exec_id = None
-            if existing_wf and isinstance(existing_wf.last_execution, dict):
-                existing_exec_id = existing_wf.last_execution.get("execution_id")
-
-            if not existing_exec_id or recent_job.get("job_id") != existing_exec_id:
-                res = recent_job.get("results") or recent_job.get("result")
-                norm_job = {
-                    "execution_id": recent_job.get("job_id"),
-                    "status": recent_job.get("status", "SUCCESS"),
-                    "total_duration_ms": recent_job.get("duration_ms", 0.0),
-                    "final_metrics": res.get("final_metrics") if isinstance(res, dict) else getattr(res, "final_metrics", None),
-                    "node_results": res.get("node_results") if isinstance(res, dict) else getattr(res, "node_results", []),
-                    "execution_logs": recent_job.get("logs", []),
-                    "logs": recent_job.get("logs", []),
-                    "step_snapshots": res.get("step_snapshots", {}) if isinstance(res, dict) else getattr(res, "step_snapshots", {}),
-                    "anomaly_summary": res.get("anomaly_summary") if isinstance(res, dict) else getattr(res, "anomaly_summary", None),
-                    "forecasting_summary": res.get("forecasting_summary") if isinstance(res, dict) else getattr(res, "forecasting_summary", None),
-                    "governance_summary": res.get("governance_summary") if isinstance(res, dict) else getattr(res, "governance_summary", None),
-                    "inference_schema": res.get("inference_schema") if isinstance(res, dict) else getattr(res, "inference_schema", None),
-                }
-                return jsonable_encoder(norm_job)
 
     # 4. If updating an existing workflow, preserve existing last_execution
     if existing_wf and existing_wf.last_execution:
@@ -492,8 +498,8 @@ async def save_workflow(
                 logs=resolved_last_exec.get("execution_logs") or resolved_last_exec.get("logs"),
                 run_label=None
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.exception(f"Failed to record workflow execution history on save: {e}")
 
     await db.refresh(wf)
     return wf
@@ -766,8 +772,8 @@ async def upsert_workflow(
                 logs=resolved_last_exec.get("execution_logs") or resolved_last_exec.get("logs"),
                 run_label=None
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.exception(f"Failed to record workflow execution history on upsert: {e}")
 
     await db.refresh(wf)
     return wf
@@ -1073,10 +1079,14 @@ async def execute_workflow(
     except Exception:
         pass
 
-    if auto_save and target_id:
+    # When workflow exists in DB, always persist execution run to history and update wf.last_execution
+    if target_id:
         res_wf = await db.execute(select(Workflow).where(Workflow.id == target_id))
         wf_rec = res_wf.scalar_one_or_none()
         if wf_rec:
+            exec_nodes_payload, exec_edges_payload, exec_node_configs = (
+                workflow_graph_to_db_payload(workflow)
+            )
             wf_rec.last_execution = jsonable_encoder({
                 "execution_id": result.execution_id,
                 "status": result.status,
@@ -1100,9 +1110,9 @@ async def execute_workflow(
                     execution_id=result.execution_id,
                     status_str=result.status,
                     total_duration_ms=result.total_duration_ms or 0.0,
-                    nodes=wf_rec.nodes or [],
-                    edges=wf_rec.edges or [],
-                    node_configs=wf_rec.node_configs or {},
+                    nodes=exec_nodes_payload,
+                    edges=exec_edges_payload,
+                    node_configs=exec_node_configs,
                     metrics=result.final_metrics,
                     reports={
                         "anomaly_summary": result.anomaly_summary,
@@ -1113,10 +1123,10 @@ async def execute_workflow(
                     },
                     step_snapshots=result.step_snapshots,
                     logs=result.logs,
-                    run_label=workflow_name or getattr(workflow, "name", None) or wf_rec.name
+                    run_label=None
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.exception(f"Failed to record execution history for workflow {target_id}: {e}")
     return result
 
 
@@ -1183,47 +1193,50 @@ async def execute_workflow_by_id(
     except Exception:
         pass
 
-    if auto_save:
-        wf.last_execution = jsonable_encoder({
-            "execution_id": exec_result.execution_id,
-            "status": exec_result.status,
-            "total_duration_ms": exec_result.total_duration_ms,
-            "final_metrics": exec_result.final_metrics,
-            "anomaly_summary": exec_result.anomaly_summary,
-            "forecasting_summary": exec_result.forecasting_summary,
-            "governance_summary": exec_result.governance_summary,
-            "node_results": exec_result.node_results,
-            "execution_logs": exec_result.logs,
-            "step_snapshots": exec_result.step_snapshots,
-            "inference_schema": getattr(exec_result, "inference_schema", None),
-        })
-        await db.commit()
+    # Always persist execution run to history and update wf.last_execution
+    exec_nodes_payload, exec_edges_payload, exec_node_configs = (
+        workflow_graph_to_db_payload(graph_to_execute)
+    )
+    wf.last_execution = jsonable_encoder({
+        "execution_id": exec_result.execution_id,
+        "status": exec_result.status,
+        "total_duration_ms": exec_result.total_duration_ms,
+        "final_metrics": exec_result.final_metrics,
+        "anomaly_summary": exec_result.anomaly_summary,
+        "forecasting_summary": exec_result.forecasting_summary,
+        "governance_summary": exec_result.governance_summary,
+        "node_results": exec_result.node_results,
+        "execution_logs": exec_result.logs,
+        "step_snapshots": exec_result.step_snapshots,
+        "inference_schema": getattr(exec_result, "inference_schema", None),
+    })
+    await db.commit()
 
-        # Record immutable history snapshot
-        try:
-            await record_workflow_execution_history(
-                db=db,
-                workflow_id=workflow_id,
-                execution_id=exec_result.execution_id,
-                status_str=exec_result.status,
-                total_duration_ms=exec_result.total_duration_ms or 0.0,
-                nodes=wf.nodes or [],
-                edges=wf.edges or [],
-                node_configs=wf.node_configs or {},
-                metrics=exec_result.final_metrics,
-                reports={
-                    "anomaly_summary": exec_result.anomaly_summary,
-                    "forecasting_summary": exec_result.forecasting_summary,
-                    "governance_summary": exec_result.governance_summary,
-                    "node_results": exec_result.node_results,
-                    "inference_schema": getattr(exec_result, "inference_schema", None),
-                },
-                step_snapshots=exec_result.step_snapshots,
-                logs=exec_result.logs,
-                run_label=wf.name
-            )
-        except Exception:
-            pass
+    # Record immutable history snapshot
+    try:
+        await record_workflow_execution_history(
+            db=db,
+            workflow_id=workflow_id,
+            execution_id=exec_result.execution_id,
+            status_str=exec_result.status,
+            total_duration_ms=exec_result.total_duration_ms or 0.0,
+            nodes=exec_nodes_payload,
+            edges=exec_edges_payload,
+            node_configs=exec_node_configs,
+            metrics=exec_result.final_metrics,
+            reports={
+                "anomaly_summary": exec_result.anomaly_summary,
+                "forecasting_summary": exec_result.forecasting_summary,
+                "governance_summary": exec_result.governance_summary,
+                "node_results": exec_result.node_results,
+                "inference_schema": getattr(exec_result, "inference_schema", None),
+            },
+            step_snapshots=exec_result.step_snapshots,
+            logs=exec_result.logs,
+            run_label=None
+        )
+    except Exception as e:
+        logger.exception(f"Failed to record execution history for workflow {workflow_id}: {e}")
 
     return exec_result
 
