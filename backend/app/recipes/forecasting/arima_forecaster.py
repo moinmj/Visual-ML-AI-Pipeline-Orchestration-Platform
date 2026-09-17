@@ -1,7 +1,11 @@
+import logging
 import pandas as pd
 import numpy as np
 from typing import Dict, Any, List, Optional
 from backend.app.recipes.base.recipe import BaseRecipe
+from backend.app.recipes.forecasting.panel_utils import prepare_univariate_panel_series, PANEL_CONFIG_PROPERTIES
+
+logger = logging.getLogger(__name__)
 
 try:
     from statsmodels.tsa.arima.model import ARIMA
@@ -13,66 +17,68 @@ except ImportError:
 class ARIMAForecasterRecipe(BaseRecipe):
     recipe_id = "arima_forecaster"
     name = "ARIMA Statistical Forecaster"
-    version = "1.1.0"
+    version = "1.2.0"
     category = "forecasting"
-    description = "Classical ARIMA for statistical time-series forecasting with chronological out-of-sample backtesting (Tier-1 Baseline)."
+    description = "Classical ARIMA for statistical time-series forecasting with multi-entity panel data handling and out-of-sample backtesting."
     input_types = ["dataframe"]
     output_types = ["forecast", "metrics", "model"]
 
     def get_schema(self) -> Dict[str, Any]:
+        props = {
+            "date_column": {
+                "type": "string",
+                "title": "Date Column",
+                "description": "Timestamp column."
+            },
+            "target_column": {
+                "type": "string",
+                "title": "Target Metric (Y)",
+                "description": "The time-series value to model."
+            },
+            "p": {
+                "type": "integer",
+                "title": "AR Order (p)",
+                "default": 1,
+                "minimum": 0,
+                "maximum": 10,
+                "description": "Auto-regressive lag order."
+            },
+            "d": {
+                "type": "integer",
+                "title": "Differencing Order (d)",
+                "default": 1,
+                "minimum": 0,
+                "maximum": 2,
+                "description": "Degree of differencing for stationarity."
+            },
+            "q": {
+                "type": "integer",
+                "title": "MA Order (q)",
+                "default": 1,
+                "minimum": 0,
+                "maximum": 10,
+                "description": "Moving average window order."
+            },
+            "horizon_periods": {
+                "type": "integer",
+                "title": "Forecast Horizon (Steps ahead)",
+                "default": 14,
+                "minimum": 1,
+                "maximum": 365
+            },
+            "test_size_pct": {
+                "type": "number",
+                "title": "Holdout Test Size (%)",
+                "default": 0.2,
+                "minimum": 0.05,
+                "maximum": 0.4,
+                "description": "Fraction of chronologically latest observations to hold out for out-of-sample evaluation."
+            }
+        }
+        props.update(PANEL_CONFIG_PROPERTIES)
         return {
             "type": "object",
-            "properties": {
-                "date_column": {
-                    "type": "string",
-                    "title": "Date Column",
-                    "description": "Timestamp column."
-                },
-                "target_column": {
-                    "type": "string",
-                    "title": "Target Metric (Y)",
-                    "description": "The time-series value to model."
-                },
-                "p": {
-                    "type": "integer",
-                    "title": "AR Order (p)",
-                    "default": 1,
-                    "minimum": 0,
-                    "maximum": 10,
-                    "description": "Auto-regressive lag order."
-                },
-                "d": {
-                    "type": "integer",
-                    "title": "Differencing Order (d)",
-                    "default": 1,
-                    "minimum": 0,
-                    "maximum": 2,
-                    "description": "Degree of differencing for stationarity."
-                },
-                "q": {
-                    "type": "integer",
-                    "title": "MA Order (q)",
-                    "default": 1,
-                    "minimum": 0,
-                    "maximum": 10,
-                    "description": "Moving average window order."
-                },
-                "horizon_periods": {
-                    "type": "integer",
-                    "title": "Forecast Horizon (Steps ahead)",
-                    "default": 14,
-                    "minimum": 1,
-                    "maximum": 365
-                },
-                "test_size_pct": {
-                    "type": "number",
-                    "title": "Holdout Test Size (%)",
-                    "default": 0.2,
-                    "minimum": 0.05,
-                    "maximum": 0.4,
-                    "description": "Fraction of chronologically latest observations to hold out for out-of-sample evaluation."
-                }
-            },
+            "properties": props,
             "required": ["target_column"]
         }
 
@@ -174,10 +180,14 @@ class ARIMAForecasterRecipe(BaseRecipe):
         horizon = int(config.get("horizon_periods", 14))
         test_size_pct = float(config.get("test_size_pct", 0.2))
 
-        ts_df = pd.DataFrame({
-            "ds": valid_ds,
-            "y": pd.to_numeric(df[target_col], errors="coerce")
-        }).dropna().sort_values(by="ds").reset_index(drop=True)
+        # Build clean chronologically sorted dataframe for ARIMA with Panel Data Intelligence
+        ts_df, panel_meta = prepare_univariate_panel_series(
+            df=df,
+            valid_ds=valid_ds,
+            target_col=target_col,
+            config=config,
+            log=logger
+        )
 
         min_obs = p + d + q + 3
         if len(ts_df) < min_obs:
@@ -198,45 +208,30 @@ class ARIMAForecasterRecipe(BaseRecipe):
         test_series  = ts_df["y"].values[split_idx:]
 
         if len(test_series) < 2:
+            # Dataset too small for a meaningful holdout — fall back gracefully
             train_series = ts_df["y"].values
             test_series  = ts_df["y"].values
-            eval_type    = "in_sample_fallback"
+            eval_type = "in_sample_fallback"
 
-        # --- Phase 1: Fit on training slice, forecast test horizon ---
-        try:
-            eval_arima        = ARIMA(train_series, order=(p, d, q))
-            eval_fitted        = eval_arima.fit()
-            oos_forecast_res   = eval_fitted.get_forecast(steps=len(test_series))
-            oos_preds          = oos_forecast_res.predicted_mean
+        # --- Phase 1: Fit on training slice, evaluate on held-out test ---
+        eval_arima   = ARIMA(train_series, order=(p, d, q))
+        eval_fitted  = eval_arima.fit()
+        oos_preds    = eval_fitted.forecast(steps=len(test_series))
+        oos_actuals  = test_series
 
-            oos_actuals = test_series
-            mae  = float(round(np.mean(np.abs(oos_actuals - oos_preds)), 4))
-            rmse = float(round(np.sqrt(np.mean((oos_actuals - oos_preds) ** 2)), 4))
+        mae  = float(round(np.mean(np.abs(oos_actuals - oos_preds)), 4))
+        rmse = float(round(np.sqrt(np.mean((oos_actuals - oos_preds) ** 2)), 4))
 
-            non_zero = oos_actuals != 0
-            if np.any(non_zero):
-                mape = float(round(
-                    np.mean(np.abs((oos_actuals[non_zero] - oos_preds[non_zero]) / oos_actuals[non_zero])) * 100,
-                    2
-                ))
-            else:
-                mape = 0.0
-        except Exception:
-            # Graceful fallback — in-sample residuals if OOS fitting fails
-            eval_type   = "in_sample_fallback"
-            eval_arima  = ARIMA(ts_df["y"].values, order=(p, d, q))
-            eval_fitted  = eval_arima.fit()
-            fv           = eval_fitted.fittedvalues
-            oos_actuals  = ts_df["y"].values[d:]
-            oos_preds    = fv[d:]
-            mae          = float(round(np.mean(np.abs(oos_actuals - oos_preds)), 4))
-            rmse         = float(round(np.sqrt(np.mean((oos_actuals - oos_preds) ** 2)), 4))
-            non_zero     = oos_actuals != 0
-            mape         = float(round(np.mean(np.abs(
-                (oos_actuals[non_zero] - oos_preds[non_zero]) / oos_actuals[non_zero]
-            )) * 100, 2)) if np.any(non_zero) else 0.0
+        non_zero_mask = oos_actuals != 0
+        if np.any(non_zero_mask):
+            mape = float(round(
+                np.mean(np.abs((oos_actuals[non_zero_mask] - oos_preds[non_zero_mask]) / oos_actuals[non_zero_mask])) * 100,
+                2
+            ))
+        else:
+            mape = 0.0
 
-        # --- Phase 2: Refit on FULL dataset for production forecast ---
+        # --- Phase 2: Refit on FULL data for the production forecast ---
         full_arima   = ARIMA(ts_df["y"].values, order=(p, d, q))
         fitted_model = full_arima.fit()
 
@@ -264,6 +259,12 @@ class ARIMAForecasterRecipe(BaseRecipe):
             "forecast_horizon":   horizon,
             "trend_direction":    "Upward" if float(future_means[-1]) >= float(ts_df["y"].iloc[-1]) else "Downward",
             "horizon_periods":    horizon,
+            # ── Panel / Multi-Entity Metadata ──
+            "panel_data_detected":    panel_meta.get("panel_data_detected", False),
+            "panel_strategy_applied": panel_meta.get("panel_strategy_applied", "single_series"),
+            "panel_summary_info":     panel_meta.get("panel_summary_info"),
+            "group_by_column":        panel_meta.get("group_by_column"),
+            "entity_value":           panel_meta.get("entity_value"),
             # ── True out-of-sample accuracy metrics ──
             "mae":                mae,
             "rmse":               rmse,
