@@ -394,4 +394,50 @@ def test_flat_tree_extrapolation_and_prediction_labels():
     assert proj_res.projected_end_value == traj[-1]["yhat"]
 
 
+def test_string_typed_inputs_xgboost_compatibility():
+    """
+    Verify that when inputs contain strings (e.g. from JSON payloads or HTML form inputs),
+    _preprocess_inputs coerces them into valid numeric dtypes, preventing the XGBoost error:
+    'DataFrame.dtypes for data must be int, float, bool or category. Invalid columns:Store: object'
+    """
+    class StrictDtypeModel:
+        def predict(self, X):
+            # Mirror XGBoost's strict dtype check
+            for col in X.columns:
+                if X[col].dtype == "object":
+                    raise ValueError(f"DataFrame.dtypes for data must be int, float, bool or category. Invalid columns:{col}: object")
+            return np.array([550000.0])
+
+    bundle = {
+        "execution_id": "test_xgboost_strict_exec",
+        "task_type": "regression",
+        "model": StrictDtypeModel(),
+        "target_column": "Weekly_Sales",
+        "feature_names": ["Store", "Temperature", "Fuel_Price", "CPI"],
+        "training_feature_summary": {
+            "Store": {"data_type": "numeric", "min_value": 0.0, "max_value": 44.0, "default_value": 22.0},
+            "Temperature": {"data_type": "numeric", "min_value": 30.0, "max_value": 100.0, "default_value": 70.0},
+            "Fuel_Price": {"data_type": "numeric", "min_value": 2.0, "max_value": 5.0, "default_value": 3.5},
+            "CPI": {"data_type": "numeric", "min_value": 100.0, "max_value": 250.0, "default_value": 180.0}
+        },
+        "sample_row": {"Store": 22.0, "Temperature": 70.0, "Fuel_Price": 3.5, "CPI": 180.0}
+    }
+
+    # Simulate raw JSON payload where all numeric inputs are strings
+    string_inputs = {
+        "Store": "22",
+        "Temperature": "72.9",
+        "Fuel_Price": "3.73",
+        "CPI": "191.01"
+    }
+
+    req = PredictionRequest(inputs=string_inputs)
+    res = PipelineInferencer.predict(bundle=bundle, request=req)
+
+    assert res.status == "SUCCESS"
+    assert res.prediction == 550000.0
+    assert res.prediction_label == "Predicted Weekly_Sales"
+
+
+
 

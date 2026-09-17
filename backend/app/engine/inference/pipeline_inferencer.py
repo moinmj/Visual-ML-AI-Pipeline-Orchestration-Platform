@@ -232,6 +232,23 @@ class PipelineInferencer:
         """
         df = raw_df.copy()
         feature_names = bundle.get("feature_names", [])
+        features_summary = bundle.get("training_feature_summary", {})
+
+        # 0. Coerce numeric strings to actual numeric types from raw input JSON/form payloads
+        for col in df.columns:
+            f_info = features_summary.get(col, {})
+            if f_info.get("data_type") == "numeric" or df[col].dtype == "object":
+                try:
+                    num_col = pd.to_numeric(df[col], errors="coerce")
+                    if num_col.notna().any() or f_info.get("data_type") == "numeric":
+                        def_v = f_info.get("default_value", 0.0)
+                        try:
+                            def_num = float(def_v)
+                        except (ValueError, TypeError):
+                            def_num = 0.0
+                        df[col] = num_col.fillna(def_num)
+                except Exception:
+                    pass
 
         # 1. Missing Value Imputation using recorded training stats
         imputer_stats = bundle.get("imputer_stats", {})
@@ -301,8 +318,25 @@ class PipelineInferencer:
         if feature_names:
             for col in feature_names:
                 if col not in df.columns:
-                    df[col] = 0.0
+                    f_info = features_summary.get(col, {})
+                    def_v = f_info.get("default_value", 0.0)
+                    try:
+                        def_num = float(def_v)
+                    except (ValueError, TypeError):
+                        def_num = 0.0
+                    df[col] = def_num
             df = df[feature_names]
+
+        # 6. Final Type Sanitization: Prevent raw 'object' dtypes from reaching XGBoost/tree models
+        for col in df.columns:
+            if df[col].dtype == "object":
+                f_info = features_summary.get(col, {})
+                def_v = f_info.get("default_value", 0.0)
+                try:
+                    def_num = float(def_v)
+                except (ValueError, TypeError):
+                    def_num = 0.0
+                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(def_num)
 
         return df
 
