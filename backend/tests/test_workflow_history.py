@@ -503,5 +503,136 @@ async def test_multiple_runs_without_autosave_persisted_to_history():
         assert hist_final[0]["id"] == exec3_id
 
 
+@pytest.mark.asyncio
+async def test_ai_recommended_pipeline_preserves_workbook_and_creates_version_2():
+    """
+    Verifies that when a user works on an existing workbook (Version 1),
+    uses the AI Recommender to synthesize a new DAG, executes it, and saves it:
+    1. It does NOT rename the workbook (e.g. to 'AI Recommended Pipeline').
+    2. It does NOT create a separate new workbook (same workflow_id).
+    3. It increments the history and creates Run #2 (Version 2).
+    """
+    await init_db()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test", headers=auth_headers()) as client:
+        # 1. Upload sample dataset
+        csv_bytes = b"feat1,feat2,target\n1.0,2.0,1\n2.0,3.0,0\n3.0,4.0,1\n4.0,5.0,0\n5.0,6.0,1\n6.0,7.0,0\n"
+        files = {"file": ("recommender_test.csv", csv_bytes, "text/csv")}
+        up_resp = await client.post("/api/v1/datasets/upload", files=files, data={"name": "Recommender Test Data"})
+        assert up_resp.status_code == 201
+        dataset_id = up_resp.json()["id"]
+
+        wf_id = f"wf_rec_{uuid.uuid4().hex[:8]}"
+        custom_name = "Customer Retention Model"
+
+        # 2. Initial workbook setup and first execution (Run #1 / Version 1)
+        initial_dag = {
+            "id": wf_id,
+            "name": custom_name,
+            "dataset_id": dataset_id,
+            "nodes": [
+                {"id": "n_csv", "recipe_id": "csv_loader", "config": {"dataset_id": dataset_id}},
+                {"id": "n_split", "recipe_id": "train_test_split", "config": {"target_column": "target", "test_size": 0.33, "random_state": 42}},
+                {"id": "n_model", "recipe_id": "random_forest_trainer", "config": {"target_column": "target", "n_estimators": 5}},
+                {"id": "n_eval", "recipe_id": "model_evaluator", "config": {}}
+            ],
+            "edges": [
+                {"source": "n_csv", "target": "n_split"},
+                {"source": "n_split", "target": "n_model"},
+                {"source": "n_split", "target": "n_eval"},
+                {"source": "n_model", "target": "n_eval"}
+            ],
+            "node_configs": {}
+        }
+        create_resp = await client.post("/api/v1/workflows/", json=initial_dag)
+        assert create_resp.status_code == 201
+        assert create_resp.json()["name"] == custom_name
+
+        # Execute Run #1
+        exec1_resp = await client.post(f"/api/v1/workflows/{wf_id}/execute", json=None)
+        assert exec1_resp.status_code == 200
+        exec1_id = exec1_resp.json()["execution_id"]
+
+        # Verify Run #1 history
+        hist1_resp = await client.get(f"/api/v1/workflows/{wf_id}/history")
+        assert hist1_resp.status_code == 200
+        hist1 = hist1_resp.json()
+        assert len(hist1) == 1
+        assert hist1[0]["version_number"] == 1
+        assert hist1[0]["id"] == exec1_id
+        assert hist1[0]["run_label"] == "Run #1"
+
+        # 3. Call AI Recommender passing the existing workflow_id
+        rec_resp = await client.post("/api/v1/recommend/pipeline", json={
+            "dataset_id": dataset_id,
+            "workflow_id": wf_id,
+            "target_column": "target",
+            "task_type": "classification"
+        })
+        assert rec_resp.status_code == 200
+        rec_data = rec_resp.json()
+
+        # Recommender must preserve workflow identity
+        assert rec_data.get("workflow_id") == wf_id
+        assert rec_data.get("workflow_name") == custom_name
+        rec_dag = rec_data.get("recommended_dag", {})
+        assert rec_dag.get("workflow_id") == wf_id
+        assert rec_dag.get("name") == custom_name
+
+        # 4. Execute the AI Recommended DAG with auto_save or on the existing workflow
+        exec_rec_resp = await client.post(
+            f"/api/v1/workflows/execute?workflow_id={wf_id}",
+            json={
+                "id": wf_id,
+                "name": "AI Recommended Pipeline",  # Client or generic name passed
+                "nodes": rec_dag["nodes"],
+                "edges": rec_dag["edges"]
+            }
+        )
+        assert exec_rec_resp.status_code == 200
+        exec2_id = exec_rec_resp.json()["execution_id"]
+
+        # 5. User clicks Save Workbook
+        save_resp = await client.post("/api/v1/workflows/", json={
+            "id": wf_id,
+            "name": "AI Recommended Pipeline",  # Generic recommender placeholder
+            "dataset_id": dataset_id,
+            "nodes": rec_dag["nodes"],
+            "edges": rec_dag["edges"],
+            "node_configs": rec_dag.get("node_configs", {}),
+            "execution_id": exec2_id
+        })
+        assert save_resp.status_code == 201
+        saved_wf = save_resp.json()
+
+        # MUST NOT RENAME THE WORKBOOK!
+        assert saved_wf["id"] == wf_id
+        assert saved_wf["name"] == custom_name, f"Expected '{custom_name}', but got '{saved_wf['name']}'"
+
+        # 6. Verify total workflows in database: MUST STILL BE 1 (No duplicate workbook created!)
+        list_resp = await client.get("/api/v1/workflows/")
+        assert list_resp.status_code == 200
+        items = list_resp.json().get("data") or list_resp.json().get("items") or []
+        matching_wfs = [w for w in items if w["id"] == wf_id]
+        assert len(matching_wfs) == 1
+        # No extra workbooks titled 'AI Recommended Pipeline' created
+        generic_wfs = [w for w in items if w["name"] == "AI Recommended Pipeline"]
+        assert len(generic_wfs) == 0
+
+        # 7. Verify version history: MUST HAVE RUN #2 (Version 2) AND RUN #1 (Version 1)
+        hist2_resp = await client.get(f"/api/v1/workflows/{wf_id}/history")
+        assert hist2_resp.status_code == 200
+        hist2 = hist2_resp.json()
+        assert len(hist2) == 2, f"Expected 2 versions in history, got {len(hist2)}: {hist2}"
+        assert hist2[0]["version_number"] == 2
+        assert hist2[0]["id"] == exec2_id
+        assert hist2[0]["run_label"] == "Run #2"
+
+        assert hist2[1]["version_number"] == 1
+        assert hist2[1]["id"] == exec1_id
+        assert hist2[1]["run_label"] == "Run #1"
+
+
+
 
 

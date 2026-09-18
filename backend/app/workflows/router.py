@@ -234,6 +234,30 @@ BULKY_METRIC_KEYS = {
 }
 
 
+GENERIC_WORKBOOK_NAMES = {
+    "untitled pipeline",
+    "untitled workbook",
+    "my ml pipeline workbook",
+    "auto-saved pipeline",
+    "ai recommended pipeline",
+    "ai auto-architect pipeline",
+    "saved workflow",
+    "new pipeline",
+}
+
+
+def is_generic_workbook_name(name: Optional[str]) -> bool:
+    """Checks if a given pipeline name is a generic template/recommender placeholder."""
+    if not name:
+        return True
+    s = str(name).strip().lower()
+    if s in GENERIC_WORKBOOK_NAMES:
+        return True
+    if any(s.startswith(prefix) for prefix in ["ai recommended", "auto-saved pipeline", "untitled"]):
+        return True
+    return False
+
+
 def normalize_history_status(status_str: Optional[str]) -> str:
     """Normalizes status strings to standard 'SUCCESS', 'FAILED', or 'UNRUN'."""
     if not status_str:
@@ -412,7 +436,21 @@ async def save_workflow(
     Save / create / upsert a pipeline workbook with exact node configs, parameters, layout, and edges.
     Seamlessly captures and persists execution reports (last_execution) across new and updated workbooks.
     """
-    target_id = payload.id or str(uuid.uuid4())
+    target_id = payload.id
+    if not target_id:
+        exec_id_candidate = payload.execution_id or (
+            payload.last_execution.get("execution_id")
+            if isinstance(payload.last_execution, dict)
+            else None
+        )
+        if exec_id_candidate:
+            hist_q = select(WorkflowExecution).where(WorkflowExecution.id == exec_id_candidate)
+            hist_res = await db.execute(hist_q)
+            hist_row = hist_res.scalar_one_or_none()
+            if hist_row and hist_row.workflow_id:
+                target_id = hist_row.workflow_id
+
+    target_id = target_id or str(uuid.uuid4())
     result = await db.execute(select(Workflow).where(Workflow.id == target_id))
     wf = result.scalar_one_or_none()
 
@@ -434,8 +472,8 @@ async def save_workflow(
     )
 
     if wf:
-        # Update existing
-        if payload.name:
+        # Update existing - protect custom name from being overwritten by generic recommender placeholders
+        if payload.name and not (is_generic_workbook_name(payload.name) and not is_generic_workbook_name(wf.name)):
             wf.name = payload.name
         if payload.description is not None:
             wf.description = payload.description
@@ -708,8 +746,8 @@ async def upsert_workflow(
     )
 
     if wf:
-        # Update existing
-        if payload.name:
+        # Update existing - protect custom name from being overwritten by generic recommender placeholders
+        if payload.name and not (is_generic_workbook_name(payload.name) and not is_generic_workbook_name(wf.name)):
             wf.name = payload.name
         if payload.description is not None:
             wf.description = payload.description
@@ -1037,8 +1075,9 @@ async def execute_workflow(
         result = await db.execute(select(Workflow).where(Workflow.id == target_id))
         wf = result.scalar_one_or_none()
         if wf:
-            if workflow_name or workflow.name:
-                wf.name = workflow_name or workflow.name
+            incoming_name = workflow_name or workflow.name
+            if incoming_name and not (is_generic_workbook_name(incoming_name) and not is_generic_workbook_name(wf.name)):
+                wf.name = incoming_name
             if ds_id is not None:
                 wf.dataset_id = ds_id
             if ds_name is not None:
