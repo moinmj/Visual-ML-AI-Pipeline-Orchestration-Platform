@@ -105,6 +105,12 @@ class LightGBMTrainerRecipe(BaseRecipe):
                     "minimum": 1,
                     "maximum": 200
                 },
+                "linear_tree": {
+                    "type": "boolean",
+                    "title": "Linear Trees (extrapolation-friendly)",
+                    "default": False,
+                    "description": "Fits a linear model in each leaf instead of a constant. Recommended when the model will predict future periods beyond the training range (e.g. future years), since standard trees plateau past the highest split they learned, while linear_tree keeps extrapolating sensibly."
+                },
                 "random_state": {
                     "type": "integer",
                     "title": "Random Seed",
@@ -142,6 +148,7 @@ class LightGBMTrainerRecipe(BaseRecipe):
         scale_pos_weight = float(config.get("scale_pos_weight", 1.0))
         min_child_samples = int(config.get("min_child_samples", 20))
         random_state = int(config.get("random_state", 42))
+        linear_tree = bool(config.get("linear_tree", False))
 
         if task_type == "classification":
             from sklearn.preprocessing import LabelEncoder
@@ -169,6 +176,7 @@ class LightGBMTrainerRecipe(BaseRecipe):
                 "reg_lambda": reg_lambda,
                 "min_child_samples": min_child_samples,
                 "random_state": random_state,
+                "linear_tree": linear_tree,
                 "verbose": -1
             }
             if n_classes <= 2 and scale_pos_weight != 1.0:
@@ -188,10 +196,20 @@ class LightGBMTrainerRecipe(BaseRecipe):
                 reg_lambda=reg_lambda,
                 min_child_samples=min_child_samples,
                 random_state=random_state,
+                linear_tree=linear_tree,
                 verbose=-1
             )
 
-        model.fit(X_train, y_train)
+        try:
+            model.fit(X_train, y_train)
+        except Exception as e:
+            if linear_tree:
+                from backend.app.core.logging import logger as _logger
+                _logger.warning(f"LightGBM linear_tree training failed ({str(e)}); retrying with linear_tree disabled.")
+                model.set_params(linear_tree=False)
+                model.fit(X_train, y_train)
+            else:
+                raise
 
         feature_names = list(X_train.columns)
         importances = {}

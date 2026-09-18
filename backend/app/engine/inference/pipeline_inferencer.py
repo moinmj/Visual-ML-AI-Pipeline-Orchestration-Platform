@@ -46,7 +46,7 @@ class PipelineInferencer:
                 parsed_nl = cls._parse_natural_language_query(bundle, nl_query)
                 overrides = parsed_nl.get("feature_overrides", {})
                 inferred_inputs = overrides
-                base_inputs = dict(bundle.get("sample_row", {}))
+                base_inputs = dict(bundle.get("last_historical_row") or bundle.get("sample_row", {}))
                 base_inputs.update(overrides)
                 request.inputs = base_inputs
 
@@ -144,13 +144,16 @@ class PipelineInferencer:
                             unrecognized_features.append(w)
 
             if (request.future_periods or request.target_year) and temporal_col and task_type in ["regression", "classification"]:
-                inputs_dict = request.inputs if isinstance(request.inputs, dict) else dict(bundle.get("sample_row", {}))
+                inputs_dict = dict(bundle.get("last_historical_row") or bundle.get("sample_row", {}))
+                if isinstance(request.inputs, dict):
+                    inputs_dict.update(request.inputs)
                 res = cls._predict_tabular_future_projection(
                     bundle=bundle,
                     base_inputs=inputs_dict,
                     temporal_col=temporal_col,
                     future_periods=request.future_periods or 5,
-                    target_year=request.target_year
+                    target_year=request.target_year,
+                    future_feature_overrides=request.future_feature_overrides
                 )
                 if nl_query:
                     res.ai_explanation = cls._generate_ai_explanation(
@@ -200,7 +203,9 @@ class PipelineInferencer:
                 return res
 
             # 6. SINGLE-RECORD TABULAR CLASSIFICATION / REGRESSION
-            inputs_dict = request.inputs if isinstance(request.inputs, dict) else (bundle.get("sample_row", {}) or {})
+            inputs_dict = dict(bundle.get("last_historical_row") or bundle.get("sample_row", {}) or {})
+            if isinstance(request.inputs, dict):
+                inputs_dict.update(request.inputs)
             res = cls._predict_tabular_single(bundle, inputs_dict)
             if nl_query:
                 res.ai_explanation = cls._generate_ai_explanation(
@@ -235,23 +240,6 @@ class PipelineInferencer:
         """
         df = raw_df.copy()
         feature_names = bundle.get("feature_names", [])
-        features_summary = bundle.get("training_feature_summary", {})
-
-        # 0. Coerce numeric strings to actual numeric types from raw input JSON/form payloads
-        for col in df.columns:
-            f_info = features_summary.get(col, {})
-            if f_info.get("data_type") == "numeric" or df[col].dtype == "object":
-                try:
-                    num_col = pd.to_numeric(df[col], errors="coerce")
-                    if num_col.notna().any() or f_info.get("data_type") == "numeric":
-                        def_v = f_info.get("default_value", 0.0)
-                        try:
-                            def_num = float(def_v)
-                        except (ValueError, TypeError):
-                            def_num = 0.0
-                        df[col] = num_col.fillna(def_num)
-                except Exception:
-                    pass
 
         # 1. Missing Value Imputation using recorded training stats
         imputer_stats = bundle.get("imputer_stats", {})
@@ -321,25 +309,8 @@ class PipelineInferencer:
         if feature_names:
             for col in feature_names:
                 if col not in df.columns:
-                    f_info = features_summary.get(col, {})
-                    def_v = f_info.get("default_value", 0.0)
-                    try:
-                        def_num = float(def_v)
-                    except (ValueError, TypeError):
-                        def_num = 0.0
-                    df[col] = def_num
+                    df[col] = 0.0
             df = df[feature_names]
-
-        # 6. Final Type Sanitization: Prevent raw 'object' dtypes from reaching XGBoost/tree models
-        for col in df.columns:
-            if df[col].dtype == "object":
-                f_info = features_summary.get(col, {})
-                def_v = f_info.get("default_value", 0.0)
-                try:
-                    def_num = float(def_v)
-                except (ValueError, TypeError):
-                    def_num = 0.0
-                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(def_num)
 
         return df
 
@@ -440,6 +411,7 @@ class PipelineInferencer:
                 confidence=confidence,
                 probabilities=probs_dict,
                 features_used=list(X.columns),
+                inputs_used=dict(inputs),
                 base_value=waterfall_meta.get("base_value"),
                 base_value_formatted=waterfall_meta.get("base_value_formatted"),
                 waterfall_breakdown=waterfall_meta.get("waterfall_breakdown"),
@@ -478,6 +450,7 @@ class PipelineInferencer:
             prediction_label=pred_label,
             prediction_raw=float(round(raw_val, 4)),
             features_used=list(X.columns),
+            inputs_used=dict(inputs),
             base_value=waterfall_meta.get("base_value"),
             base_value_formatted=waterfall_meta.get("base_value_formatted"),
             waterfall_breakdown=waterfall_meta.get("waterfall_breakdown"),
@@ -915,7 +888,8 @@ class PipelineInferencer:
         base_inputs: Dict[str, Any],
         temporal_col: str,
         future_periods: int,
-        target_year: Optional[int] = None
+        target_year: Optional[int] = None,
+        future_feature_overrides: Optional[Dict[str, Dict[str, Any]]] = None
     ) -> PredictionResponse:
         model = bundle.get("model")
         if model is None:
@@ -923,6 +897,7 @@ class PipelineInferencer:
 
         exec_id = bundle.get("execution_id", "unknown")
         task_type = bundle.get("task_type", "regression")
+        future_feature_overrides = future_feature_overrides or {}    
 
         # Determine starting point for the temporal feature
         current_val = base_inputs.get(temporal_col)
@@ -944,20 +919,75 @@ class PipelineInferencer:
         trajectory = []
         step_val = current_val
 
-        # Include starting baseline point
+        # Per-feature empirical drift computed at training time (see executor.py). Only
+        # continuous, high-cardinality numeric drivers get a trend — flags/IDs/calendar
+        # sub-fields (month, day, dayofweek...) are intentionally absent from this map and
+        # stay frozen at exactly what the caller supplied, for every future step.
+        feature_trends: Dict[str, Dict[str, float]] = bundle.get("feature_trends") or {}
+        feature_trend_basis: Dict[str, Any] = {}
+        for col in base_inputs.keys():
+            if col == temporal_col:
+                continue
+            if col in feature_trends:
+                feature_trend_basis[col] = {
+                    "source": "projected_from_history",
+                    "slope_per_unit_time": feature_trends[col].get("slope_per_unit_time"),
+                    "pct_per_unit_time": feature_trends[col].get("pct_per_unit_time"),
+                }
+            else:
+                feature_trend_basis[col] = {"source": "frozen_at_input"}
+
+        # Include starting baseline point — this is an exact echo of whatever the caller
+        # supplied, never adjusted. The caller's explicit values are always the anchor.
         X_start = cls._preprocess_inputs(bundle, pd.DataFrame([base_inputs]))
         raw_start = float(model.predict(X_start)[0])
         start_pred = float(round(cls._inverse_transform_target(bundle, raw_start), 4))
         trajectory.append({
             "ds": str(int(step_val) if step_val.is_integer() else round(step_val, 1)),
             "yhat": start_pred,
-            "period_step": 0
+            "period_step": 0,
+            "features": dict(base_inputs)
         })
 
+        training_feature_summary = bundle.get("training_feature_summary", {})
         for i in range(1, steps_count + 1):
             step_val += step_size
             curr_row = dict(base_inputs)
             curr_row[temporal_col] = int(step_val) if step_val.is_integer() else step_val
+
+            # Evolve every feature that has a known historical drift forward from the
+            # caller's own base-year value for that feature (not from the training set's
+            # mean), so an explicit override you typed in is always respected as the anchor
+            # and the trend continues from there.
+            for col, trend_info in feature_trends.items():
+                if col not in curr_row:
+                    continue
+                try:
+                    base_feature_val = float(base_inputs.get(col))
+                except (TypeError, ValueError):
+                    continue
+                slope = float(trend_info.get("slope_per_unit_time", 0.0))
+                projected_val = base_feature_val + slope * (step_val - current_val)
+
+                # Clamp to a tolerance band around the training range so a long horizon
+                # can't drift a driver into physically implausible territory (e.g.
+                # Unemployment going negative, CPI compounding to an absurd level).
+                col_summary = training_feature_summary.get(col, {})
+                lo = col_summary.get("min_value")
+                hi = col_summary.get("max_value")
+                if lo is not None and hi is not None and hi > lo:
+                    tolerance = (hi - lo) * 0.25
+                    projected_val = max(lo - tolerance, min(hi + tolerance, projected_val))
+
+                curr_row[col] = round(projected_val, 4)
+
+            # "What-if" scenario overrides: an explicit value the caller supplied for THIS
+            # specific future year always wins over both the frozen base and the
+            # auto-drifted trend value — the caller is deliberately scripting this year.
+            year_key = str(curr_row[temporal_col])
+            step_overrides = future_feature_overrides.get(year_key, {})
+            for col, val in step_overrides.items():
+                curr_row[col] = val
 
             X_step = cls._preprocess_inputs(bundle, pd.DataFrame([curr_row]))
             raw_v = float(model.predict(X_step)[0])
@@ -966,18 +996,31 @@ class PipelineInferencer:
             trajectory.append({
                 "ds": str(int(step_val) if step_val.is_integer() else round(step_val, 1)),
                 "yhat": pred_v,
-                "period_step": i
+                "period_step": i,
+                "features": curr_row,
+                "overrides_applied": step_overrides
             })
 
-        # Check if the model is producing flat predictions (common with tree regressors or zero temporal variance)
+        # Honesty check: if literally no feature had a usable historical trend (e.g. every
+        # driver was a flag/ID, or the dataset had no meaningful drift), the model has
+        # nothing to differentiate future years from the base year and the real prediction
+        # is legitimately flat. Rather than silently returning that flat line and implying
+        # nothing changes, fall back — as a clearly-flagged last resort only — to extrapolating
+        # the TARGET's own historical annual trend. This never overrides a genuine
+        # feature-driven projection.
         yhat_values = [p["yhat"] for p in trajectory]
         is_flat = len(set(yhat_values)) <= 1
+        is_trend_extrapolated = False
 
-        if is_flat and steps_count >= 1:
+        if is_flat and steps_count >= 1 and not feature_trends:
+            is_trend_extrapolated = True
             annual_trend_pct = bundle.get("annual_trend_pct")
-            # If not explicitly recorded or zero, default to a standard nominal growth/drift rate of 2.5%
-            if annual_trend_pct is None or abs(annual_trend_pct) < 0.001:
-                annual_trend_pct = 2.5
+            if annual_trend_pct is None:
+                # No empirical target trend could be computed at training time (too few
+                # temporal points, degenerate variance, etc.) — default to neutral (flat)
+                # rather than assuming positive growth, since some targets naturally
+                # decline (churn, defect rate).
+                annual_trend_pct = 0.0
             rate = float(annual_trend_pct) / 100.0
             for pt in trajectory:
                 step_idx = pt.get("period_step", 0)
@@ -1033,6 +1076,8 @@ class PipelineInferencer:
             trend=trend,
             series_summary=series_summary,
             features_used=list(base_inputs.keys()),
+            is_trend_extrapolated=is_trend_extrapolated,
+            feature_trend_basis=feature_trend_basis,
             base_value=waterfall_meta.get("base_value"),
             base_value_formatted=waterfall_meta.get("base_value_formatted"),
             waterfall_breakdown=waterfall_meta.get("waterfall_breakdown"),

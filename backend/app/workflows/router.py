@@ -1346,7 +1346,8 @@ async def get_execution_inference_schema(execution_id: str):
         temporal_column=bundle.get("temporal_column"),
         min_year=bundle.get("min_year"),
         max_year=bundle.get("max_year"),
-        annual_trend_pct=bundle.get("annual_trend_pct")
+        annual_trend_pct=bundle.get("annual_trend_pct"),
+        feature_trends=bundle.get("feature_trends")
     )
 
 
@@ -1792,6 +1793,3 @@ async def export_prediction_csv(
             "Content-Disposition": f"attachment; filename=prediction_export_{execution_id}.csv"
         }
     )
-
-
-

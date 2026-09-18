@@ -24,6 +24,10 @@ class PredictionRequest(BaseModel):
         default=None,
         description="Specific target future year to project towards (e.g., 2025)."
     )
+    future_feature_overrides: Optional[Dict[str, Dict[str, Any]]] = Field(
+        default=None,
+        description="Explicit 'what-if' feature values for specific future periods, keyed by year as a string, e.g. {\"2014\": {\"CPI\": 210.0}, \"2015\": {\"CPI\": 215.0}}. For a given year+feature, this overrides both the frozen base value and the auto-drifted trend value. Years/features not mentioned continue to use normal historical drift."
+    )
     natural_language_query: Optional[str] = Field(
         default=None,
         description="Natural language prompt for AI-driven prediction (e.g. 'Predict for 2025 with high humidity')."
@@ -119,6 +123,8 @@ class PredictionResponse(BaseModel):
     projected_change_pct: Optional[float] = Field(default=None, description="Projected percentage growth or decline")
     trend: Optional[str] = Field(default=None, description="Upward, Downward, or Neutral")
     series_summary: Optional[Dict[str, Any]] = Field(default=None, description="Summary statistics of the projected time series (average, peak, trough, range)")
+    is_trend_extrapolated: Optional[bool] = Field(default=None, description="True only when no feature carried a usable historical drift, so the target itself was extrapolated using its own historical annual trend as a last resort. False when every future point is a genuine model prediction driven by projected feature values.")
+    feature_trend_basis: Optional[Dict[str, Any]] = Field(default=None, description="Per-feature drift assumptions actually applied when constructing future rows (slope per year, source: 'projected_from_history' | 'frozen_at_input').")
     
     # Batch Outputs
     batch_predictions: Optional[List[Dict[str, Any]]] = Field(default=None, description="Scored records for batch CSV requests")
@@ -126,6 +132,7 @@ class PredictionResponse(BaseModel):
     # Performance Telemetry
     inference_latency_ms: float = Field(default=0.0, description="Execution duration in milliseconds")
     features_used: List[str] = Field(default_factory=list, description="List of input features fed to the model")
+    inputs_used: Optional[Dict[str, Any]] = Field(default=None, description="Inputs used for inference")
     error_message: Optional[str] = Field(default=None, description="Details if inference failed")
 
 
@@ -150,9 +157,11 @@ class InferenceSchemaResponse(BaseModel):
     target_classes: List[str] = Field(default_factory=list)
     features: List[FeatureSchemaItem] = Field(default_factory=list)
     sample_payload: Dict[str, Any] = Field(default_factory=dict)
+    last_historical_row: Optional[Dict[str, Any]] = Field(default=None, description="Actual most recent real historical record (not a synthetic median) — the anchor used for pure future forecasts with no caller-supplied inputs.")
     time_series_meta: Optional[Dict[str, Any]] = None
     has_temporal_feature: bool = Field(default=False, description="True if dataset contains temporal/date/year features.")
     temporal_column: Optional[str] = Field(default=None, description="Name of the detected date/time/year column.")
     min_year: Optional[int] = Field(default=None, description="Minimum year found in training data.")
     max_year: Optional[int] = Field(default=None, description="Maximum year found in training data.")
-    annual_trend_pct: Optional[float] = Field(default=None, description="Empirical historical annual trend/growth rate percentage for regression.")
+    annual_trend_pct: Optional[float] = Field(default=None, description="Empirical historical annual trend/growth rate percentage for the TARGET column. Informational only — future projections now drive predictions by projecting individual feature values, not by applying this rate to the output.")
+    feature_trends: Optional[Dict[str, Dict[str, float]]] = Field(default=None, description="Per-feature empirical drift vs. the temporal column (slope_per_unit_time, pct_per_unit_time), computed from training data. Features absent from this map are held constant at whatever value the caller supplies for future projections.")

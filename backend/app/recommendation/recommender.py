@@ -26,22 +26,30 @@ class AIRecommender:
             getattr(settings, "GEMINI_API_KEY", None),
             getattr(settings, "OPENAI_API_KEY", None),
         ])
+        _fallback_reason = None
         if has_llm_key:
             try:
                 from backend.app.recommendation.llm_recommender import LLMRecommender
                 return LLMRecommender.recommend_pipeline(
                     df=df, query=query, target_column=target_column, task_type=task_type
                 )
-            except Exception:
-                pass
-        return cls._heuristic_recommend_pipeline(df, target_column=target_column, task_type=task_type)
+            except Exception as _llm_err:
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"LLMRecommender.recommend_pipeline raised, falling back to heuristic: {_llm_err}"
+                )
+                _fallback_reason = f"LLMRecommender.recommend_pipeline raised: {_llm_err}"
+        else:
+            _fallback_reason = "No LLM API key configured (GROQ_API_KEY / GEMINI_API_KEY / OPENAI_API_KEY all unset)."
+        return cls._heuristic_recommend_pipeline(df, target_column=target_column, task_type=task_type, fallback_reason=_fallback_reason)
 
     @classmethod
     def _heuristic_recommend_pipeline(
         cls,
         df: pd.DataFrame,
         target_column: Optional[str] = None,
-        task_type: Optional[str] = None
+        task_type: Optional[str] = None,
+        fallback_reason: Optional[str] = None
     ) -> Dict[str, Any]:
         profile = DataProfiler.profile_dataframe(df)
         columns = profile.get("columns", {})
@@ -173,18 +181,38 @@ class AIRecommender:
         # 4. Recommended Algorithm Rankings (Dynamic Tiering based on Dataset Profile)
         recommended_models = []
         if detected_task in ["classification", "regression"]:
-            recommended_models.append({
+            # A regression task with a temporal driver (Year/Date alongside real business
+            # features like CPI/Fuel_Price/Unemployment) will later need future-year
+            # predictions that extrapolate PAST the training range. Standard tree splits
+            # plateau once a projected feature value exceeds the highest split ever learned,
+            # so LightGBM's linear_tree mode (a linear fit per leaf) is put first for this
+            # case, since it keeps extrapolating sensibly instead of flattening.
+            needs_extrapolation = bool(all_temporal_cols) and detected_task == "regression"
+
+            xgb_entry = {
                 "recipe_id": "xgboost_trainer",
                 "name": f"XGBoost {detected_task.title()}",
                 "tier": "Gold Standard",
                 "reason": "Highest accuracy regularized gradient boosting for tabular datasets."
-            })
-            recommended_models.append({
+            }
+            lgb_entry = {
                 "recipe_id": "lightgbm_trainer",
                 "name": f"LightGBM {detected_task.title()}",
                 "tier": "High Speed",
-                "reason": "Optimal for ultra-fast training with histogram-based leaf growth."
-            })
+                "config": {"linear_tree": True} if needs_extrapolation else {},
+                "reason": (
+                    "Trains with linear_tree mode enabled: this dataset has a temporal "
+                    "column, so future-year predictions need to extrapolate past the "
+                    "training range rather than plateau like a standard tree split would."
+                ) if needs_extrapolation else "Optimal for ultra-fast training with histogram-based leaf growth."
+            }
+            if needs_extrapolation:
+                recommended_models.append(lgb_entry)
+                recommended_models.append(xgb_entry)
+            else:
+                recommended_models.append(xgb_entry)
+                recommended_models.append(lgb_entry)
+
             if feature_cats:
                 recommended_models.append({
                     "recipe_id": "catboost_trainer",
@@ -283,6 +311,12 @@ class AIRecommender:
             target_column=selected_target,
             date_column=all_temporal_cols[0] if all_temporal_cols else None
         )
+        # Honest provenance tagging: this pipeline came from the deterministic rule-based
+        # recommender, not the LLM. Callers should never have to guess which path produced
+        # a recommendation. See LLMRecommender for where "llm" / a fallback_reason gets set.
+        rec_result["llm_generated"] = False
+        rec_result["recommendation_source"] = "heuristic_fallback"
+        rec_result["fallback_reason"] = fallback_reason
         return rec_result
 
     @classmethod
@@ -499,6 +533,7 @@ class AIRecommender:
                 "n_estimators": 100,
                 "max_depth": 6
             }
+            model_cfg.update(top_model.get("config", {}))
             nodes.append({
                 "id": model_id,
                 "recipe_id": model_recipe,
