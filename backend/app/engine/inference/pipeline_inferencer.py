@@ -9,6 +9,7 @@ import httpx
 from backend.app.core.config import settings
 from backend.app.core.logging import logger
 from backend.app.engine.inference.schemas import PredictionRequest, PredictionResponse
+from backend.app.engine.inference.explainability import compute_waterfall_breakdown
 
 
 class PipelineInferencer:
@@ -156,7 +157,8 @@ class PipelineInferencer:
                         query=nl_query, task_type=task_type, prediction=res.prediction,
                         features_used=inferred_inputs or {}, trend=res.trend,
                         target_column=bundle.get("target_column"),
-                        series_summary=res.series_summary
+                        series_summary=res.series_summary,
+                        waterfall_summary=res.waterfall_summary
                     )
                     res.inferred_inputs = inferred_inputs
                     if unrecognized_features:
@@ -204,7 +206,8 @@ class PipelineInferencer:
                 res.ai_explanation = cls._generate_ai_explanation(
                     query=nl_query, task_type=task_type, prediction=res.prediction,
                     features_used=inferred_inputs or {},
-                    target_column=bundle.get("target_column")
+                    target_column=bundle.get("target_column"),
+                    waterfall_summary=res.waterfall_summary
                 )
                 res.inferred_inputs = inferred_inputs
             res.inference_latency_ms = round((time.time() - start_t) * 1000.0, 2)
@@ -411,6 +414,21 @@ class PipelineInferencer:
 
             target_name = bundle.get("target_column") or "Target"
             pred_label = f"Predicted {target_name}: {decoded_label}"
+
+            # Compute SHAP waterfall breakdown for classification
+            waterfall_meta = {}
+            try:
+                waterfall_meta = compute_waterfall_breakdown(
+                    model=model,
+                    X_row=X,
+                    feature_names=list(X.columns),
+                    bundle=bundle,
+                    predicted_value=float(confidence),
+                    task_type="classification"
+                )
+            except Exception as e:
+                logger.warning(f"Classification waterfall calculation skipped: {e}")
+
             return PredictionResponse(
                 status="SUCCESS",
                 task_type="classification",
@@ -421,7 +439,13 @@ class PipelineInferencer:
                 prediction_raw=int(raw_pred) if isinstance(raw_pred, (np.integer, int)) else raw_pred,
                 confidence=confidence,
                 probabilities=probs_dict,
-                features_used=list(X.columns)
+                features_used=list(X.columns),
+                base_value=waterfall_meta.get("base_value"),
+                base_value_formatted=waterfall_meta.get("base_value_formatted"),
+                waterfall_breakdown=waterfall_meta.get("waterfall_breakdown"),
+                top_positive_drivers=waterfall_meta.get("top_positive_drivers"),
+                top_negative_drivers=waterfall_meta.get("top_negative_drivers"),
+                waterfall_summary=waterfall_meta.get("waterfall_summary")
             )
 
         # Regression Specifics with Inverse Target Transformation
@@ -430,6 +454,21 @@ class PipelineInferencer:
         reg_val = float(round(unscaled_val, 4))
         target_name = bundle.get("target_column") or "Value"
         pred_label = f"Predicted {target_name}"
+
+        # Compute SHAP / TreeSHAP waterfall decomposition for regression
+        waterfall_meta = {}
+        try:
+            waterfall_meta = compute_waterfall_breakdown(
+                model=model,
+                X_row=X,
+                feature_names=list(X.columns),
+                bundle=bundle,
+                predicted_value=reg_val,
+                task_type="regression"
+            )
+        except Exception as e:
+            logger.warning(f"Regression TreeSHAP waterfall calculation skipped: {e}")
+
         return PredictionResponse(
             status="SUCCESS",
             task_type="regression",
@@ -438,7 +477,13 @@ class PipelineInferencer:
             prediction=reg_val,
             prediction_label=pred_label,
             prediction_raw=float(round(raw_val, 4)),
-            features_used=list(X.columns)
+            features_used=list(X.columns),
+            base_value=waterfall_meta.get("base_value"),
+            base_value_formatted=waterfall_meta.get("base_value_formatted"),
+            waterfall_breakdown=waterfall_meta.get("waterfall_breakdown"),
+            top_positive_drivers=waterfall_meta.get("top_positive_drivers"),
+            top_negative_drivers=waterfall_meta.get("top_negative_drivers"),
+            waterfall_summary=waterfall_meta.get("waterfall_summary")
         )
 
     # -------------------------------------------------------------
@@ -958,6 +1003,20 @@ class PipelineInferencer:
         last_ds = trajectory[-1]["ds"] if trajectory else ""
         pred_label = f"Projected {target_name} ({last_ds})" if last_ds else f"Projected {target_name}"
 
+        # Compute TreeSHAP waterfall decomposition for tabular future projection
+        waterfall_meta = {}
+        try:
+            waterfall_meta = compute_waterfall_breakdown(
+                model=model,
+                X_row=X_start,
+                feature_names=list(X_start.columns),
+                bundle=bundle,
+                predicted_value=float(end_val),
+                task_type="regression"
+            )
+        except Exception as e:
+            logger.warning(f"Tabular projection waterfall calculation skipped: {e}")
+
         return PredictionResponse(
             status="SUCCESS",
             task_type="time_series_forecasting",
@@ -973,7 +1032,13 @@ class PipelineInferencer:
             projected_change_pct=chg_pct,
             trend=trend,
             series_summary=series_summary,
-            features_used=list(base_inputs.keys())
+            features_used=list(base_inputs.keys()),
+            base_value=waterfall_meta.get("base_value"),
+            base_value_formatted=waterfall_meta.get("base_value_formatted"),
+            waterfall_breakdown=waterfall_meta.get("waterfall_breakdown"),
+            top_positive_drivers=waterfall_meta.get("top_positive_drivers"),
+            top_negative_drivers=waterfall_meta.get("top_negative_drivers"),
+            waterfall_summary=waterfall_meta.get("waterfall_summary")
         )
 
     # -------------------------------------------------------------
@@ -1114,7 +1179,8 @@ class PipelineInferencer:
         features_used: Dict[str, Any],
         trend: Optional[str] = None,
         target_column: Optional[str] = None,
-        series_summary: Optional[Dict[str, Any]] = None
+        series_summary: Optional[Dict[str, Any]] = None,
+        waterfall_summary: Optional[str] = None
     ) -> str:
         api_key = getattr(settings, "GROQ_API_KEY", None)
         target_label = target_column or "target variable"
@@ -1138,6 +1204,10 @@ class PipelineInferencer:
                         f"- Year {y_key}: Average={y_info.get('avg')}, Range=[{y_info.get('min')} to {y_info.get('max')}], Trend={y_info.get('trend')}\n"
                     )
 
+        waterfall_text = ""
+        if waterfall_summary:
+            waterfall_text = f"\nSHAP Waterfall Driver Breakdown:\n- {waterfall_summary}\n"
+
         if api_key:
             try:
                 with httpx.Client(timeout=8.0) as client:
@@ -1154,6 +1224,7 @@ class PipelineInferencer:
                                         f"This model was trained to predict the target variable: '{target_label}'.\n"
                                         f"Provide a clear, authoritative, 2-4 sentence conversational answer summarizing the predicted '{target_label}' in direct response to the user's question.\n"
                                         f"Explicitly mention the primary requested prediction value ({prediction}) upfront.\n"
+                                        f"If SHAP waterfall driver contributions are provided, explain WHY the prediction reached this value by highlighting what pushed it higher or lower.\n"
                                         f"Highlight key series insights (timeline start/end, overall trend direction, average, and high/low points) whenever series data is provided.\n"
                                         f"If annual breakdown data is provided, explicitly state the yearly averages and ranges.\n"
                                         f"If the user asked to predict an input feature (e.g. asking to predict rain) rather than the model's actual target ('{target_label}'), gently clarify that '{target_label}' was predicted under those specified conditions."
@@ -1169,6 +1240,7 @@ class PipelineInferencer:
                                         f"Key Input Features / Conditions: {features_used}\n"
                                         f"Trend: {trend or 'N/A'}"
                                         f"{series_text}"
+                                        f"{waterfall_text}"
                                     )
                                 }
                             ],
@@ -1181,22 +1253,31 @@ class PipelineInferencer:
             except Exception as e:
                 logger.warning(f"Groq explanation generation warning: {str(e)}")
 
+        if waterfall_summary and not series_summary:
+            return f"Based on your query '{query}', the model projects a predicted {target_label} of {prediction}. Key drivers: {waterfall_summary}"
+
         if series_summary:
             yearly_breakdown = series_summary.get("yearly_breakdown", {})
             if yearly_breakdown and len(yearly_breakdown) > 0:
                 y_summaries = [f"Year {y}: Average {info.get('avg')} (range {info.get('min')} - {info.get('max')}, trend {info.get('trend')})" for y, info in yearly_breakdown.items()]
                 breakdown_str = "; ".join(y_summaries)
-                return (
+                res_str = (
                     f"Based on your query '{query}', the model forecasts '{target_label}' from {series_summary.get('start_date')} to {series_summary.get('end_date')}. "
                     f"Annual breakdown: {breakdown_str}. "
                     f"Overall requested result is {prediction} with a {trend or 'projected'} trend."
                 )
+                if waterfall_summary:
+                    res_str += f" Feature drivers: {waterfall_summary}"
+                return res_str
 
-            return (
+            res_str = (
                 f"Based on your query '{query}', the model forecasts a {trend or 'projected'} trajectory for '{target_label}' "
                 f"from {series_summary.get('start_date')} to {series_summary.get('end_date')} ({series_summary.get('total_points')} intervals). "
                 f"Values average {series_summary.get('avg_value')}, spanning from a minimum of {series_summary.get('min_value')} to a peak of {series_summary.get('max_value')}, "
                 f"concluding at a final projected level of {prediction}."
             )
+            if waterfall_summary:
+                res_str += f" Key drivers: {waterfall_summary}"
+            return res_str
 
         return f"Based on your query '{query}', the model projects a predicted {target_label} of {prediction} under the specified feature conditions."
