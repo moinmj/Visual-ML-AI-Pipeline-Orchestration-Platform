@@ -471,6 +471,72 @@ class DAGExecutor:
             except Exception as e:
                 logger.warning(f"Could not compute annual_trend_pct: {str(e)}")
 
+        # Compute empirical per-feature drift (slope vs. the temporal column) for every
+        # continuous numeric driver feature. This lets future-year projections evolve
+        # each feature forward using its own historical trend (e.g. CPI, Unemployment,
+        # Fuel_Price naturally drifting) instead of freezing every input at the value the
+        # caller supplied for the base year. Calendar-position sub-features (month, day,
+        # day-of-week, quarter...) and low-cardinality numeric columns (flags, IDs, store
+        # numbers) are intentionally excluded and left frozen at the caller-supplied value,
+        # since "trending" those would be meaningless.
+        feature_trends: Dict[str, Dict[str, float]] = {}
+        _DATE_SUBCOMPONENT_HINTS = ("month", "day", "dayofweek", "day_of_week", "quarter", "week", "hour", "minute", "second")
+        if has_temporal and temporal_col and X_eval is not None and temporal_col in X_eval.columns:
+            try:
+                t_series_full = pd.to_numeric(X_eval[temporal_col], errors="coerce")
+                for col in fn_list:
+                    if col == temporal_col or col not in X_eval.columns:
+                        continue
+                    col_low = col.lower()
+                    if any(h in col_low for h in _DATE_SUBCOMPONENT_HINTS):
+                        continue
+                    s = X_eval[col]
+                    if not pd.api.types.is_numeric_dtype(s):
+                        continue
+                    unique_vals = s.dropna().unique()
+                    if len(unique_vals) <= 10:
+                        # Looks like a flag/ID/coded-category rather than a continuous driver.
+                        continue
+                    v_series = pd.to_numeric(s, errors="coerce")
+                    valid_mask = t_series_full.notna() & v_series.notna()
+                    if valid_mask.sum() < 5:
+                        continue
+                    t_clean = t_series_full[valid_mask].values
+                    v_clean = v_series[valid_mask].values
+                    if np.std(t_clean) > 0:
+                        slope, _intercept = np.polyfit(t_clean, v_clean, 1)
+                        mean_v = float(np.mean(v_clean))
+                        feature_trends[col] = {
+                            "slope_per_unit_time": round(float(slope), 6),
+                            "pct_per_unit_time": round((float(slope) / abs(mean_v)) * 100.0, 4) if abs(mean_v) > 1e-9 else 0.0
+                        }
+            except Exception as e:
+                logger.warning(f"Could not compute feature_trends: {str(e)}")
+        # Anchor point for a "pure" future forecast (caller supplied no explicit inputs):
+        # the actual last real historical record, not a synthetic dataset-wide median.
+        # sample_payload above is intentionally a median/default row for cold-start single
+        # predictions; last_historical_row reflects "where the real data actually left off"
+        # so an unprompted forecast genuinely continues from history.
+        last_historical_row: Dict[str, Any] = dict(sample_payload)
+        if has_temporal and temporal_col and X_eval is not None and temporal_col in X_eval.columns:
+            try:
+                t_series_last = pd.to_numeric(X_eval[temporal_col], errors="coerce")
+                if t_series_last.notna().any():
+                    last_idx = t_series_last.idxmax()
+                    last_row = X_eval.loc[last_idx]
+                    for col in fn_list:
+                        if col not in last_row.index:
+                            continue
+                        val = last_row[col]
+                        if pd.isna(val):
+                            continue
+                        try:
+                            last_historical_row[col] = round(float(val), 2)
+                        except (TypeError, ValueError):
+                            last_historical_row[col] = val
+            except Exception as e:
+                logger.warning(f"Could not compute last_historical_row: {str(e)}")
+
         inference_schema = {
             "execution_id": execution_id,
             "task_type": pipeline_context.get("task_type", "classification"),
@@ -478,12 +544,14 @@ class DAGExecutor:
             "target_classes": pipeline_context.get("target_classes", []),
             "features": features_schema,
             "sample_payload": sample_payload,
+            "last_historical_row": last_historical_row,
             "time_series_meta": pipeline_context.get("forecasting_summary"),
             "has_temporal_feature": has_temporal,
             "temporal_column": temporal_col,
             "min_year": min_year,
             "max_year": max_year,
             "annual_trend_pct": annual_trend_pct,
+            "feature_trends": feature_trends,
         }
 
         # Ensure model is preserved even if a downstream node produced outputs or was ordered differently
@@ -509,12 +577,14 @@ class DAGExecutor:
             "imputer_stats": pipeline_context.get("imputer_stats", {}),
             "forecasting_summary": pipeline_context.get("forecasting_summary", {}),
             "sample_row": sample_payload,
+            "last_historical_row": last_historical_row,
             "training_feature_summary": {f["name"]: f for f in features_schema},
             "has_temporal_feature": has_temporal,
             "temporal_column": temporal_col,
             "min_year": min_year,
             "max_year": max_year,
             "annual_trend_pct": annual_trend_pct,
+            "feature_trends": feature_trends,
             "split_mode": pipeline_context.get("split_mode"),
             "categorical_maps": pipeline_context.get("categorical_maps", {}),
         }

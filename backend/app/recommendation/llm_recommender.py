@@ -85,6 +85,19 @@ class LLMRecommender:
     and synthesizes optimized, executable visual DAG pipelines.
     """
 
+    @staticmethod
+    def _heuristic_fallback(df: pd.DataFrame, target_column: Optional[str], task_type: Optional[str], reason: str) -> Dict[str, Any]:
+        """
+        Routes to the deterministic heuristic recommender and stamps the result with
+        WHY the LLM path wasn't used, so callers (and the UI) never have to guess whether
+        a recommendation was genuinely reasoned by the LLM or produced by the rule-based
+        fallback. `_heuristic_recommend_pipeline` already sets llm_generated=False /
+        recommendation_source="heuristic_fallback"; this only adds the specific reason.
+        """
+        result = AIRecommender._heuristic_recommend_pipeline(df, target_column=target_column, task_type=task_type)
+        result["fallback_reason"] = reason
+        return result
+
     @classmethod
     def recommend_pipeline(
         cls,
@@ -126,7 +139,7 @@ class LLMRecommender:
                     return future.result()
             except Exception as e:
                 logger.warning(f"Sync wrapper for LLMRecommender failed: {str(e)}")
-                return AIRecommender._heuristic_recommend_pipeline(df, target_column=target_column, task_type=task_type)
+                return cls._heuristic_fallback(df, target_column, task_type, reason=f"Sync execution wrapper failed: {str(e)}")
 
     @classmethod
     async def recommend_pipeline_async(
@@ -169,7 +182,7 @@ class LLMRecommender:
             models_to_try = [m for m in [settings.GROQ_MODEL, "openai/gpt-oss-20b", "openai/gpt-oss-120b", "groq/compound", "qwen/qwen3.8-27b"] if m]
         else:
             logger.info("No LLM API Key (GROQ, GEMINI, or OPENAI) configured. Falling back to heuristic AIRecommender.")
-            return AIRecommender._heuristic_recommend_pipeline(df, target_column=target_column, task_type=task_type)
+            return cls._heuristic_fallback(df, target_column, task_type, reason="No LLM API key configured (GROQ_API_KEY / GEMINI_API_KEY / OPENAI_API_KEY all unset).")
 
         try:
             # Construct dataset summary
@@ -230,8 +243,9 @@ class LLMRecommender:
                         logger.warning(f"LLM model {model_id} via {endpoint} failed: {str(e)}")
 
             if not response or response.status_code != 200:
-                logger.warning(f"LLM API returned status {response.status_code if response else 'None'}. Using fallback.")
-                return AIRecommender._heuristic_recommend_pipeline(df, target_column=target_column, task_type=task_type)
+                status_note = str(response.status_code) if response else "no response (all models/timeouts exhausted)"
+                logger.warning(f"LLM API returned status {status_note}. Using fallback.")
+                return cls._heuristic_fallback(df, target_column, task_type, reason=f"LLM API call failed (HTTP status: {status_note}).")
 
             resp_json = response.json()
             content = resp_json["choices"][0]["message"]["content"]
@@ -242,7 +256,7 @@ class LLMRecommender:
 
         except Exception as e:
             logger.error(f"Error during LLM pipeline recommendation: {str(e)}. Falling back to heuristic recommender.", exc_info=True)
-            return AIRecommender._heuristic_recommend_pipeline(df, target_column=target_column, task_type=task_type)
+            return cls._heuristic_fallback(df, target_column, task_type, reason=f"LLM recommendation raised an exception: {str(e)}")
 
     @classmethod
     def _validate_and_enrich_dag(cls, result: Dict[str, Any], df: pd.DataFrame) -> Dict[str, Any]:
@@ -449,5 +463,6 @@ class LLMRecommender:
             "preprocessing_recommendations": pre_recs,
             "model_rankings": m_rankings,
             "recommended_dag": dag,
-            "llm_generated": True
+            "llm_generated": True,
+            "recommendation_source": "llm"
         }

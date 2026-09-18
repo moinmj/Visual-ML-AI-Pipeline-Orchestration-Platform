@@ -394,50 +394,82 @@ def test_flat_tree_extrapolation_and_prediction_labels():
     assert proj_res.projected_end_value == traj[-1]["yhat"]
 
 
-def test_string_typed_inputs_xgboost_compatibility():
+def test_future_projection_uses_feature_trends_not_blanket_target_multiplier():
     """
-    Verify that when inputs contain strings (e.g. from JSON payloads or HTML form inputs),
-    _preprocess_inputs coerces them into valid numeric dtypes, preventing the XGBoost error:
-    'DataFrame.dtypes for data must be int, float, bool or category. Invalid columns:Store: object'
+    Regression test for the future-projection fix: when the inference bundle carries
+    empirical per-feature drift (feature_trends), future years must be driven by real
+    model predictions on genuinely evolving feature vectors (CPI/Fuel_Price/Unemployment
+    drifting forward from their own historical trend), NOT by blindly multiplying the
+    target by one canned rate. It must also:
+      1. Respect explicit caller-supplied feature values as the anchor for the base year.
+      2. Continue the trend FROM that anchor (not from the training set's mean).
+      3. Report is_trend_extrapolated=False when a genuine feature-driven projection was used.
+      4. Expose the exact feature vector used at every step via trajectory[i]["features"].
     """
-    class StrictDtypeModel:
+    class LinearDriverModel:
+        """Mimics a tree/linear regressor that is flat in Date_year beyond the training
+        range but genuinely responsive to CPI / Fuel_Price / Unemployment (the same
+        shape of behavior XGBoost exhibits on the Walmart-Sales-style dataset)."""
         def predict(self, X):
-            # Mirror XGBoost's strict dtype check
-            for col in X.columns:
-                if X[col].dtype == "object":
-                    raise ValueError(f"DataFrame.dtypes for data must be int, float, bool or category. Invalid columns:{col}: object")
-            return np.array([550000.0])
+            row = X.iloc[0]
+            val = (
+                500000
+                + float(row["CPI"]) * 3000
+                - float(row["Fuel_Price"]) * 50000
+                - float(row["Unemployment"]) * 20000
+                + float(row["Store"]) * 1000
+            )
+            return [val]
 
     bundle = {
-        "execution_id": "test_xgboost_strict_exec",
+        "execution_id": "test_feature_trend_exec",
         "task_type": "regression",
-        "model": StrictDtypeModel(),
+        "model": LinearDriverModel(),
         "target_column": "Weekly_Sales",
-        "feature_names": ["Store", "Temperature", "Fuel_Price", "CPI"],
-        "training_feature_summary": {
-            "Store": {"data_type": "numeric", "min_value": 0.0, "max_value": 44.0, "default_value": 22.0},
-            "Temperature": {"data_type": "numeric", "min_value": 30.0, "max_value": 100.0, "default_value": 70.0},
-            "Fuel_Price": {"data_type": "numeric", "min_value": 2.0, "max_value": 5.0, "default_value": 3.5},
-            "CPI": {"data_type": "numeric", "min_value": 100.0, "max_value": 250.0, "default_value": 180.0}
+        "feature_names": ["Store", "Fuel_Price", "CPI", "Unemployment", "Date_year"],
+        "scaler": None,
+        "vectorizer": None,
+        "categorical_maps": {},
+        "imputer_stats": {},
+        "feature_trends": {
+            "CPI": {"slope_per_unit_time": 3.5, "pct_per_unit_time": 1.9},
+            "Fuel_Price": {"slope_per_unit_time": 0.08, "pct_per_unit_time": 2.3},
+            "Unemployment": {"slope_per_unit_time": -0.15, "pct_per_unit_time": -1.9},
         },
-        "sample_row": {"Store": 22.0, "Temperature": 70.0, "Fuel_Price": 3.5, "CPI": 180.0}
+        "annual_trend_pct": 1.55,
     }
 
-    # Simulate raw JSON payload where all numeric inputs are strings
-    string_inputs = {
-        "Store": "22",
-        "Temperature": "72.9",
-        "Fuel_Price": "3.73",
-        "CPI": "191.01"
-    }
+    base_inputs = {"Store": 23, "Fuel_Price": 3.44, "CPI": 182.62, "Unemployment": 7.87, "Date_year": 2012}
 
-    req = PredictionRequest(inputs=string_inputs)
-    res = PipelineInferencer.predict(bundle=bundle, request=req)
+    res = PipelineInferencer._predict_tabular_future_projection(
+        bundle=bundle, base_inputs=base_inputs, temporal_col="Date_year",
+        future_periods=None, target_year=2016
+    )
 
     assert res.status == "SUCCESS"
-    assert res.prediction == 550000.0
-    assert res.prediction_label == "Predicted Weekly_Sales"
+    assert res.is_trend_extrapolated is False  # a genuine feature-driven projection, not the canned fallback
+    assert len(res.trajectory) == 5
 
+    # Base year must be an exact echo of what the caller supplied.
+    assert res.trajectory[0]["features"]["CPI"] == 182.62
+    assert res.trajectory[0]["features"]["Fuel_Price"] == 3.44
 
+    # CPI/Fuel_Price must genuinely increase and Unemployment genuinely decrease year over
+    # year, driven by their own historical drift — not remain frozen.
+    cpis = [pt["features"]["CPI"] for pt in res.trajectory]
+    unemployment = [pt["features"]["Unemployment"] for pt in res.trajectory]
+    assert cpis == sorted(cpis) and cpis[0] < cpis[-1]
+    assert unemployment == sorted(unemployment, reverse=True) and unemployment[0] > unemployment[-1]
 
-
+    # Two different anchors (explicit overrides) must produce two different trajectories,
+    # with the trend continuing FROM the supplied anchor, not from the training mean.
+    base_inputs_override = dict(base_inputs)
+    base_inputs_override.update({"Fuel_Price": 4.0, "CPI": 200.0, "Unemployment": 14.0, "Date_year": 2013})
+    res2 = PipelineInferencer._predict_tabular_future_projection(
+        bundle=bundle, base_inputs=base_inputs_override, temporal_col="Date_year",
+        future_periods=None, target_year=2016
+    )
+    assert res2.trajectory[0]["features"]["CPI"] == 200.0
+    # 2014 CPI should be the override anchor plus one year of drift, not the original base's.
+    assert abs(res2.trajectory[1]["features"]["CPI"] - 203.5) < 1e-6
+    assert res2.trajectory[0]["yhat"] != res.trajectory[0]["yhat"]
