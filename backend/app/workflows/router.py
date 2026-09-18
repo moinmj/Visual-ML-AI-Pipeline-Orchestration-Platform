@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Body, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, status, Body, Query, Response, Request
 from fastapi.encoders import jsonable_encoder
 from typing import Dict, Any, List, Optional, Union
 import math
 import uuid
+import re
 import logging
 import pandas as pd
 from datetime import datetime, timezone, timedelta
@@ -246,6 +247,31 @@ GENERIC_WORKBOOK_NAMES = {
 }
 
 
+def extract_workflow_id_from_context(
+    request: Optional[Request] = None,
+    explicit_id: Optional[str] = None
+) -> Optional[str]:
+    """
+    Extracts workflow/workbook ID from explicit parameter, custom headers,
+    query parameters, or browser Referer URL (e.g. /workflows/{uuid}).
+    """
+    if explicit_id and str(explicit_id).strip():
+        return str(explicit_id).strip()
+    if not request:
+        return None
+    header_id = request.headers.get("x-workflow-id") or request.headers.get("x-pipeline-id")
+    if header_id and str(header_id).strip():
+        return str(header_id).strip()
+    query_id = request.query_params.get("workflow_id") or request.query_params.get("id")
+    if query_id and str(query_id).strip():
+        return str(query_id).strip()
+    referer = request.headers.get("referer") or ""
+    match = re.search(r'([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})', referer, re.IGNORECASE)
+    if match:
+        return match.group(1)
+    return None
+
+
 def is_generic_workbook_name(name: Optional[str]) -> bool:
     """Checks if a given pipeline name is a generic template/recommender placeholder."""
     if not name:
@@ -430,6 +456,7 @@ async def record_workflow_execution_history(
 )
 async def save_workflow(
     payload: WorkflowCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -450,9 +477,24 @@ async def save_workflow(
             if hist_row and hist_row.workflow_id:
                 target_id = hist_row.workflow_id
 
-    target_id = target_id or str(uuid.uuid4())
-    result = await db.execute(select(Workflow).where(Workflow.id == target_id))
-    wf = result.scalar_one_or_none()
+    # Fallback to referer / context header if target_id is omitted
+    ctx_wf_id = extract_workflow_id_from_context(request)
+    if not target_id and ctx_wf_id:
+        target_id = ctx_wf_id
+
+    wf = None
+    if target_id:
+        result = await db.execute(select(Workflow).where(Workflow.id == target_id))
+        wf = result.scalar_one_or_none()
+        # If payload.id was freshly generated on the frontend, but user was editing an existing workflow in browser
+        if not wf and ctx_wf_id and ctx_wf_id != target_id:
+            ctx_res = await db.execute(select(Workflow).where(Workflow.id == ctx_wf_id))
+            ctx_wf = ctx_res.scalar_one_or_none()
+            if ctx_wf:
+                target_id = ctx_wf_id
+                wf = ctx_wf
+    else:
+        target_id = str(uuid.uuid4())
 
     ds_id, ds_name = await resolve_workflow_dataset(
         db=db,
@@ -1048,6 +1090,7 @@ async def execute_workflow(
     auto_save: bool = Query(False, description="Automatically upsert/save current workflow to DB before executing"),
     workflow_id: Optional[str] = Query(None, description="Optional workflow ID to link in execution result"),
     workflow_name: Optional[str] = Query(None, description="Optional workflow title if auto-saving to DB"),
+    request: Request = None,
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -1060,6 +1103,8 @@ async def execute_workflow(
         or getattr(workflow, "id", None)
         or getattr(workflow, "pipeline_id", None)
     )
+    if not target_id:
+        target_id = extract_workflow_id_from_context(request)
     if auto_save:
         target_id = target_id or str(uuid.uuid4())
         nodes_payload, edges_payload, node_configs = workflow_graph_to_db_payload(workflow)
