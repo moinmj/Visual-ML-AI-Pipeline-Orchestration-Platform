@@ -121,3 +121,138 @@ def test_arima_forecaster():
     assert "yhat" in forecast_df.columns
     assert metrics["task_type"] == "time_series_forecasting"
     assert "aic" in metrics
+
+
+def test_prophet_weekly_frequency_and_export():
+    """
+    Verify that when Prophet is trained on weekly data or configured with Weekly frequency,
+    future forecast records and CSV exports advance by 7-day weekly intervals, NOT daily steps.
+    """
+    from backend.app.engine.inference.pipeline_inferencer import PipelineInferencer
+    from backend.app.engine.inference.schemas import PredictionRequest
+    from backend.app.workflows.router import _convert_prediction_to_csv
+
+    dates = pd.date_range("2020-01-03", periods=52, freq="W-FRI")
+    sales = np.linspace(100000, 200000, 52) + np.random.normal(0, 5000, 52)
+    df = pd.DataFrame({"Date": dates, "Weekly_Sales": sales})
+
+    prophet_recipe = recipe_registry.get("prophet_forecaster")
+    assert prophet_recipe is not None
+
+    res = prophet_recipe.execute(
+        inputs={"dataframe": df},
+        config={"target_column": "Weekly_Sales", "date_column": "Date", "frequency": "W (Weekly)", "horizon_periods": 5}
+    )
+
+    metrics = res["metrics"]
+    forecast_df = res["forecast_df"]
+    model = res["model"]
+
+    assert metrics["frequency"] == "W"
+    # Check that future forecast rows are spaced by 7 days
+    future_rows = forecast_df[forecast_df["is_future"] == 1].reset_index(drop=True)
+    assert len(future_rows) == 5
+
+    dt0 = pd.to_datetime(future_rows["ds"].iloc[0])
+    dt1 = pd.to_datetime(future_rows["ds"].iloc[1])
+    diff_days = (dt1 - dt0).days
+    assert diff_days == 7, f"Future steps must be 7 days apart (weekly), found {diff_days} days"
+
+    # Verify Inference bundle & live prediction endpoint
+    bundle = {
+        "execution_id": "test_weekly_prophet_exec",
+        "task_type": "time_series_forecasting",
+        "model": model,
+        "target_column": "Weekly_Sales",
+        "forecasting_summary": metrics,
+        "frequency": "W",
+        "freq": "W"
+    }
+
+    pred_res = PipelineInferencer.predict(bundle=bundle, request=PredictionRequest(forecast_horizon=5))
+    assert pred_res.status == "SUCCESS"
+    assert len(pred_res.forecast_records) == 5
+
+    rec_d0 = pd.to_datetime(pred_res.forecast_records[0]["ds"])
+    rec_d1 = pd.to_datetime(pred_res.forecast_records[1]["ds"])
+    assert (rec_d1 - rec_d0).days == 7, "Prediction records must be weekly"
+
+    # Verify CSV export
+    csv_str = _convert_prediction_to_csv(pred_res)
+    assert "ds,yhat" in csv_str
+    csv_dates = [line.split(",")[0] for line in csv_str.strip().split("\n")[1:]]
+    assert len(csv_dates) == 5
+    d_first = pd.to_datetime(csv_dates[0])
+    d_second = pd.to_datetime(csv_dates[1])
+    assert (d_second - d_first).days == 7, "Exported CSV must contain weekly steps, not consecutive calendar days"
+
+
+def test_prophet_panel_data_auto_aggregation_and_entity_filter():
+    """
+    Verify that multi-entity panel datasets (multiple stores sharing timestamps)
+    are automatically aggregated across entities or filtered to a single entity,
+    preventing duplicate timestamp distortion, catastrophic MAPE, and frequency misalignment.
+    """
+    # Create 5 stores across 25 weekly timestamps (125 total rows)
+    stores = []
+    dates = pd.date_range("2021-01-01", periods=25, freq="W-FRI")
+    for s in range(1, 6):
+        for i, d in enumerate(dates):
+            stores.append({
+                "Store": s,
+                "Date": d,
+                "Weekly_Sales": 10000.0 * s + (i * 100.0)
+            })
+    df_panel = pd.DataFrame(stores)
+    assert len(df_panel) == 125
+    assert df_panel["Date"].duplicated().sum() == 100  # 4 duplicate stores per date
+
+    prophet_recipe = recipe_registry.get("prophet_forecaster")
+    assert prophet_recipe is not None
+
+    # 1. Default 'auto' strategy: Auto-aggregates by sum across stores
+    res_agg = prophet_recipe.execute(
+        inputs={"dataframe": df_panel},
+        config={"target_column": "Weekly_Sales", "date_column": "Date", "horizon_periods": 4}
+    )
+    m_agg = res_agg["metrics"]
+    assert m_agg["panel_data_detected"] is True
+    assert m_agg["panel_strategy_applied"] == "aggregate_sum"
+    assert m_agg["historical_points"] == 25  # exactly 25 unique weeks
+    assert m_agg["frequency"] == "W"
+    assert "Multi-entity panel data detected" in m_agg["panel_summary_info"]
+    # Verify low MAPE on aggregated series
+    assert m_agg["mape"] < 10.0
+
+    # 2. 'filter_entity' strategy: Isolates Store 1
+    res_filter = prophet_recipe.execute(
+        inputs={"dataframe": df_panel},
+        config={
+            "target_column": "Weekly_Sales",
+            "date_column": "Date",
+            "group_by_column": "Store",
+            "panel_strategy": "filter_entity",
+            "entity_value": "1",
+            "horizon_periods": 4
+        }
+    )
+    m_fil = res_filter["metrics"]
+    assert m_fil["panel_data_detected"] is True
+    assert m_fil["panel_strategy_applied"] == "filter_entity"
+    assert m_fil["historical_points"] == 25
+    assert m_fil["entity_value"] == "1"
+    assert m_fil["mape"] < 10.0
+
+    # 3. ARIMA Forecaster also handles panel data with auto-aggregation
+    arima_recipe = recipe_registry.get("arima_forecaster")
+    assert arima_recipe is not None
+    res_arima = arima_recipe.execute(
+        inputs={"dataframe": df_panel},
+        config={"target_column": "Weekly_Sales", "date_column": "Date", "p": 1, "d": 0, "q": 0, "horizon_periods": 4}
+    )
+    m_arima = res_arima["metrics"]
+    assert m_arima["panel_data_detected"] is True
+    assert m_arima["panel_strategy_applied"] == "aggregate_sum"
+    assert m_arima["historical_points"] == 25
+
+

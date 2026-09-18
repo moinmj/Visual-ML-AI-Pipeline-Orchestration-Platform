@@ -473,3 +473,86 @@ def test_future_projection_uses_feature_trends_not_blanket_target_multiplier():
     # 2014 CPI should be the override anchor plus one year of drift, not the original base's.
     assert abs(res2.trajectory[1]["features"]["CPI"] - 203.5) < 1e-6
     assert res2.trajectory[0]["yhat"] != res.trajectory[0]["yhat"]
+
+
+def test_shap_treeshap_waterfall_breakdown():
+    """
+    Verify that when live prediction runs on a tree-based model (Random Forest / XGBoost),
+    a SHAP / TreeSHAP waterfall decomposition is generated:
+    - Base value E[f(x)]
+    - Ordered waterfall_breakdown with feature contributions (+/-)
+    - Human-readable summary: 'Store contributed +$45,000; Fuel_Price contributed -$12,000; Unemployment contributed -$8,000.'
+    - Efficiency axiom holds: base_value + sum(attributions) == prediction
+    """
+    from sklearn.ensemble import RandomForestRegressor
+
+    # 1. Train sample model with Walmart-like features
+    X_train = pd.DataFrame({
+        "Store": [1, 2, 3, 1, 2, 3, 1, 2],
+        "Fuel_Price": [2.5, 3.8, 3.2, 2.7, 4.0, 3.5, 2.6, 3.9],
+        "Unemployment": [8.5, 6.5, 9.0, 8.2, 6.8, 9.2, 8.3, 6.7]
+    })
+    y_train = np.array([900000.0, 960000.0, 850000.0, 920000.0, 980000.0, 840000.0, 910000.0, 970000.0])
+
+    rf = RandomForestRegressor(n_estimators=10, random_state=42)
+    rf.fit(X_train, y_train)
+
+    bundle = {
+        "execution_id": "test_treeshap_exec",
+        "task_type": "regression",
+        "model": rf,
+        "target_column": "Weekly_Sales",
+        "feature_names": ["Store", "Fuel_Price", "Unemployment"],
+        "training_feature_summary": {
+            "Store": {"data_type": "numeric", "default_value": 1.0},
+            "Fuel_Price": {"data_type": "numeric", "default_value": 3.0},
+            "Unemployment": {"data_type": "numeric", "default_value": 8.0}
+        },
+        "sample_row": {"Store": 1, "Fuel_Price": 3.0, "Unemployment": 8.0}
+    }
+
+    # 2. Score a live prediction
+    req = PredictionRequest(inputs={"Store": 1, "Fuel_Price": 3.5, "Unemployment": 8.0})
+    res = PipelineInferencer.predict(bundle=bundle, request=req)
+
+    assert res.status == "SUCCESS"
+    assert res.prediction is not None
+    assert res.base_value is not None
+    assert isinstance(res.base_value, float)
+    assert res.base_value_formatted is not None
+    assert "$" in res.base_value_formatted
+
+    # 3. Check Waterfall Breakdown list
+    assert res.waterfall_breakdown is not None
+    assert len(res.waterfall_breakdown) == 3
+
+    # Check structure of each attribution item
+    sum_attr = 0.0
+    for item in res.waterfall_breakdown:
+        assert item.feature in ["Store", "Fuel_Price", "Unemployment"]
+        assert item.direction in ["positive", "negative"]
+        assert item.attribution_formatted.startswith("+") or item.attribution_formatted.startswith("-")
+        assert "$" in item.attribution_formatted
+        sum_attr += item.attribution
+
+    # 4. Verify Efficiency Axiom (base_value + sum(attributions) == prediction)
+    assert np.isclose(res.base_value + sum_attr, res.prediction, atol=1.0)
+
+    # 5. Check Human-Readable Waterfall Summary
+    assert res.waterfall_summary is not None
+    assert "contributed" in res.waterfall_summary
+    assert ("+$" in res.waterfall_summary) or ("-$" in res.waterfall_summary)
+
+    # 6. Verify Tabular Future Projection also includes waterfall breakdown
+    bundle_proj = dict(bundle)
+    bundle_proj["has_temporal_feature"] = True
+    bundle_proj["temporal_column"] = "Store"  # numeric step
+    bundle_proj["annual_trend_pct"] = 2.0
+
+    proj_req = PredictionRequest(inputs={"Store": 1, "Fuel_Price": 3.5, "Unemployment": 8.0}, future_periods=3)
+    proj_res = PipelineInferencer.predict(bundle=bundle_proj, request=proj_req)
+    assert proj_res.status == "SUCCESS"
+    assert proj_res.trajectory is not None
+    assert proj_res.waterfall_breakdown is not None
+    assert len(proj_res.waterfall_breakdown) == 3
+    assert proj_res.waterfall_summary is not None
