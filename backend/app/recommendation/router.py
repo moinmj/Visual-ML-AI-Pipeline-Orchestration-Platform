@@ -18,6 +18,8 @@ router = APIRouter(prefix="/recommend", tags=["AI Recommendation & Auto-Architec
 
 class RecommendationRequest(BaseModel):
     dataset_id: Optional[str] = Field(None, description="Optional ID of an uploaded dataset")
+    workflow_id: Optional[str] = Field(None, description="Optional ID of active workbook to preserve")
+    workflow_name: Optional[str] = Field(None, description="Optional name of active workbook to preserve")
     query: Optional[str] = Field(None, description="Optional natural language prompt or objective for LLM pipeline synthesis")
     target_column: Optional[str] = Field(None, description="Optional target label column for supervised tasks")
     time_column: Optional[str] = Field(None, description="Optional timestamp column for time-series tasks")
@@ -98,6 +100,31 @@ async def recommend_pipeline(
                 if "node_configs" in dag and n["id"] in dag["node_configs"]:
                     dag["node_configs"][n["id"]]["config"]["dataset_id"] = payload.dataset_id
                     dag["node_configs"][n["id"]]["label"] = f"📄 {dataset_name[:18]}"
+
+    # Preserve active workbook identity so canvas/frontend does not rename or create a separate workbook
+    active_wf_id = payload.workflow_id
+    active_wf_name = payload.workflow_name
+    if active_wf_id:
+        from backend.app.workflows.models import Workflow
+        wf_chk = await db.execute(select(Workflow).where(Workflow.id == active_wf_id))
+        existing_wf = wf_chk.scalar_one_or_none()
+        if existing_wf:
+            active_wf_name = active_wf_name or existing_wf.name
+
+    if active_wf_id or active_wf_name:
+        if active_wf_id:
+            recommendation["workflow_id"] = active_wf_id
+        if active_wf_name:
+            recommendation["workflow_name"] = active_wf_name
+            recommendation["name"] = active_wf_name
+        if "recommended_dag" in recommendation:
+            dag = recommendation["recommended_dag"]
+            if active_wf_id:
+                dag["id"] = active_wf_id
+                dag["workflow_id"] = active_wf_id
+            if active_wf_name:
+                dag["name"] = active_wf_name
+                dag["workflow_name"] = active_wf_name
 
     return recommendation
 

@@ -553,7 +553,13 @@ def execute_pipeline():
         for e in canvas_edges
     ]
 
-    workflow_graph = WorkflowGraph(nodes=backend_nodes, edges=backend_edges)
+    workflow_graph = WorkflowGraph(
+        id=st.session_state.get("active_saved_workflow_id"),
+        workflow_id=st.session_state.get("active_saved_workflow_id"),
+        name=st.session_state.get("active_saved_workflow_name"),
+        nodes=backend_nodes,
+        edges=backend_edges
+    )
     val_errors = workflow_graph.validate_graph()
 
     # Pre-Flight Validation Checks
@@ -1211,8 +1217,11 @@ def save_workflow_to_backend(name: str, description: str = "") -> dict:
         res = httpx.post("http://localhost:8000/api/v1/workflows/", json=body, timeout=4.0)
         if res.status_code in [200, 201]:
             saved_json = res.json()
+            saved_name = saved_json.get("name") or name
             st.session_state["active_saved_workflow_id"] = saved_json.get("id")
-            st.session_state["active_saved_workflow_name"] = name
+            st.session_state["active_saved_workflow_name"] = saved_name
+            if "wb_name_input" in st.session_state:
+                st.session_state["wb_name_input"] = saved_name
             record_api_telemetry("💾 Save Workflow API", "/api/v1/workflows/", "POST", body, saved_json, res.status_code, 2.1)
             return saved_json
     except Exception:
@@ -1223,16 +1232,22 @@ def save_workflow_to_backend(name: str, description: str = "") -> dict:
     import asyncio
     from backend.app.infrastructure.database.session import AsyncSessionLocal, init_db
     from backend.app.workflows.models import Workflow
+    from backend.app.workflows.router import is_generic_workbook_name
     from sqlalchemy.future import select
 
     wf_id = st.session_state.get("active_saved_workflow_id") or str(uuid.uuid4())
+    final_saved_name = name
+
     async def _async_save():
+        nonlocal final_saved_name
         await init_db()
         async with AsyncSessionLocal() as session:
             existing_wf_res = await session.execute(select(Workflow).where(Workflow.id == wf_id))
             wf = existing_wf_res.scalar_one_or_none()
             if wf:
-                wf.name = name
+                if name and not (is_generic_workbook_name(name) and not is_generic_workbook_name(wf.name)):
+                    wf.name = name
+                final_saved_name = wf.name
                 wf.description = description
                 wf.nodes = nodes_payload
                 wf.edges = edges_payload
@@ -1277,7 +1292,7 @@ def save_workflow_to_backend(name: str, description: str = "") -> dict:
                         },
                         step_snapshots=last_ex.get("step_snapshots"),
                         logs=last_ex.get("execution_logs") or last_ex.get("logs"),
-                        run_label=name
+                        run_label=None
                     )
                 except Exception:
                     pass
@@ -1285,8 +1300,10 @@ def save_workflow_to_backend(name: str, description: str = "") -> dict:
     try:
         asyncio.run(_async_save())
         st.session_state["active_saved_workflow_id"] = wf_id
-        st.session_state["active_saved_workflow_name"] = name
-        saved_dict = {"id": wf_id, "name": name, "status": "SAVED"}
+        st.session_state["active_saved_workflow_name"] = final_saved_name
+        if "wb_name_input" in st.session_state:
+            st.session_state["wb_name_input"] = final_saved_name
+        saved_dict = {"id": wf_id, "name": final_saved_name, "status": "SAVED"}
         record_api_telemetry("💾 Save Workflow DB", "/api/v1/workflows/", "POST", body, saved_dict, 201, 1.8)
         return saved_dict
     except Exception as ex:
@@ -1658,6 +1675,8 @@ def restore_saved_workflow(wf_data: dict):
     st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
     st.session_state["active_saved_workflow_name"] = wf_data.get("name", "Saved Workflow")
     st.session_state["active_saved_workflow_id"] = wf_data.get("id")
+    if "wb_name_input" in st.session_state:
+        st.session_state["wb_name_input"] = wf_data.get("name", "Saved Workflow")
 
     # Restore Execution Results & Diagnostics if present
     last_exec = wf_data.get("last_execution")
