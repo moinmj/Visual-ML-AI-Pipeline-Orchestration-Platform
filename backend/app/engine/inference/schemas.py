@@ -63,6 +63,19 @@ class PredictionRequest(BaseModel):
     }
 
 
+class FeatureAttribution(BaseModel):
+    """
+    Individual feature contribution in a SHAP / TreeSHAP waterfall decomposition.
+    """
+    feature: str = Field(description="Name of the input feature")
+    input_value: Optional[Any] = Field(default=None, description="Input value used in prediction")
+    attribution: float = Field(description="Signed SHAP value contribution (+ or -)")
+    attribution_formatted: str = Field(description="Human-formatted contribution string (e.g. '+$45,000' or '-$12,000')")
+    abs_importance: float = Field(description="Absolute magnitude of contribution")
+    direction: str = Field(description="'positive' (boosts target) or 'negative' (reduces target)")
+    percentage: Optional[float] = Field(default=None, description="Percentage share of total attribution")
+
+
 class PredictionResponse(BaseModel):
     """
     Standardized response payload for model predictions across all task families.
@@ -79,6 +92,14 @@ class PredictionResponse(BaseModel):
     confidence: Optional[float] = Field(default=None, description="Confidence score percentage (0-100%) for classification")
     probabilities: Optional[Dict[str, float]] = Field(default=None, description="Per-class probability distribution")
     
+    # SHAP / TreeSHAP Waterfall Interpretability Outputs
+    base_value: Optional[float] = Field(default=None, description="SHAP baseline / expected value E[f(x)] before feature contributions")
+    base_value_formatted: Optional[str] = Field(default=None, description="Human-formatted baseline value string (e.g. '$915,554.58')")
+    waterfall_breakdown: Optional[List[FeatureAttribution]] = Field(default=None, description="Ordered waterfall list of SHAP contributions from baseline to final prediction")
+    top_positive_drivers: Optional[List[str]] = Field(default=None, description="Summary strings of top positive drivers (e.g. ['Store (+45,000)'])")
+    top_negative_drivers: Optional[List[str]] = Field(default=None, description="Summary strings of top negative drivers (e.g. ['Fuel_Price (-12,000)'])")
+    waterfall_summary: Optional[str] = Field(default=None, description="Plain English summary of waterfall breakdown, e.g. 'Store contributed +$45,000; Fuel_Price contributed -$12,000; Unemployment contributed -$8,000.'")
+
     # AI Natural Language Query Outputs
     ai_explanation: Optional[str] = Field(default=None, description="Natural language conversational explanation synthesized by LLM")
     inferred_inputs: Optional[Dict[str, Any]] = Field(default=None, description="Feature inputs extracted/inferred by AI from prompt")
