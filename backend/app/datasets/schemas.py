@@ -3,6 +3,9 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime
 
 
+from backend.app.workflows.schemas import UTCDateTime
+
+
 class DatasetBase(BaseModel):
     name: str = Field(..., description="User-friendly name of the dataset")
     description: Optional[str] = Field(None, description="Optional dataset description")
@@ -21,8 +24,8 @@ class DatasetResponse(DatasetBase):
     row_count: int
     column_count: int
     quality_score: float
-    created_at: datetime
-    updated_at: datetime
+    created_at: UTCDateTime
+    updated_at: UTCDateTime
 
     model_config = {
         "from_attributes": True
