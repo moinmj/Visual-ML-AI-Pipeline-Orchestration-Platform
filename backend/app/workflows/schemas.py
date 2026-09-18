@@ -1,7 +1,33 @@
 from enum import Enum
-from pydantic import BaseModel, Field
-from typing import List, Dict, Any, Optional, Union
-from datetime import datetime
+from pydantic import BaseModel, Field, BeforeValidator, PlainSerializer
+from typing import List, Dict, Any, Optional, Union, Annotated
+from datetime import datetime, timezone
+
+
+def _ensure_utc_datetime(v: Any) -> Optional[datetime]:
+    if v is None:
+        return None
+    if isinstance(v, str):
+        v = datetime.fromisoformat(v.replace("Z", "+00:00"))
+    if isinstance(v, datetime):
+        if v.tzinfo is None:
+            v = v.replace(tzinfo=timezone.utc)
+        else:
+            v = v.astimezone(timezone.utc)
+    return v
+
+
+UTCDateTime = Annotated[
+    datetime,
+    BeforeValidator(_ensure_utc_datetime),
+    PlainSerializer(lambda dt: dt.isoformat().replace("+00:00", "Z"), return_type=str, when_used="json")
+]
+
+OptUTCDateTime = Annotated[
+    Optional[datetime],
+    BeforeValidator(_ensure_utc_datetime),
+    PlainSerializer(lambda dt: dt.isoformat().replace("+00:00", "Z") if dt else None, return_type=Optional[str], when_used="json")
+]
 
 
 class WorkflowStatusFilter(str, Enum):
@@ -48,9 +74,9 @@ class WorkflowResponse(BaseModel):
     node_configs: Dict[str, Any] = Field(default_factory=dict)
     last_execution: Optional[Dict[str, Any]] = None
     is_active: bool = True
-    deleted_at: Optional[datetime] = None
-    created_at: datetime
-    updated_at: datetime
+    deleted_at: OptUTCDateTime = None
+    created_at: UTCDateTime
+    updated_at: UTCDateTime
     model_config = {"from_attributes": True}
 
 
@@ -61,9 +87,9 @@ class WorkflowListItemResponse(BaseModel):
     dataset_id: Optional[str] = None
     dataset_name: Optional[str] = None
     is_active: bool = True
-    deleted_at: Optional[datetime] = None
-    created_at: datetime
-    updated_at: datetime
+    deleted_at: OptUTCDateTime = None
+    created_at: UTCDateTime
+    updated_at: UTCDateTime
     last_execution_status: Optional[str] = Field(None, description="Latest run status: SUCCESS, FAILED, or None if never executed")
     last_execution_id: Optional[str] = Field(None, description="Execution ID of the latest run")
     nodes_count: int = Field(0, description="Total number of nodes in this pipeline")
@@ -96,7 +122,7 @@ class WorkflowExecutionSummaryResponse(BaseModel):
     metrics: Optional[Dict[str, Any]] = None
     nodes_count: int = 0
     edges_count: int = 0
-    created_at: datetime
+    created_at: UTCDateTime
 
     model_config = {"from_attributes": True}
 
@@ -115,7 +141,7 @@ class WorkflowExecutionDetailResponse(BaseModel):
     reports: Optional[Dict[str, Any]] = None
     step_snapshots: Optional[Dict[str, Any]] = None
     logs: Optional[Union[List[str], List[Dict[str, Any]]]] = None
-    created_at: datetime
+    created_at: UTCDateTime
 
     model_config = {"from_attributes": True}
 

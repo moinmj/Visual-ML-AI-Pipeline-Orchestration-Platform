@@ -1457,7 +1457,7 @@ async def compare_workflow_executions(
             "version_number": exec_a.version_number,
             "run_label": exec_a.run_label,
             "status": exec_a.status,
-            "created_at": exec_a.created_at.isoformat() if exec_a.created_at else "",
+            "created_at": exec_a.created_at.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z") if exec_a.created_at else "",
             "metrics": exec_a.metrics
         },
         run_b={
@@ -1465,7 +1465,7 @@ async def compare_workflow_executions(
             "version_number": exec_b.version_number,
             "run_label": exec_b.run_label,
             "status": exec_b.status,
-            "created_at": exec_b.created_at.isoformat() if exec_b.created_at else "",
+            "created_at": exec_b.created_at.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z") if exec_b.created_at else "",
             "metrics": exec_b.metrics
         },
         metrics_diff=metrics_diff,
