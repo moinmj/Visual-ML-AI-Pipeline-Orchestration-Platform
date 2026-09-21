@@ -633,6 +633,121 @@ async def test_ai_recommended_pipeline_preserves_workbook_and_creates_version_2(
         assert hist2[1]["run_label"] == "Run #1"
 
 
+@pytest.mark.asyncio
+async def test_workflow_save_without_execution_id_adopts_latest_job():
+    """
+    Tests that when a user runs a pipeline and then calls Save Workbook
+    WITHOUT passing execution_id (and passing 'workflow_id' instead of 'id'),
+    the backend automatically resolves the workflow identity, auto-adopts the fresh
+    execution from job_manager, and creates Run #2 with distinct execution diagnostics.
+    """
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        dataset_id = str(uuid.uuid4())
+        wf_id = str(uuid.uuid4())
+
+        # Setup dataset
+        await client.post("/api/v1/datasets/", json={
+            "id": dataset_id,
+            "name": "Adoption_Test_Data",
+            "columns": ["feature1", "target"],
+            "total_rows": 20
+        })
+
+        dag_v1 = {
+            "nodes": [
+                {
+                    "id": "node_csv",
+                    "recipe_id": "csv_loader",
+                    "label": "CSV Loader",
+                    "config": {"dataset_id": dataset_id}
+                },
+                {
+                    "id": "node_model",
+                    "recipe_id": "random_forest_classifier",
+                    "label": "Classifier",
+                    "config": {"target_column": "target", "n_estimators": 5}
+                }
+            ],
+            "edges": [
+                {"source": "node_csv", "target": "node_model"}
+            ]
+        }
+
+        # 1. Execute Run 1
+        exec1_resp = await client.post(
+            f"/api/v1/workflows/execute?workflow_id={wf_id}",
+            json=dag_v1
+        )
+        assert exec1_resp.status_code == 200
+        exec1_id = exec1_resp.json()["execution_id"]
+
+        # 2. Save Workbook with execution_id
+        save1_resp = await client.post("/api/v1/workflows/", json={
+            "id": wf_id,
+            "name": "My Adoptive Pipeline",
+            "dataset_id": dataset_id,
+            "nodes": dag_v1["nodes"],
+            "edges": dag_v1["edges"],
+            "execution_id": exec1_id
+        })
+        assert save1_resp.status_code == 201
+
+        # 3. Execute Run 2 with modified parameter (n_estimators = 25)
+        dag_v2 = {
+            "nodes": [
+                {
+                    "id": "node_csv",
+                    "recipe_id": "csv_loader",
+                    "label": "CSV Loader",
+                    "config": {"dataset_id": dataset_id}
+                },
+                {
+                    "id": "node_model",
+                    "recipe_id": "random_forest_classifier",
+                    "label": "Classifier",
+                    "config": {"target_column": "target", "n_estimators": 25}
+                }
+            ],
+            "edges": [
+                {"source": "node_csv", "target": "node_model"}
+            ]
+        }
+        exec2_resp = await client.post(
+            f"/api/v1/workflows/execute?workflow_id={wf_id}",
+            json=dag_v2
+        )
+        assert exec2_resp.status_code == 200
+        exec2_id = exec2_resp.json()["execution_id"]
+        assert exec2_id != exec1_id
+
+        # 4. Save Workbook WITHOUT passing execution_id, and using "workflow_id" key
+        save2_resp = await client.post("/api/v1/workflows/", json={
+            "workflow_id": wf_id,  # Notice: passing workflow_id alias instead of id!
+            "name": "My Adoptive Pipeline",
+            "dataset_id": dataset_id,
+            "nodes": dag_v2["nodes"],
+            "edges": dag_v2["edges"]
+            # Notice: execution_id is completely omitted!
+        })
+        assert save2_resp.status_code == 201
+        saved2 = save2_resp.json()
+        assert saved2["id"] == wf_id
+
+        # 5. Check history: Run #2 MUST have exec2_id, NOT exec1_id!
+        hist_resp = await client.get(f"/api/v1/workflows/{wf_id}/history")
+        assert hist_resp.status_code == 200
+        hist = hist_resp.json()
+        assert len(hist) == 2
+        assert hist[0]["version_number"] == 2
+        assert hist[0]["id"] == exec2_id, f"Expected {exec2_id}, got {hist[0]['id']}"
+        assert hist[0]["run_label"] == "Run #2"
+
+        assert hist[1]["version_number"] == 1
+        assert hist[1]["id"] == exec1_id
+        assert hist[1]["run_label"] == "Run #1"
+
+
+
 
 
 

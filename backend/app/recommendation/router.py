@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Body
+from fastapi import APIRouter, Depends, HTTPException, status, Body, Request
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
 import pandas as pd
@@ -12,6 +12,7 @@ from backend.app.recommendation.recommender import AIRecommender
 from backend.app.recommendation.llm_recommender import LLMRecommender
 from backend.app.recipes.base.registry import recipe_registry
 from backend.app.core.config import settings
+from backend.app.workflows.router import extract_workflow_id_from_context
 
 router = APIRouter(prefix="/recommend", tags=["AI Recommendation & Auto-Architect"])
 
@@ -35,6 +36,7 @@ class AutoWireRequest(BaseModel):
 @router.post("/pipeline")
 async def recommend_pipeline(
     payload: RecommendationRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -102,7 +104,7 @@ async def recommend_pipeline(
                     dag["node_configs"][n["id"]]["label"] = f"📄 {dataset_name[:18]}"
 
     # Preserve active workbook identity so canvas/frontend does not rename or create a separate workbook
-    active_wf_id = payload.workflow_id
+    active_wf_id = extract_workflow_id_from_context(request, payload.workflow_id)
     active_wf_name = payload.workflow_name
     if active_wf_id:
         from backend.app.workflows.models import Workflow
@@ -114,6 +116,7 @@ async def recommend_pipeline(
     if active_wf_id or active_wf_name:
         if active_wf_id:
             recommendation["workflow_id"] = active_wf_id
+            recommendation["id"] = active_wf_id
         if active_wf_name:
             recommendation["workflow_name"] = active_wf_name
             recommendation["name"] = active_wf_name
@@ -122,6 +125,7 @@ async def recommend_pipeline(
             if active_wf_id:
                 dag["id"] = active_wf_id
                 dag["workflow_id"] = active_wf_id
+                dag["pipeline_id"] = active_wf_id
             if active_wf_name:
                 dag["name"] = active_wf_name
                 dag["workflow_name"] = active_wf_name
