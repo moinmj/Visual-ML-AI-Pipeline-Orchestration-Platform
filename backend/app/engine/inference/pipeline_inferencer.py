@@ -1,6 +1,7 @@
 import time
 import json
 import re
+from datetime import datetime
 from typing import Dict, Any, List, Optional, Union
 import numpy as np
 import pandas as pd
@@ -1431,15 +1432,22 @@ class PipelineInferencer:
             total_steps = horizon_years
             cadence_name = "annual"
 
-        # 4. Resolve Primary Entity Grouping Column (e.g. Store, Store_ID, Category_ID)
+        # 4. Resolve Primary Entity Grouping Column (e.g. Store, Store_ID, Category_ID).
+        # Pick the candidate with the MOST distinct values (not just the first one found)
+        # so a binary flag (e.g. Holiday_Flag, 2 values) can never be mistaken for the real
+        # entity dimension (e.g. Store, 45 values) just because it happens to appear earlier
+        # in feature_names. Flags/booleans with <=5 uniques are excluded from candidacy
+        # entirely, since those are essentially never a genuine per-row entity ID.
         primary_entity_col = None
         primary_entity_vals = [None]
+        best_cardinality = 0
         for col, val_set in entity_value_sets.items():
-            if col != step_sub_col and col != year_col:
-                if 1 < len(val_set) <= 50:
-                    primary_entity_col = col
-                    primary_entity_vals = val_set
-                    break
+            if col == step_sub_col or col == year_col:
+                continue
+            if 1 < len(val_set) <= 50 and len(val_set) > best_cardinality:
+                primary_entity_col = col
+                primary_entity_vals = val_set
+                best_cardinality = len(val_set)
 
         # 5. Starting Temporal Coordinates
         base_year = float(last_row.get(year_col, 2020) if year_col else 2020)
@@ -1479,6 +1487,18 @@ class PipelineInferencer:
                 if step_sub_col:
                     row_inputs[step_sub_col] = int(curr_sub)
 
+                # Synthesize a real calendar DATE only for genuine week-cadence pipelines —
+                # grounded in the actual year/week via ISO calendar math, not guessed. Left
+                # out for month/quarter/annual cadence, where a single day-of-month would be
+                # arbitrary rather than something real.
+                if step_sub_col and "week" in step_sub_col.lower() and year_col:
+                    try:
+                        synthetic_date = datetime.fromisocalendar(
+                            int(curr_year), min(max(int(curr_sub), 1), 53), 5  # Friday, typical weekly-retail convention
+                        )
+                        row_inputs["DATE"] = synthetic_date.strftime("%d-%m-%Y")
+                    except ValueError:
+                        pass  # e.g. week 53 doesn't exist in every year — Date_year/Date_week remain the source of truth
                 # Apply per-feature empirical linear drift + clamping
                 step_year_delta = (curr_year - base_year) + ((curr_sub - base_sub) / float(max_sub) if step_sub_col else 0.0)
                 for col, trend_info in feature_trends.items():
@@ -1505,7 +1525,17 @@ class PipelineInferencer:
                     except Exception:
                         pass
 
-                # Apply optional request feature overrides
+                # Overlay real historical seasonal averages for ANY feature that has a
+                # profile — including flags like Holiday_Flag, which are correctly excluded
+                # from feature_trends (a flag shouldn't get a linear drift) but still need
+                # to reflect real seasonal history instead of staying frozen at the base
+                # row's single last value for every future week.
+                for col, profile in seasonal_profile.items():
+                    if col in (year_col, step_sub_col, primary_entity_col) or col in feature_trends:
+                        continue
+                    seasonal_val = profile.get(str(int(curr_sub)))
+                    if seasonal_val is not None:
+                        row_inputs[col] = int(seasonal_val) if float(seasonal_val).is_integer() else round(seasonal_val, 4)
                 for k, v in feature_overrides.items():
                     if k in row_inputs:
                         row_inputs[k] = v

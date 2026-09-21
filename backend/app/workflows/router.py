@@ -1921,4 +1921,4 @@ async def generate_future_dataset(
             detail=f"No live model inference bundle found for execution ID '{execution_id}'. Please execute the pipeline first."
         )
 
-    return PipelineInferencer.generate_native_cadence_dataset(bundle=bundle, request=payload)
+    return PipelineInferencer.generate_native_cadence_dataset(bundle=bundle, request=payload)
