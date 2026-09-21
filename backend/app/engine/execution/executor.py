@@ -1,4 +1,5 @@
 import time
+import re
 import traceback
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
@@ -537,6 +538,44 @@ class DAGExecutor:
             except Exception as e:
                 logger.warning(f"Could not compute last_historical_row: {str(e)}")
 
+        # Capture distinct entity value sets (e.g. Stores 1..45) and seasonal profile (historical feature averages per week/month)
+        entity_value_sets: Dict[str, List[Any]] = {}
+        seasonal_profile: Dict[str, Dict[str, float]] = {}
+        if X_eval is not None and isinstance(X_eval, pd.DataFrame):
+            try:
+                for col in fn_list:
+                    if col not in X_eval.columns:
+                        continue
+                    s = X_eval[col].dropna()
+                    uniques = s.unique()
+                    # Low-cardinality entity grouping column (e.g., Store IDs, Category IDs, Flag columns)
+                    if 1 < len(uniques) <= 50:
+                        entity_value_sets[col] = [
+                            int(v) if isinstance(v, (np.integer, int)) else (float(v) if isinstance(v, (np.floating, float)) else str(v))
+                            for v in uniques
+                        ]
+
+                # Seasonal profiling: group continuous numeric features by sub-year calendar components (e.g. Date_week, Date_month)
+                sub_date_cols = [
+                    c for c in fn_list
+                    if c in X_eval.columns and any(
+                        h in c.lower().replace("_", " ").split() for h in ("month", "dayofweek", "day_of_week", "quarter", "week", "day")
+                    ) and not c.lower().startswith("holiday")
+                ]
+                if sub_date_cols:
+                    step_sub_col = sub_date_cols[0]
+                    for col in fn_list:
+                        if col == step_sub_col or col not in X_eval.columns:
+                            continue
+                        if pd.api.types.is_numeric_dtype(X_eval[col]):
+                            grp_means = X_eval.groupby(step_sub_col)[col].mean().to_dict()
+                            seasonal_profile[col] = {
+                                str(k): round(float(v), 4)
+                                for k, v in grp_means.items() if pd.notna(v)
+                            }
+            except Exception as e:
+                logger.warning(f"Could not compute entity_value_sets or seasonal_profile: {str(e)}")
+
         # Resolve time-series frequency if available
         resolved_freq = (
             pipeline_context.get("frequency")
@@ -561,6 +600,8 @@ class DAGExecutor:
             "max_year": max_year,
             "annual_trend_pct": annual_trend_pct,
             "feature_trends": feature_trends,
+            "entity_value_sets": entity_value_sets,
+            "seasonal_profile": seasonal_profile,
             "frequency": resolved_freq,
             "freq": resolved_freq,
         }
@@ -599,6 +640,8 @@ class DAGExecutor:
             "max_year": max_year,
             "annual_trend_pct": annual_trend_pct,
             "feature_trends": feature_trends,
+            "entity_value_sets": entity_value_sets,
+            "seasonal_profile": seasonal_profile,
             "frequency": resolved_freq,
             "freq": resolved_freq,
             "split_mode": pipeline_context.get("split_mode"),
