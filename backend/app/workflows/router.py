@@ -34,7 +34,9 @@ from backend.app.engine.inference import (
     PredictionRequest,
     PredictionResponse,
     InferenceSchemaResponse,
-    FeatureSchemaItem
+    FeatureSchemaItem,
+    NativeCadenceDatasetRequest,
+    NativeCadenceDatasetResponse
 )
 from backend.app.core.security import get_current_user, require_role, require_permission
 
@@ -1832,3 +1834,23 @@ async def export_prediction_csv(
             "Content-Disposition": f"attachment; filename=prediction_export_{execution_id}.csv"
         }
     )
+
+
+@router.post("/{execution_id}/generate-future-dataset", response_model=NativeCadenceDatasetResponse)
+async def generate_future_dataset(
+    execution_id: str,
+    payload: NativeCadenceDatasetRequest = Body(...)
+):
+    """
+    Generates a full row-by-row synthetic future dataset at the original dataset's native
+    temporal cadence (e.g. weekly per Store ID or daily per SKU), with predicted target
+    and predicted feature values formatted in the exact schema of the original CSV.
+    """
+    bundle = job_manager.get_inference_bundle(execution_id)
+    if not bundle:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No live model inference bundle found for execution ID '{execution_id}'. Please execute the pipeline first."
+        )
+
+    return PipelineInferencer.generate_native_cadence_dataset(bundle=bundle, request=payload)

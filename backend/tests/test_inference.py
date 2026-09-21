@@ -556,3 +556,56 @@ def test_shap_treeshap_waterfall_breakdown():
     assert proj_res.waterfall_breakdown is not None
     assert len(proj_res.waterfall_breakdown) == 3
     assert proj_res.waterfall_summary is not None
+
+
+def test_native_cadence_dataset_steps_weekly_not_yearly_and_replicates_entities():
+    """
+    Verify native cadence dataset generator:
+    - Steps weekly subcomponents (Date_week 1 to 52) with year rollover (Date_year)
+    - Replicates across distinct entities (e.g. Store IDs 1, 2, 3)
+    - Returns records with predicted target values formatted in original dataset schema
+    """
+    from sklearn.ensemble import RandomForestRegressor
+    from backend.app.engine.inference.schemas import NativeCadenceDatasetRequest
+
+    X_train = pd.DataFrame({
+        "Store": [1, 2, 3, 1, 2, 3, 1, 2, 3],
+        "Date_year": [2012, 2012, 2012, 2012, 2012, 2012, 2012, 2012, 2012],
+        "Date_week": [45, 45, 45, 46, 46, 46, 47, 47, 47],
+        "Fuel_Price": [3.4, 3.5, 3.6, 3.45, 3.55, 3.65, 3.5, 3.6, 3.7],
+        "CPI": [180.0, 181.0, 182.0, 180.5, 181.5, 182.5, 181.0, 182.0, 183.0]
+    })
+    y_train = np.array([700000.0, 750000.0, 800000.0, 710000.0, 760000.0, 810000.0, 720000.0, 770000.0, 820000.0])
+
+    rf = RandomForestRegressor(n_estimators=5, random_state=42)
+    rf.fit(X_train, y_train)
+
+    bundle = {
+        "execution_id": "test_native_cadence_exec",
+        "task_type": "regression",
+        "model": rf,
+        "target_column": "Weekly_Sales",
+        "feature_names": ["Store", "Date_year", "Date_week", "Fuel_Price", "CPI"],
+        "temporal_column": "Date_year",
+        "last_historical_row": {"Store": 1, "Date_year": 2012, "Date_week": 47, "Fuel_Price": 3.5, "CPI": 181.0},
+        "sample_row": {"Store": 1, "Date_year": 2012, "Date_week": 47, "Fuel_Price": 3.5, "CPI": 181.0},
+        "entity_value_sets": {"Store": [1, 2, 3]},
+        "feature_trends": {"Fuel_Price": {"slope_per_unit_time": 0.1}, "CPI": {"slope_per_unit_time": 2.0}},
+        "training_feature_summary": {
+            "Store": {"min_value": 1, "max_value": 3},
+            "Date_year": {"min_value": 2012, "max_value": 2012},
+            "Date_week": {"min_value": 1, "max_value": 52},
+            "Fuel_Price": {"min_value": 3.0, "max_value": 5.0},
+            "CPI": {"min_value": 170.0, "max_value": 200.0}
+        }
+    }
+
+    req = NativeCadenceDatasetRequest(periods=10)
+    res = PipelineInferencer.generate_native_cadence_dataset(bundle=bundle, request=req)
+
+    assert res.status == "SUCCESS"
+    assert res.total_rows == 30  # 10 periods x 3 Stores
+    assert res.cadence == "weekly"
+    assert res.step_column == "Date_week"
+    assert len(res.preview_rows) == 10
+    assert "Weekly_Sales (Predicted)" in res.preview_rows[0]

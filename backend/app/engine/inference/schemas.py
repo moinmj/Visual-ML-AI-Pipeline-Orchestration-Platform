@@ -125,6 +125,7 @@ class PredictionResponse(BaseModel):
     series_summary: Optional[Dict[str, Any]] = Field(default=None, description="Summary statistics of the projected time series (average, peak, trough, range)")
     is_trend_extrapolated: Optional[bool] = Field(default=None, description="True only when no feature carried a usable historical drift, so the target itself was extrapolated using its own historical annual trend as a last resort. False when every future point is a genuine model prediction driven by projected feature values.")
     feature_trend_basis: Optional[Dict[str, Any]] = Field(default=None, description="Per-feature drift assumptions actually applied when constructing future rows (slope per year, source: 'projected_from_history' | 'frozen_at_input').")
+    dataset_preview: Optional[List[Dict[str, Any]]] = Field(default=None, description="This prediction reshaped into the original dataset's own column layout — one row per trajectory point (or a single row for a manual, non-forecast prediction) — with the target column and any feature that was drifted from history labeled '<column> (Predicted)'. Columns that were explicitly typed by the caller or held constant (e.g. Holiday_Flag) are left unlabeled since they are not model-generated values.")
     
     # Batch Outputs
     batch_predictions: Optional[List[Dict[str, Any]]] = Field(default=None, description="Scored records for batch CSV requests")
@@ -165,3 +166,32 @@ class InferenceSchemaResponse(BaseModel):
     max_year: Optional[int] = Field(default=None, description="Maximum year found in training data.")
     annual_trend_pct: Optional[float] = Field(default=None, description="Empirical historical annual trend/growth rate percentage for the TARGET column. Informational only — future projections now drive predictions by projecting individual feature values, not by applying this rate to the output.")
     feature_trends: Optional[Dict[str, Dict[str, float]]] = Field(default=None, description="Per-feature empirical drift vs. the temporal column (slope_per_unit_time, pct_per_unit_time), computed from training data. Features absent from this map are held constant at whatever value the caller supplies for future projections.")
+    entity_value_sets: Optional[Dict[str, List[Any]]] = Field(default=None, description="Distinct historical values captured for low-cardinality entity/grouping columns (e.g. Store IDs [1..45]).")
+    seasonal_profile: Optional[Dict[str, Dict[str, float]]] = Field(default=None, description="Historical feature averages grouped by date subcomponents (week, month).")
+
+
+class NativeCadenceDatasetRequest(BaseModel):
+    """
+    Request parameters for generating a full row-by-row synthetic future dataset
+    at the original dataset's native temporal cadence (e.g. weekly per store).
+    """
+    horizon_years: Optional[int] = Field(default=3, description="Number of future years to generate (default: 3).")
+    periods: Optional[int] = Field(default=None, description="Explicit number of step periods to generate (e.g., 156 weeks).")
+    step_unit: Optional[str] = Field(default="auto", description="Temporal step unit: 'week', 'month', 'year', or 'auto'.")
+    feature_overrides: Optional[Dict[str, Any]] = Field(default=None, description="Optional custom feature overrides for the generated dataset.")
+
+
+class NativeCadenceDatasetResponse(BaseModel):
+    """
+    Response containing the generated row-by-row synthetic future dataset
+    formatted in the exact column schema of the original dataset.
+    """
+    status: str = Field(default="SUCCESS")
+    execution_id: str
+    target_column: Optional[str] = None
+    step_column: Optional[str] = Field(default=None, description="The temporal subcomponent column used for step pacing (e.g. Date_week).")
+    cadence: str = Field(default="weekly", description="Detected cadence (weekly, monthly, annual).")
+    total_rows: int = Field(default=0, description="Total number of generated rows across all entities.")
+    columns: List[str] = Field(default_factory=list, description="Original dataset column headers.")
+    preview_rows: List[Dict[str, Any]] = Field(default_factory=list, description="Top 10 generated rows formatted as dataset preview.")
+    records: List[Dict[str, Any]] = Field(default_factory=list, description="All generated records.")

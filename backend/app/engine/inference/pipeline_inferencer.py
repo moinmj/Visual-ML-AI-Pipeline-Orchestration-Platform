@@ -7,17 +7,43 @@ import pandas as pd
 import httpx
 
 from backend.app.core.config import settings
-from backend.app.core.logging import logger
-from backend.app.engine.inference.schemas import PredictionRequest, PredictionResponse
+from backend.app.engine.inference.schemas import (
+    PredictionRequest,
+    PredictionResponse,
+    NativeCadenceDatasetRequest,
+    NativeCadenceDatasetResponse
+)
 from backend.app.engine.inference.explainability import compute_waterfall_breakdown
 
 
 class PipelineInferencer:
-    """
-    Universal Inference Engine for Visual ML/AI Pipelines.
-    Executes live real-time predictions, batch scoring, and time-series projections
-    using artifacts preserved from completed pipeline executions.
-    """
+    @classmethod
+    def _build_dataset_preview(
+        cls,
+        rows: List[Dict[str, Any]],
+        target_col: Optional[str],
+        target_values: List[Any],
+        feature_trend_basis: Optional[Dict[str, Any]] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Reshapes an already-computed prediction (single row, or a full trajectory) into
+        the original dataset's own column layout, labeling only the columns that are
+        actual model output — the target, and any feature that was drifted forward from
+        history — as "<column> (Predicted)". Columns the caller explicitly typed, or that
+        stayed frozen (e.g. Holiday_Flag, Store), are left unlabeled since they are not
+        model-generated values.
+        """
+        basis = feature_trend_basis or {}
+        preview: List[Dict[str, Any]] = []
+        for row, target_val in zip(rows, target_values):
+            out_row: Dict[str, Any] = {}
+            for col, val in row.items():
+                is_projected = basis.get(col, {}).get("source") == "projected_from_history"
+                out_row[f"{col} (Predicted)" if is_projected else col] = val
+            if target_col:
+                out_row[f"{target_col} (Predicted)"] = target_val
+            preview.append(out_row)
+        return preview
 
     @classmethod
     def predict(cls, bundle: Dict[str, Any], request: PredictionRequest) -> PredictionResponse:
@@ -412,6 +438,11 @@ class PipelineInferencer:
                 probabilities=probs_dict,
                 features_used=list(X.columns),
                 inputs_used=dict(inputs),
+                dataset_preview=cls._build_dataset_preview(
+                    rows=[dict(inputs)],
+                    target_col=bundle.get("target_column"),
+                    target_values=[decoded_label]
+                ),
                 base_value=waterfall_meta.get("base_value"),
                 base_value_formatted=waterfall_meta.get("base_value_formatted"),
                 waterfall_breakdown=waterfall_meta.get("waterfall_breakdown"),
@@ -451,6 +482,11 @@ class PipelineInferencer:
             prediction_raw=float(round(raw_val, 4)),
             features_used=list(X.columns),
             inputs_used=dict(inputs),
+            dataset_preview=cls._build_dataset_preview(
+                rows=[dict(inputs)],
+                target_col=bundle.get("target_column"),
+                target_values=[reg_val]
+            ),
             base_value=waterfall_meta.get("base_value"),
             base_value_formatted=waterfall_meta.get("base_value_formatted"),
             waterfall_breakdown=waterfall_meta.get("waterfall_breakdown"),
@@ -1326,3 +1362,182 @@ class PipelineInferencer:
             return res_str
 
         return f"Based on your query '{query}', the model projects a predicted {target_label} of {prediction} under the specified feature conditions."
+
+    # -------------------------------------------------------------
+    # 8. NATIVE CADENCE FUTURE DATASET GENERATOR
+    # -------------------------------------------------------------
+    @classmethod
+    def generate_native_cadence_dataset(
+        cls,
+        bundle: Dict[str, Any],
+        request: NativeCadenceDatasetRequest
+    ) -> NativeCadenceDatasetResponse:
+        """
+        Generates a full row-by-row synthetic future dataset at the original dataset's native
+        temporal cadence (e.g. weekly per Store ID or daily per SKU), with predicted target
+        and predicted feature values formatted in the exact schema of the original CSV.
+        """
+        model = bundle.get("model")
+        if model is None:
+            raise ValueError("No trained model object found in inference bundle.")
+
+        exec_id = bundle.get("execution_id", "unknown")
+        target_col = bundle.get("target_column") or "Target"
+        fn_list = list(bundle.get("feature_names", []))
+        last_row = dict(bundle.get("last_historical_row") or bundle.get("sample_row", {}))
+        feature_trends = bundle.get("feature_trends", {})
+        entity_value_sets = bundle.get("entity_value_sets", {})
+        seasonal_profile = bundle.get("seasonal_profile", {})
+        training_summary = bundle.get("training_feature_summary", {})
+
+        # 1. Detect Sub-Year Temporal Step Column (e.g. Date_week, Date_month, Date_day)
+        sub_date_cols = [
+            c for c in fn_list
+            if any(h in c.lower().replace("_", " ").split() for h in ("month", "dayofweek", "day_of_week", "quarter", "week", "day"))
+            and not c.lower().startswith("holiday")
+        ]
+        step_sub_col = sub_date_cols[0] if sub_date_cols else None
+
+        # 2. Detect Main Year Column (e.g. Date_year, Year)
+        year_col = bundle.get("temporal_column")
+        if not year_col:
+            for fn in fn_list:
+                if "year" in fn.lower():
+                    year_col = fn
+                    break
+
+        # 3. Determine Step Parameters & Rollover Max
+        max_sub = 52
+        cadence_name = "weekly"
+        if step_sub_col:
+            sl = step_sub_col.lower()
+            if "month" in sl:
+                max_sub = 12
+                cadence_name = "monthly"
+            elif "quarter" in sl:
+                max_sub = 4
+                cadence_name = "quarterly"
+            elif "week" in sl:
+                max_sub = 52
+                cadence_name = "weekly"
+
+        # Determine total step periods
+        horizon_years = request.horizon_years or 3
+        if request.periods:
+            total_steps = request.periods
+        elif step_sub_col:
+            total_steps = horizon_years * max_sub
+        else:
+            total_steps = horizon_years
+            cadence_name = "annual"
+
+        # 4. Resolve Primary Entity Grouping Column (e.g. Store, Store_ID, Category_ID)
+        primary_entity_col = None
+        primary_entity_vals = [None]
+        for col, val_set in entity_value_sets.items():
+            if col != step_sub_col and col != year_col:
+                if 1 < len(val_set) <= 50:
+                    primary_entity_col = col
+                    primary_entity_vals = val_set
+                    break
+
+        # 5. Starting Temporal Coordinates
+        base_year = float(last_row.get(year_col, 2020) if year_col else 2020)
+        base_sub = float(last_row.get(step_sub_col, 1) if step_sub_col else 1)
+
+        feature_overrides = request.feature_overrides or {}
+        generated_records: List[Dict[str, Any]] = []
+
+        # Feature trend basis for preview header labeling
+        feature_trend_basis = {
+            col: {"source": "projected_from_history" if col in feature_trends else "frozen_at_input"}
+            for col in last_row.keys() if col != year_col and col != step_sub_col
+        }
+
+        # 6. Generate Row-by-Row Sequence across all Entities
+        for ent_val in primary_entity_vals:
+            curr_year = base_year
+            curr_sub = base_sub
+
+            for step_idx in range(1, total_steps + 1):
+                # Advance sub-year step clock with proper year rollover
+                if step_sub_col:
+                    curr_sub += 1
+                    if curr_sub > max_sub:
+                        curr_sub = 1
+                        if year_col:
+                            curr_year += 1
+                elif year_col:
+                    curr_year += 1
+
+                # Construct raw row
+                row_inputs = dict(last_row)
+                if primary_entity_col and ent_val is not None:
+                    row_inputs[primary_entity_col] = ent_val
+                if year_col:
+                    row_inputs[year_col] = int(curr_year)
+                if step_sub_col:
+                    row_inputs[step_sub_col] = int(curr_sub)
+
+                # Apply per-feature empirical linear drift + clamping
+                step_year_delta = (curr_year - base_year) + ((curr_sub - base_sub) / float(max_sub) if step_sub_col else 0.0)
+                for col, trend_info in feature_trends.items():
+                    if col in (year_col, step_sub_col, primary_entity_col):
+                        continue
+                    try:
+                        base_feat_v = float(last_row.get(col, 0.0))
+                        slope = float(trend_info.get("slope_per_unit_time", 0.0))
+                        proj_v = base_feat_v + slope * step_year_delta
+
+                        # Seasonal adjustment if profile exists
+                        if col in seasonal_profile and str(int(curr_sub)) in seasonal_profile[col]:
+                            proj_v = (proj_v + seasonal_profile[col][str(int(curr_sub))]) / 2.0
+
+                        # Clamp to historical bounds
+                        col_sum = training_summary.get(col, {})
+                        lo = col_sum.get("min_value")
+                        hi = col_sum.get("max_value")
+                        if lo is not None and hi is not None and hi > lo:
+                            tol = (hi - lo) * 0.25
+                            proj_v = max(lo - tol, min(hi + tol, proj_v))
+
+                        row_inputs[col] = round(proj_v, 4)
+                    except Exception:
+                        pass
+
+                # Apply optional request feature overrides
+                for k, v in feature_overrides.items():
+                    if k in row_inputs:
+                        row_inputs[k] = v
+
+                # Run model prediction
+                X_row = cls._preprocess_inputs(bundle, pd.DataFrame([row_inputs]))
+                raw_pred = float(model.predict(X_row)[0])
+                pred_val = float(round(cls._inverse_transform_target(bundle, raw_pred), 4))
+
+                row_inputs[target_col] = pred_val
+                generated_records.append(row_inputs)
+
+        # 7. Reshape preview rows with "(Predicted)" labels
+        preview_rows = cls._build_dataset_preview(
+            rows=[{k: v for k, v in r.items() if k != target_col} for r in generated_records[:10]],
+            target_col=target_col,
+            target_values=[r[target_col] for r in generated_records[:10]],
+            feature_trend_basis=feature_trend_basis
+        )
+
+        all_cols = list(last_row.keys())
+        if target_col not in all_cols:
+            all_cols.append(target_col)
+
+        return NativeCadenceDatasetResponse(
+            status="SUCCESS",
+            execution_id=exec_id,
+            target_column=target_col,
+            step_column=step_sub_col or year_col,
+            cadence=cadence_name,
+            total_rows=len(generated_records),
+            columns=all_cols,
+            preview_rows=preview_rows,
+            records=generated_records
+        )
