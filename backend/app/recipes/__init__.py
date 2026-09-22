@@ -31,6 +31,7 @@ from backend.app.recipes.preprocessing.column_selector import ColumnSelectorReci
 from backend.app.recipes.preprocessing.data_type_converter import DataTypeConverterRecipe
 from backend.app.recipes.preprocessing.outlier_handler import OutlierHandlerRecipe
 from backend.app.recipes.preprocessing.feature_selector import FeatureSelectorRecipe
+from backend.app.recipes.preprocessing.dataset_join import DatasetJoinRecipe
 from backend.app.recipes.governance.mlflow_tracker import MLflowTrackerRecipe
 from backend.app.recipes.triggers.webhook_trigger import WebhookTriggerRecipe
 from backend.app.recipes.triggers.cron_trigger import CronScheduleTriggerRecipe
@@ -38,6 +39,7 @@ from backend.app.recipes.triggers.cron_trigger import CronScheduleTriggerRecipe
 
 def register_all_recipes():
     recipe_registry.register(CSVLoaderRecipe())
+    recipe_registry.register(DatasetJoinRecipe())
     recipe_registry.register(WebhookTriggerRecipe())
     recipe_registry.register(CronScheduleTriggerRecipe())
     recipe_registry.register(ColumnSelectorRecipe())

@@ -88,6 +88,14 @@ def diagnose_execution_error(
             "suggestion": "Ensure the exact same preprocessing steps (Imputer, Scaler, Encoder) are applied before both training and testing."
         }
 
+    # 7. Dataset Join / Merge Column Missing
+    if any(k in err_str for k in ["Join key", "join_type", "KeyError: 'left_on'", "MergeError", "requires two incoming datasets"]):
+        return {
+            "title": "Dataset Join Error",
+            "message": f"Dataset Join processor '{rec_name}' failed: {err_str}",
+            "suggestion": "Verify that two datasets are connected and that the join keys (left_on / right_on) exist in both datasets."
+        }
+
     # Default fallback
     return {
         "title": f"Execution Error in {rec_name}",
@@ -205,10 +213,12 @@ class DAGExecutor:
                 logs=logs
             )
 
-        # 2. Build In-Edge map to find parent nodes
+        # 2. Build In-Edge map to find parent nodes and incoming edge details
         parent_map: Dict[str, List[str]] = {n.id: [] for n in workflow.nodes}
+        in_edges_map: Dict[str, List[Any]] = {n.id: [] for n in workflow.nodes}
         for edge in workflow.edges:
             parent_map[edge.target].append(edge.source)
+            in_edges_map[edge.target].append(edge)
 
         overall_status = "SUCCESS"
 
@@ -257,9 +267,43 @@ class DAGExecutor:
                     overall_status = "FAILED"
                     break
             else:
+                incoming_edges = in_edges_map.get(node.id, [])
+                parent_outputs_map: Dict[str, Dict[str, Any]] = {}
+                parent_dfs: List[pd.DataFrame] = []
+
                 for parent_id in parents:
                     parent_out = node_outputs.get(parent_id, {})
+                    parent_outputs_map[parent_id] = parent_out
+                    if "dataframe" in parent_out and isinstance(parent_out["dataframe"], pd.DataFrame):
+                        parent_dfs.append(parent_out["dataframe"])
                     node_inputs.update(parent_out)
+
+                # Store multi-parent collections for multi-input nodes (e.g. joins, unions, ensembles)
+                node_inputs["parent_outputs"] = parent_outputs_map
+                node_inputs["parent_dataframes"] = parent_dfs
+
+                # Handle handle-aware assignment (e.g. left and right handles)
+                for edge in incoming_edges:
+                    p_out = node_outputs.get(edge.source, {})
+                    p_df = p_out.get("dataframe")
+                    if isinstance(p_df, pd.DataFrame):
+                        th = (getattr(edge, "target_handle", None) or "").lower()
+                        if th in ["left", "left_dataset", "df_left", "upstream_left"]:
+                            node_inputs["left_dataframe"] = p_df
+                            node_inputs["left_parent_id"] = edge.source
+                        elif th in ["right", "right_dataset", "df_right", "upstream_right"]:
+                            node_inputs["right_dataframe"] = p_df
+                            node_inputs["right_parent_id"] = edge.source
+
+                # If left/right dataframes are not explicitly bound by handles, default from parent_dfs
+                if "left_dataframe" not in node_inputs and len(parent_dfs) >= 1:
+                    node_inputs["left_dataframe"] = parent_dfs[0]
+                    if len(parents) >= 1:
+                        node_inputs["left_parent_id"] = parents[0]
+                if "right_dataframe" not in node_inputs and len(parent_dfs) >= 2:
+                    node_inputs["right_dataframe"] = parent_dfs[1]
+                    if len(parents) >= 2:
+                        node_inputs["right_parent_id"] = parents[1]
 
                 # Fallback to pipeline_context if node requires model/scaler/encoder but immediate parent didn't pass it
                 for ctx_key in ["model", "scaler", "encoder", "target_classes", "target_encoder", "feature_names", "imputer_stats", "vectorizer"]:

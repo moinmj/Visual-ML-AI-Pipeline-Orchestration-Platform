@@ -138,6 +138,15 @@ class WorkflowGraph(BaseModel):
                             node_id=node.id, recipe_id=node.recipe_id
                         )
 
+            # Dataset Join Check: Requires at least 2 incoming dataset connections
+            if node.recipe_id == "dataset_join":
+                if len(parents) < 2:
+                    add_error(
+                        f"⚠️ Incomplete Connections for '{node.id}' [{recipe.name}]: Dataset Join requires 2 incoming dataset streams (Left and Right), "
+                        f"but currently has {len(parents)} incoming connection(s). Connect two dataset nodes to this Join processor.",
+                        node_id=node.id, recipe_id=node.recipe_id
+                    )
+
         # 3b. Node Configuration & Required Schema Validation in sequential pipeline order (upstream -> downstream)
         for node in ordered_nodes:
             try:
