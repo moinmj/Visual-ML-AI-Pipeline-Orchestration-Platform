@@ -214,3 +214,43 @@ async def test_template_multi_dataset_join():
     assert tpl["id"] == "multi_dataset_join"
     assert tpl["node_count"] == 6
     assert any(n["recipe_id"] == "dataset_join" for n in tpl["dag"]["nodes"])
+
+
+@pytest.mark.asyncio
+async def test_autowire_with_dataset_join():
+    from backend.app.recommendation.router import autowire_nodes, AutoWireRequest
+
+    req = AutoWireRequest(
+        nodes=[
+            {"id": "node_loader_a", "recipe_id": "csv_loader", "label": "Customers", "position": {"x": 40, "y": 50}},
+            {"id": "node_loader_b", "recipe_id": "csv_loader", "label": "Transactions", "position": {"x": 40, "y": 200}},
+            {"id": "node_join", "recipe_id": "dataset_join", "label": "Join Customers and Transactions", "position": {"x": 300, "y": 120}},
+            {"id": "node_split", "recipe_id": "train_test_split", "label": "Splitter", "position": {"x": 550, "y": 120}},
+            {"id": "node_model", "recipe_id": "xgboost_trainer", "label": "XGBoost", "position": {"x": 800, "y": 120}},
+            {"id": "node_eval", "recipe_id": "model_evaluator", "label": "Evaluator", "position": {"x": 1050, "y": 120}},
+        ]
+    )
+
+    res = await autowire_nodes(req)
+    assert res["status"] == "AUTOWIRED"
+    edges = res["edges"]
+
+    # Verify both loader_a and loader_b connect to node_join with handles
+    edge_a = next((e for e in edges if e["source"] == "node_loader_a" and e["target"] == "node_join"), None)
+    assert edge_a is not None
+    assert edge_a["target_handle"] == "left"
+
+    edge_b = next((e for e in edges if e["source"] == "node_loader_b" and e["target"] == "node_join"), None)
+    assert edge_b is not None
+    assert edge_b["target_handle"] == "right"
+
+    # Verify loaders do NOT connect to each other!
+    assert not any(e["source"] == "node_loader_a" and e["target"] == "node_loader_b" for e in edges)
+    assert not any(e["source"] == "node_loader_b" and e["target"] == "node_loader_a" for e in edges)
+
+    # Verify join connects downstream to splitter
+    assert any(e["source"] == "node_join" and e["target"] == "node_split" for e in edges)
+
+    # Verify splitter connects to model and evaluator
+    assert any(e["source"] == "node_split" and e["target"] == "node_model" for e in edges)
+    assert any(e["source"] == "node_split" and e["target"] == "node_eval" for e in edges)
