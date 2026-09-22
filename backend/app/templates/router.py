@@ -88,6 +88,40 @@ TEMPLATES_CATALOG = {
             }
         }
     },
+    "multi_dataset_join": {
+        "id": "multi_dataset_join",
+        "name": "Multi-Table Feature Enrichment & ML Training",
+        "category": "Data Wrangling",
+        "description": "Enterprise multi-table data preparation pipeline that joins customer demographics with transaction logs on canvas before training XGBoost.",
+        "icon": "🔗",
+        "node_count": 6,
+        "dag": {
+            "nodes": [
+                {"id": "node_customers", "recipe_id": "csv_loader", "label": "👥 Customer Master Data", "position": {"x": 40, "y": 60}, "config": {}},
+                {"id": "node_transactions", "recipe_id": "csv_loader", "label": "💳 Transaction History", "position": {"x": 40, "y": 240}, "config": {}},
+                {"id": "node_join", "recipe_id": "dataset_join", "label": "🔗 Dataset Join / Merge", "position": {"x": 340, "y": 150}, "config": {"join_type": "inner", "on": "customer_id"}},
+                {"id": "node_split", "recipe_id": "train_test_split", "label": "✂️ Train / Test Split", "position": {"x": 620, "y": 150}, "config": {"target_column": "churn", "test_size": 0.2}},
+                {"id": "node_xgb", "recipe_id": "xgboost_trainer", "label": "⚡ XGBoost Classifier", "position": {"x": 880, "y": 100}, "config": {"task_type": "classification", "n_estimators": 100}},
+                {"id": "node_eval", "recipe_id": "model_evaluator", "label": "🎯 Model Evaluator", "position": {"x": 1140, "y": 150}, "config": {"report_type": "Comprehensive"}}
+            ],
+            "edges": [
+                {"id": "e1", "source": "node_customers", "target": "node_join", "target_handle": "left", "animated": True},
+                {"id": "e2", "source": "node_transactions", "target": "node_join", "target_handle": "right", "animated": True},
+                {"id": "e3", "source": "node_join", "target": "node_split", "animated": True},
+                {"id": "e4", "source": "node_split", "target": "node_xgb", "animated": True},
+                {"id": "e5", "source": "node_split", "target": "node_eval", "animated": True},
+                {"id": "e6", "source": "node_xgb", "target": "node_eval", "animated": True}
+            ],
+            "node_configs": {
+                "node_customers": {"recipe_id": "csv_loader", "label": "Customer Master Data", "config": {}},
+                "node_transactions": {"recipe_id": "csv_loader", "label": "Transaction History", "config": {}},
+                "node_join": {"recipe_id": "dataset_join", "label": "Dataset Join / Merge", "config": {"join_type": "inner", "on": "customer_id"}},
+                "node_split": {"recipe_id": "train_test_split", "label": "Train / Test Split", "config": {"target_column": "churn", "test_size": 0.2}},
+                "node_xgb": {"recipe_id": "xgboost_trainer", "label": "XGBoost Classifier", "config": {"task_type": "classification", "n_estimators": 100}},
+                "node_eval": {"recipe_id": "model_evaluator", "label": "Model Evaluator", "config": {"report_type": "Comprehensive"}}
+            }
+        }
+    },
     "enterprise_governance": {
         "id": "enterprise_governance",
         "name": "Enterprise CatBoost with Model Governance Card",
@@ -161,6 +195,8 @@ async def get_template(template_id: str) -> Dict[str, Any]:
         normalized_id = "anomaly_detection"
     elif normalized_id in ["governance", "audit", "compliance"]:
         normalized_id = "enterprise_governance"
+    elif normalized_id in ["join", "merge", "multi_dataset", "multi_dataset_join", "dataset_join"]:
+        normalized_id = "multi_dataset_join"
 
     template = TEMPLATES_CATALOG.get(normalized_id)
     if not template:
