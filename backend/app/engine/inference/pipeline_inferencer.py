@@ -190,7 +190,7 @@ class PipelineInferencer:
                         features_used=inferred_inputs or {}, trend=res.trend,
                         target_column=bundle.get("target_column"),
                         series_summary=res.series_summary,
-                        waterfall_summary=res.waterfall_summary
+                        waterfall_summary=getattr(res, "waterfall_summary", None)
                     )
                     res.inferred_inputs = inferred_inputs
                     if unrecognized_features:
@@ -652,6 +652,60 @@ class PipelineInferencer:
                 last_ds = records[-1]["ds"] if records else ""
                 pred_label = f"Forecasted Target ({last_ds}): {target_name}"
 
+        # Enrich forecasting records with exogenous feature trends captured in the bundle
+        last_row = dict(bundle.get("last_historical_row") or bundle.get("sample_row") or {})
+        feature_trends = bundle.get("feature_trends") or {}
+        seasonal_profile = bundle.get("seasonal_profile") or {}
+        training_summary = bundle.get("training_feature_summary") or {}
+        temporal_col = bundle.get("temporal_column")
+
+        if last_row:
+            base_year = float(last_row.get(temporal_col, 2020) if temporal_col and isinstance(last_row.get(temporal_col), (int, float)) else 2020)
+            for r in records:
+                if "features" not in r:
+                    feat_dict = dict(last_row)
+                    ds_str = r.get("ds")
+                    if ds_str:
+                        try:
+                            dt = pd.to_datetime(ds_str)
+                            delta_yrs = (dt.year - base_year) + ((dt.dayofyear - 1) / 365.25)
+                            for col in feat_dict.keys():
+                                cl = col.lower()
+                                if cl in ("date_year", "year"):
+                                    feat_dict[col] = dt.year
+                                elif cl in ("date_month", "month"):
+                                    feat_dict[col] = dt.month
+                                elif cl in ("date_week", "week"):
+                                    feat_dict[col] = int(dt.isocalendar().week)
+                                elif cl in ("date_day", "day"):
+                                    feat_dict[col] = dt.day
+                                elif cl in ("date_dayofweek", "dayofweek", "day_of_week"):
+                                    feat_dict[col] = dt.dayofweek
+                            for col, t_info in feature_trends.items():
+                                if col not in feat_dict or col == temporal_col:
+                                    continue
+                                try:
+                                    b_val = float(last_row.get(col, 0.0))
+                                    slope = float(t_info.get("slope_per_unit_time", 0.0))
+                                    proj_v = b_val + slope * delta_yrs
+                                    c_sum = training_summary.get(col, {})
+                                    lo, hi = c_sum.get("min_value"), c_sum.get("max_value")
+                                    if lo is not None and hi is not None and hi > lo:
+                                        tol = (hi - lo) * 0.25
+                                        proj_v = max(lo - tol, min(hi + tol, proj_v))
+                                    feat_dict[col] = round(proj_v, 4)
+                                except Exception:
+                                    pass
+                            for col, prof in seasonal_profile.items():
+                                if col in feat_dict:
+                                    s_key = str(int(dt.isocalendar().week))
+                                    if s_key in prof:
+                                        s_val = prof[s_key]
+                                        feat_dict[col] = int(s_val) if float(s_val).is_integer() else round(s_val, 4)
+                        except Exception:
+                            pass
+                    r["features"] = feat_dict
+
         return PredictionResponse(
             status="SUCCESS",
             task_type="time_series_forecasting",
@@ -666,7 +720,8 @@ class PipelineInferencer:
             projected_end_value=end_val,
             projected_change_pct=pct_chg,
             trend=trend,
-            series_summary=series_summary
+            series_summary=series_summary,
+            features_used=list(last_row.keys()) if last_row else []
         )
 
     @classmethod
