@@ -646,6 +646,15 @@ class DAGExecutor:
             "freq": resolved_freq,
             "split_mode": pipeline_context.get("split_mode"),
             "categorical_maps": pipeline_context.get("categorical_maps", {}),
+            "historical_records": (
+                pd.concat([X_eval, pd.Series(y_eval, name=pipeline_context.get("target_column") or "target")], axis=1)
+                .tail(1000)
+                .replace({float("nan"): None, float("inf"): None, float("-inf"): None})
+                .to_dict(orient="records")
+            ) if (X_eval is not None and isinstance(X_eval, pd.DataFrame) and y_eval is not None and len(y_eval) == len(X_eval)) else (
+                X_eval.tail(1000).replace({float("nan"): None, float("inf"): None, float("-inf"): None}).to_dict(orient="records")
+                if (X_eval is not None and isinstance(X_eval, pd.DataFrame)) else []
+            ),
         }
 
         try:

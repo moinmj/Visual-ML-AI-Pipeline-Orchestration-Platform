@@ -194,4 +194,33 @@ class NativeCadenceDatasetResponse(BaseModel):
     total_rows: int = Field(default=0, description="Total number of generated rows across all entities.")
     columns: List[str] = Field(default_factory=list, description="Original dataset column headers.")
     preview_rows: List[Dict[str, Any]] = Field(default_factory=list, description="Top 10 generated rows formatted as dataset preview.")
-    records: List[Dict[str, Any]] = Field(default_factory=list, description="All generated records.")
+    records: List[Dict[str, Any]] = Field(default_factory=list, description="All generated records.")
+
+
+class CombinedDatasetRequest(BaseModel):
+    """
+    Request parameters for generating a combined dataset containing both
+    historical records and synthetic predicted future records.
+    """
+    horizon_years: Optional[int] = Field(default=3, description="Number of future years to generate (default: 3).")
+    periods: Optional[int] = Field(default=None, description="Explicit number of step periods to generate.")
+    step_unit: Optional[str] = Field(default="auto", description="Temporal step unit: 'week', 'month', 'year', or 'auto'.")
+    feature_overrides: Optional[Dict[str, Any]] = Field(default=None, description="Optional custom feature overrides for future periods.")
+    max_historical_rows: Optional[int] = Field(default=1000, description="Max historical rows to include in concatenation (default: 1000).")
+
+
+class CombinedDatasetResponse(BaseModel):
+    """
+    Response containing the combined historical and predicted dataset
+    formatted with original CSV column headers and a RECORD_TYPE column.
+    """
+    status: str = Field(default="SUCCESS")
+    execution_id: str
+    target_column: Optional[str] = None
+    cadence: str = Field(default="weekly", description="Detected cadence (weekly, monthly, annual).")
+    historical_rows_count: int = Field(default=0, description="Number of historical records included.")
+    future_rows_count: int = Field(default=0, description="Number of predicted future records included.")
+    total_rows_count: int = Field(default=0, description="Total number of combined records.")
+    columns: List[str] = Field(default_factory=list, description="Original dataset column headers plus RECORD_TYPE.")
+    records: List[Dict[str, Any]] = Field(default_factory=list, description="All combined records (historical + predicted).")
+
