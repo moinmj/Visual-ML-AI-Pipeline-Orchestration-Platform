@@ -1,5 +1,5 @@
 from enum import Enum
-from pydantic import BaseModel, Field, BeforeValidator, PlainSerializer
+from pydantic import BaseModel, Field, BeforeValidator, PlainSerializer, model_validator
 from typing import List, Dict, Any, Optional, Union, Annotated
 from datetime import datetime, timezone
 
@@ -37,46 +37,66 @@ class WorkflowStatusFilter(str, Enum):
 
 
 class WorkflowCreate(BaseModel):
-    id: Optional[str] = Field(None, description="Optional pipeline ID (generated if not provided)")
-    workflow_id: Optional[str] = Field(None, description="Alias for id")
-    pipeline_id: Optional[str] = Field(None, description="Alias for id")
+    workflow_id: Optional[str] = Field(None, description="Workbook / pipeline ID (generated if not provided)")
     name: str = Field("Untitled Pipeline", description="Name of the pipeline workbook")
-    workflow_name: Optional[str] = Field(None, description="Alias for name")
     description: Optional[str] = Field(None, description="Optional pipeline description")
     dataset_id: Optional[str] = Field(None, description="ID of the active dataset associated with this pipeline")
     dataset_name: Optional[str] = Field(None, description="Name of the active dataset associated with this pipeline")
     nodes: List[Dict[str, Any]] = Field(default_factory=list, description="Visual canvas nodes")
     edges: List[Dict[str, Any]] = Field(default_factory=list, description="DAG edges")
     node_configs: Dict[str, Any] = Field(default_factory=dict, description="Full recipe node configurations & parameters")
-    execution_id: Optional[str] = Field(None, description="Optional execution ID from a recent run to link/attach reports")
-    executionId: Optional[str] = Field(None, description="CamelCase alias for execution_id")
-    run_id: Optional[str] = Field(None, description="Alias for execution_id")
-    job_id: Optional[str] = Field(None, description="Alias for execution_id")
+    execution_id: Optional[str] = Field(None, description="Execution ID from a recent run to link/attach reports")
     last_execution: Optional[Dict[str, Any]] = Field(None, description="Saved execution diagnostics, metrics, and logs")
 
     model_config = {"extra": "allow"}
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_aliases(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if not data.get("workflow_id"):
+                data["workflow_id"] = data.get("id") or data.get("pipeline_id")
+            if not data.get("name") and data.get("workflow_name"):
+                data["name"] = data.get("workflow_name")
+            if not data.get("execution_id"):
+                data["execution_id"] = data.get("executionId") or data.get("run_id") or data.get("job_id")
+        return data
+
+    @property
+    def id(self) -> Optional[str]:
+        return self.workflow_id
+
 
 class WorkflowUpdate(BaseModel):
-    id: Optional[str] = None
-    workflow_id: Optional[str] = None
-    pipeline_id: Optional[str] = None
-    name: Optional[str] = None
-    workflow_name: Optional[str] = None
+    workflow_id: Optional[str] = Field(None, description="Workbook / pipeline ID")
+    name: Optional[str] = Field(None, description="Name of the pipeline workbook")
     description: Optional[str] = None
     dataset_id: Optional[str] = None
     dataset_name: Optional[str] = None
     nodes: Optional[List[Dict[str, Any]]] = None
     edges: Optional[List[Dict[str, Any]]] = None
     node_configs: Optional[Dict[str, Any]] = None
-    execution_id: Optional[str] = None
-    executionId: Optional[str] = None
-    run_id: Optional[str] = None
-    job_id: Optional[str] = None
+    execution_id: Optional[str] = Field(None, description="Execution ID from a recent run")
     last_execution: Optional[Dict[str, Any]] = None
     is_active: Optional[bool] = None
 
     model_config = {"extra": "allow"}
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_aliases(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if not data.get("workflow_id"):
+                data["workflow_id"] = data.get("id") or data.get("pipeline_id")
+            if not data.get("name") and data.get("workflow_name"):
+                data["name"] = data.get("workflow_name")
+            if not data.get("execution_id"):
+                data["execution_id"] = data.get("executionId") or data.get("run_id") or data.get("job_id")
+        return data
+
+    @property
+    def id(self) -> Optional[str]:
+        return self.workflow_id
 
 
 class WorkflowResponse(BaseModel):
