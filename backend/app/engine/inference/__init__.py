@@ -5,7 +5,9 @@ from .schemas import (
     InferenceSchemaResponse,
     FeatureSchemaItem,
     NativeCadenceDatasetRequest,
-    NativeCadenceDatasetResponse
+    NativeCadenceDatasetResponse,
+    CombinedDatasetRequest,
+    CombinedDatasetResponse
 )
 
 __all__ = [
@@ -15,6 +17,8 @@ __all__ = [
     "InferenceSchemaResponse",
     "FeatureSchemaItem",
     "NativeCadenceDatasetRequest",
-    "NativeCadenceDatasetResponse"
+    "NativeCadenceDatasetResponse",
+    "CombinedDatasetRequest",
+    "CombinedDatasetResponse"
 ]
 

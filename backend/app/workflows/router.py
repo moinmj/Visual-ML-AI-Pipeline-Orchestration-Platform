@@ -37,7 +37,9 @@ from backend.app.engine.inference import (
     InferenceSchemaResponse,
     FeatureSchemaItem,
     NativeCadenceDatasetRequest,
-    NativeCadenceDatasetResponse
+    NativeCadenceDatasetResponse,
+    CombinedDatasetRequest,
+    CombinedDatasetResponse
 )
 from backend.app.core.security import get_current_user, require_role, require_permission
 
@@ -1922,3 +1924,55 @@ async def generate_future_dataset(
         )
 
     return PipelineInferencer.generate_native_cadence_dataset(bundle=bundle, request=payload)
+
+
+def _convert_combined_dataset_to_csv(response: CombinedDatasetResponse) -> str:
+    if response.records:
+        df_csv = pd.DataFrame(response.records)
+        if response.columns:
+            ordered_cols = [c for c in response.columns if c in df_csv.columns]
+            for c in df_csv.columns:
+                if c not in ordered_cols:
+                    ordered_cols.append(c)
+            df_csv = df_csv[ordered_cols]
+        return df_csv.to_csv(index=False)
+    return ""
+
+
+@router.post("/{execution_id}/generate-future-dataset/combined", response_model=CombinedDatasetResponse)
+async def generate_combined_dataset(
+    execution_id: str,
+    payload: CombinedDatasetRequest = Body(...)
+):
+    """
+    Combines historical ground truth dataset records with synthetic future predicted records
+    in chronological sequence under original CSV headers + RECORD_TYPE column ('HISTORICAL' vs 'PREDICTED').
+    """
+    bundle = job_manager.get_inference_bundle(execution_id)
+    if not bundle:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No live model inference bundle found for execution ID '{execution_id}'. Please execute the pipeline first."
+        )
+
+    return PipelineInferencer.generate_combined_dataset(bundle=bundle, request=payload)
+
+
+@router.post("/{execution_id}/generate-future-dataset/export-combined-csv")
+async def export_combined_dataset_csv(
+    execution_id: str,
+    payload: CombinedDatasetRequest = Body(...)
+):
+    """
+    Generates combined historical and synthetic future dataset, returning it as a downloadable CSV file.
+    """
+    combined_resp = await generate_combined_dataset(execution_id=execution_id, payload=payload)
+    csv_str = _convert_combined_dataset_to_csv(combined_resp)
+    return Response(
+        content=csv_str,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f"attachment; filename=combined_dataset_{execution_id}.csv"
+        }
+    )
+

@@ -608,4 +608,102 @@ def test_native_cadence_dataset_steps_weekly_not_yearly_and_replicates_entities(
     assert res.cadence == "weekly"
     assert res.step_column == "Date_week"
     assert len(res.preview_rows) == 10
-    assert "Weekly_Sales (Predicted)" in res.preview_rows[0]
+    assert "Weekly_Sales (Predicted)" in res.preview_rows[0]
+
+
+@pytest.mark.asyncio
+async def test_combined_dataset_generation_and_csv_export():
+    """
+    Verify combined historical + predicted synthetic dataset generation and downloadable CSV export endpoint:
+    - Concatenates historical ground truth records (RECORD_TYPE = 'HISTORICAL') and future synthetic rows (RECORD_TYPE = 'PREDICTED')
+    - Formats output under original dataset column headers + RECORD_TYPE column
+    - Validates POST /generate-future-dataset/combined and /export-combined-csv HTTP endpoints
+    """
+    from sklearn.ensemble import RandomForestRegressor
+    from backend.app.engine.inference.schemas import CombinedDatasetRequest
+
+    X_train = pd.DataFrame({
+        "Store": [1, 2, 1, 2],
+        "Date_year": [2012, 2012, 2012, 2012],
+        "Date_week": [45, 45, 46, 46],
+        "Fuel_Price": [3.4, 3.5, 3.45, 3.55],
+        "CPI": [180.0, 181.0, 180.5, 181.5]
+    })
+    y_train = np.array([700000.0, 750000.0, 710000.0, 760000.0])
+
+    rf = RandomForestRegressor(n_estimators=5, random_state=42)
+    rf.fit(X_train, y_train)
+
+    historical_records = [
+        {"Store": 1, "Date_year": 2012, "Date_week": 45, "Fuel_Price": 3.4, "CPI": 180.0, "Weekly_Sales": 700000.0},
+        {"Store": 2, "Date_year": 2012, "Date_week": 45, "Fuel_Price": 3.5, "CPI": 181.0, "Weekly_Sales": 750000.0},
+        {"Store": 1, "Date_year": 2012, "Date_week": 46, "Fuel_Price": 3.45, "CPI": 180.5, "Weekly_Sales": 710000.0},
+        {"Store": 2, "Date_year": 2012, "Date_week": 46, "Fuel_Price": 3.55, "CPI": 181.5, "Weekly_Sales": 760000.0},
+    ]
+
+    exec_id = "test_combined_dataset_exec_01"
+    bundle = {
+        "execution_id": exec_id,
+        "task_type": "regression",
+        "model": rf,
+        "target_column": "Weekly_Sales",
+        "feature_names": ["Store", "Date_year", "Date_week", "Fuel_Price", "CPI"],
+        "temporal_column": "Date_year",
+        "last_historical_row": {"Store": 1, "Date_year": 2012, "Date_week": 46, "Fuel_Price": 3.55, "CPI": 181.5},
+        "sample_row": {"Store": 1, "Date_year": 2012, "Date_week": 46, "Fuel_Price": 3.55, "CPI": 181.5},
+        "entity_value_sets": {"Store": [1, 2]},
+        "feature_trends": {"Fuel_Price": {"slope_per_unit_time": 0.1}, "CPI": {"slope_per_unit_time": 2.0}},
+        "training_feature_summary": {
+            "Store": {"min_value": 1, "max_value": 2},
+            "Date_year": {"min_value": 2012, "max_value": 2012},
+            "Date_week": {"min_value": 1, "max_value": 52},
+            "Fuel_Price": {"min_value": 3.0, "max_value": 5.0},
+            "CPI": {"min_value": 170.0, "max_value": 200.0}
+        },
+        "historical_records": historical_records
+    }
+
+    job_manager.register_inference_bundle(exec_id, bundle)
+
+    # 1. Direct Engine Call
+    req = CombinedDatasetRequest(periods=5)
+    res = PipelineInferencer.generate_combined_dataset(bundle=bundle, request=req)
+
+    assert res.status == "SUCCESS"
+    assert res.historical_rows_count == 4
+    assert res.future_rows_count == 10  # 5 periods x 2 Stores
+    assert res.total_rows_count == 14
+    assert "RECORD_TYPE" in res.columns
+    assert res.records[0]["RECORD_TYPE"] == "HISTORICAL"
+    assert res.records[4]["RECORD_TYPE"] == "PREDICTED"
+
+    # 2. HTTP Endpoint Calls
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        # Combined JSON endpoint
+        resp_json = await ac.post(
+            f"/api/v1/workflows/{exec_id}/generate-future-dataset/combined",
+            json={"periods": 5}
+        )
+        assert resp_json.status_code == 200
+        json_data = resp_json.json()
+        assert json_data["status"] == "SUCCESS"
+        assert json_data["total_rows_count"] == 14
+        assert json_data["historical_rows_count"] == 4
+        assert json_data["future_rows_count"] == 10
+
+        # Export CSV endpoint
+        resp_csv = await ac.post(
+            f"/api/v1/workflows/{exec_id}/generate-future-dataset/export-combined-csv",
+            json={"periods": 5}
+        )
+        assert resp_csv.status_code == 200
+        assert "text/csv" in resp_csv.headers["content-type"]
+        assert f"combined_dataset_{exec_id}.csv" in resp_csv.headers["content-disposition"]
+        csv_text = resp_csv.text
+        assert "RECORD_TYPE" in csv_text
+        assert "HISTORICAL" in csv_text
+        assert "PREDICTED" in csv_text
+        lines = csv_text.strip().split("\n")
+        assert len(lines) == 15  # 1 header + 14 rows
+

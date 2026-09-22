@@ -398,6 +398,44 @@ class DAGExecutor:
         else:
             y_eval = None
 
+        # General fallback so feature_trends / seasonal_profile / entity_value_sets /
+        # last_historical_row work for EVERY model type, not only tabular
+        # classifiers/regressors trained via a train_test_split node. Forecasting recipes
+        # (Prophet, ARIMA) train directly on (ds, y) and never produce X_train/X_test, so
+        # without this fallback that entire section of the bundle silently stays empty for
+        # every forecasting pipeline. When no tabular split exists, fall back to computing
+        # everything from the raw input dataset instead.
+        if X_eval is None:
+            # NOTE: pipeline_context["dataframe"] is NOT safe to use here — it gets
+            # overwritten by whatever the last executed node returns in its own
+            # "dataframe" output key (e.g. Prophet's own forecast table), so by this point
+            # it may no longer be the original uploaded data at all. The initial_df
+            # function parameter is never reassigned during execution, so it's the only
+            # reliable reference to the true raw input dataset.
+            raw_df = initial_df
+            if isinstance(raw_df, pd.DataFrame) and not raw_df.empty:
+                target_col_name = pipeline_context.get("target_column")
+                exclude_cols = {c for c in (target_col_name, "y") if c}
+                X_eval = raw_df.drop(columns=[c for c in exclude_cols if c in raw_df.columns], errors="ignore")
+                if y_eval is None and target_col_name and target_col_name in raw_df.columns:
+                    y_eval = raw_df[target_col_name]
+
+                # Forecasting recipes train on a date column (commonly 'ds') that is a
+                # string, not a numeric feature — has_temporal detection and the
+                # slope-based feature_trends computation below both need it as a number.
+                # Convert it to a fractional-year axis, the same role a numeric Date_year
+                # column already plays for tabular pipelines.
+                date_col_candidate = "ds" if "ds" in X_eval.columns else next(
+                    (c for c in X_eval.columns if "date" in c.lower()), None
+                )
+                if date_col_candidate:
+                    try:
+                        parsed = pd.to_datetime(X_eval[date_col_candidate], errors="coerce")
+                        if parsed.notna().sum() >= 5:
+                            X_eval[date_col_candidate] = parsed.dt.year + (parsed.dt.dayofyear - 1) / 365.25
+                    except Exception:
+                        pass
+
         if X_eval is not None and isinstance(X_eval, pd.DataFrame):
             if not fn_list:
                 fn_list = list(X_eval.columns)
@@ -646,6 +684,15 @@ class DAGExecutor:
             "freq": resolved_freq,
             "split_mode": pipeline_context.get("split_mode"),
             "categorical_maps": pipeline_context.get("categorical_maps", {}),
+            "historical_records": (
+                pd.concat([X_eval, pd.Series(y_eval, name=pipeline_context.get("target_column") or "target")], axis=1)
+                .tail(1000)
+                .replace({float("nan"): None, float("inf"): None, float("-inf"): None})
+                .to_dict(orient="records")
+            ) if (X_eval is not None and isinstance(X_eval, pd.DataFrame) and y_eval is not None and len(y_eval) == len(X_eval)) else (
+                X_eval.tail(1000).replace({float("nan"): None, float("inf"): None, float("-inf"): None}).to_dict(orient="records")
+                if (X_eval is not None and isinstance(X_eval, pd.DataFrame)) else []
+            ),
         }
 
         try:

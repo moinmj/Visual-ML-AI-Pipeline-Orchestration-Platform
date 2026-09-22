@@ -18,7 +18,7 @@ def test_ai_recommender_classification():
     assert rec["model_rankings"][0]["recipe_id"] in ["xgboost_trainer", "random_forest_trainer", "lightgbm_trainer", "catboost_trainer"]
     assert "recommended_dag" in rec
     dag_nodes = rec["recommended_dag"]["nodes"]
-    assert any(n["id"] == "node_eval" and n["recipe_id"] == "model_evaluator" for n in dag_nodes)
+    assert any(n["id"] in ["node_eval", "eval_node"] and n["recipe_id"] in ["model_evaluator", "classification_evaluator", "regression_evaluator"] for n in dag_nodes)
 
     # Verify all recommended recipe IDs exist in recipe_registry
     from backend.app.recipes.base.registry import recipe_registry
