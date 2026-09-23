@@ -7,12 +7,13 @@ class RecipeMetadata(BaseModel):
     recipe_id: str
     name: str
     version: str = "1.0.0"
-    category: str  # ingestion, preprocessing, feature_engineering, splitting, training, evaluation, anomaly, forecasting, governance
+    category: str
+    group: Optional[str] = None
+    subgroup: Optional[str] = None
     description: str
-    input_types: List[str]  # e.g. ["dataframe"], ["model", "dataframe"]
-    output_types: List[str]  # e.g. ["dataframe"], ["model"], ["metrics"]
+    input_types: List[str]
+    output_types: List[str]
     parameters_schema: Dict[str, Any]
-
 
 class BaseRecipe(ABC):
     """
