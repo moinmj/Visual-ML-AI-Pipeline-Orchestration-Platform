@@ -28,7 +28,10 @@ from backend.app.workflows.schemas import (
     WorkflowStatusFilter,
     WorkflowExecutionSummaryResponse,
     WorkflowExecutionDetailResponse,
-    WorkflowCompareResponse
+    WorkflowCompareResponse,
+    AssociatedDatasetItem,
+    WorkflowInferSchemaRequest,
+    WorkflowInferSchemaResponse
 )
 from backend.app.engine.inference import (
     PipelineInferencer,
@@ -87,6 +90,179 @@ async def resolve_workflow_dataset(
             pass
 
     return resolved_id, resolved_name
+
+
+async def resolve_all_workflow_datasets(
+    db: AsyncSession,
+    primary_dataset_id: Optional[str] = None,
+    primary_dataset_name: Optional[str] = None,
+    nodes: Optional[List[Dict[str, Any]]] = None,
+    node_configs: Optional[Dict[str, Any]] = None,
+    edges: Optional[List[Dict[str, Any]]] = None,
+    dataset_name_cache: Optional[Dict[str, str]] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Intelligently inspects the visual workflow DAG to discover all loaded datasets,
+    mapping their identities, names, canvas loader nodes, and roles (e.g. 'Primary (Left)', 'Secondary (Right)').
+    """
+    nodes = nodes or []
+    node_configs = node_configs or {}
+    edges = edges or []
+
+    # 1. Identify dataset_join nodes
+    join_node_ids = set()
+    for n in nodes:
+        nid = n.get("id")
+        rec = n.get("recipe_id")
+        if not rec and nid in node_configs and isinstance(node_configs[nid], dict):
+            rec = node_configs[nid].get("recipe_id")
+        if rec == "dataset_join":
+            join_node_ids.add(nid)
+    for nid, n_dict in node_configs.items():
+        if isinstance(n_dict, dict) and n_dict.get("recipe_id") == "dataset_join":
+            join_node_ids.add(nid)
+
+    has_join_node = len(join_node_ids) > 0
+
+    # 2. Build graph connectivity for handle inspection
+    incoming_to_node: Dict[str, List[Dict[str, Any]]] = {}
+    outgoing_from_node: Dict[str, List[Dict[str, Any]]] = {}
+    for e in edges:
+        s = e.get("source")
+        t = e.get("target")
+        if s and t:
+            outgoing_from_node.setdefault(s, []).append(e)
+            incoming_to_node.setdefault(t, []).append(e)
+
+    def find_join_handle_for_source(start_node_id: str) -> Optional[str]:
+        visited = set()
+        queue = [start_node_id]
+        while queue:
+            curr = queue.pop(0)
+            if curr in visited:
+                continue
+            visited.add(curr)
+            for out_edge in outgoing_from_node.get(curr, []):
+                tgt = out_edge.get("target")
+                if tgt in join_node_ids:
+                    h = out_edge.get("target_handle") or out_edge.get("targetHandle")
+                    if h:
+                        return str(h).lower()
+                    inc = incoming_to_node.get(tgt, [])
+                    if inc and inc[0].get("source") == curr:
+                        return "left"
+                    elif len(inc) > 1 and inc[1].get("source") == curr:
+                        return "right"
+                    return "left"
+                elif tgt and tgt not in visited:
+                    queue.append(tgt)
+        return None
+
+    # 3. Discover loader candidates
+    all_loader_candidates = []
+    for n in nodes:
+        nid = n.get("id")
+        cfg = n.get("config", {}) if isinstance(n.get("config"), dict) else {}
+        if not cfg and nid in node_configs and isinstance(node_configs[nid], dict):
+            cfg = node_configs[nid].get("config", {})
+        rec = n.get("recipe_id") or (node_configs.get(nid, {}).get("recipe_id") if isinstance(node_configs.get(nid), dict) else None)
+        ds_id = cfg.get("dataset_id")
+        if ds_id or rec in ("csv_loader", "data_ingestion", "dataset_loader"):
+            all_loader_candidates.append({
+                "node_id": nid,
+                "dataset_id": str(ds_id) if ds_id else None,
+                "dataset_name": cfg.get("dataset_name") or cfg.get("filename") or cfg.get("name"),
+            })
+
+    for nid, n_dict in node_configs.items():
+        if not any(c["node_id"] == nid for c in all_loader_candidates) and isinstance(n_dict, dict):
+            cfg = n_dict.get("config", {}) if isinstance(n_dict.get("config"), dict) else {}
+            ds_id = cfg.get("dataset_id")
+            rec = n_dict.get("recipe_id")
+            if ds_id or rec in ("csv_loader", "data_ingestion", "dataset_loader"):
+                all_loader_candidates.append({
+                    "node_id": nid,
+                    "dataset_id": str(ds_id) if ds_id else None,
+                    "dataset_name": cfg.get("dataset_name") or cfg.get("filename") or cfg.get("name"),
+                })
+
+    discovered_datasets: List[Dict[str, Any]] = []
+    seen_ds_ids = set()
+    missing_name_ids = set()
+
+    for cand in all_loader_candidates:
+        ds_id = cand["dataset_id"]
+        if not ds_id:
+            if primary_dataset_id and primary_dataset_id not in seen_ds_ids:
+                ds_id = primary_dataset_id
+            else:
+                continue
+
+        if ds_id in seen_ds_ids:
+            continue
+        seen_ds_ids.add(ds_id)
+
+        handle = find_join_handle_for_source(cand["node_id"]) if cand["node_id"] else None
+        is_first = (len(discovered_datasets) == 0)
+        is_primary = (ds_id == primary_dataset_id) or is_first
+
+        if has_join_node:
+            if handle == "right":
+                role = "Secondary (Right)"
+            elif handle == "left":
+                role = "Primary (Left)"
+            elif is_primary:
+                role = "Primary (Left)"
+            else:
+                role = "Secondary (Right)"
+        else:
+            role = "Primary" if is_primary else "Secondary"
+
+        ds_name = cand["dataset_name"]
+        if not ds_name and ds_id == primary_dataset_id:
+            ds_name = primary_dataset_name
+        if not ds_name or ds_name == ds_id:
+            missing_name_ids.add(ds_id)
+
+        discovered_datasets.append({
+            "id": ds_id,
+            "name": ds_name or ds_id,
+            "role": role,
+            "node_id": cand["node_id"]
+        })
+
+    # If primary_dataset_id not found among loaders, insert it as primary
+    if primary_dataset_id and primary_dataset_id not in seen_ds_ids:
+        role = "Primary (Left)" if has_join_node else "Primary"
+        if not primary_dataset_name:
+            missing_name_ids.add(primary_dataset_id)
+        discovered_datasets.insert(0, {
+            "id": primary_dataset_id,
+            "name": primary_dataset_name or primary_dataset_id,
+            "role": role,
+            "node_id": None
+        })
+        seen_ds_ids.add(primary_dataset_id)
+
+    # Batch resolve any missing names from cache or DB
+    if missing_name_ids:
+        name_map = dict(dataset_name_cache or {})
+        need_query = [i for i in missing_name_ids if i not in name_map]
+        if need_query:
+            try:
+                ds_stmt = select(Dataset).where(Dataset.id.in_(list(need_query)))
+                ds_rows = await db.execute(ds_stmt)
+                for d in ds_rows.scalars().all():
+                    name_map[d.id] = d.name
+            except Exception:
+                pass
+        for item in discovered_datasets:
+            if item["id"] in name_map and (item["name"] == item["id"] or not item["name"]):
+                item["name"] = name_map[item["id"]]
+
+    # Order Primary first
+    discovered_datasets.sort(key=lambda d: 0 if "Primary" in d.get("role", "") else 1)
+    return discovered_datasets
 
 
 async def resolve_or_normalize_last_execution(
@@ -609,6 +785,15 @@ async def save_workflow(
             logger.exception(f"Failed to record workflow execution history on save: {e}")
 
     await db.refresh(wf)
+    wf.datasets = await resolve_all_workflow_datasets(
+        db=db,
+        primary_dataset_id=wf.dataset_id,
+        primary_dataset_name=wf.dataset_name,
+        nodes=wf.nodes or [],
+        node_configs=wf.node_configs or {},
+        edges=wf.edges or []
+    )
+    wf.workflow_id = wf.id
     return wf
 
 
@@ -692,15 +877,50 @@ async def list_workflows(
     workflows = result.scalars().all()
 
     items = []
+    all_needed_ds_ids = set()
+    for wf in workflows:
+        if wf.dataset_id:
+            all_needed_ds_ids.add(wf.dataset_id)
+        for n in (wf.nodes or []):
+            cfg = n.get("config", {}) if isinstance(n.get("config"), dict) else {}
+            if cfg.get("dataset_id"):
+                all_needed_ds_ids.add(str(cfg["dataset_id"]))
+        for nid, n_dict in (wf.node_configs or {}).items():
+            if isinstance(n_dict, dict):
+                cfg = n_dict.get("config", {}) if isinstance(n_dict.get("config"), dict) else {}
+                if cfg.get("dataset_id"):
+                    all_needed_ds_ids.add(str(cfg["dataset_id"]))
+
+    dataset_name_cache: Dict[str, str] = {}
+    if all_needed_ds_ids:
+        try:
+            ds_stmt = select(Dataset).where(Dataset.id.in_(list(all_needed_ds_ids)))
+            ds_rows = await db.execute(ds_stmt)
+            for d in ds_rows.scalars().all():
+                dataset_name_cache[d.id] = d.name
+        except Exception:
+            pass
+
     for wf in workflows:
         last_exec = wf.last_execution if isinstance(wf.last_execution, dict) else {}
+        wf_datasets = await resolve_all_workflow_datasets(
+            db=db,
+            primary_dataset_id=wf.dataset_id,
+            primary_dataset_name=wf.dataset_name,
+            nodes=wf.nodes or [],
+            node_configs=wf.node_configs or {},
+            edges=wf.edges or [],
+            dataset_name_cache=dataset_name_cache
+        )
         items.append(
             WorkflowListItemResponse(
                 id=wf.id,
+                workflow_id=wf.id,
                 name=wf.name,
                 description=wf.description,
                 dataset_id=wf.dataset_id,
                 dataset_name=wf.dataset_name,
+                datasets=wf_datasets,
                 is_active=wf.is_active,
                 deleted_at=wf.deleted_at,
                 created_at=wf.created_at,
@@ -772,6 +992,15 @@ async def get_workflow(
             await db.commit()
             await db.refresh(wf)
 
+    wf.datasets = await resolve_all_workflow_datasets(
+        db=db,
+        primary_dataset_id=wf.dataset_id,
+        primary_dataset_name=wf.dataset_name,
+        nodes=wf.nodes or [],
+        node_configs=wf.node_configs or {},
+        edges=wf.edges or []
+    )
+    wf.workflow_id = wf.id
     return wf
 
 
@@ -883,6 +1112,15 @@ async def upsert_workflow(
             logger.exception(f"Failed to record workflow execution history on upsert: {e}")
 
     await db.refresh(wf)
+    wf.datasets = await resolve_all_workflow_datasets(
+        db=db,
+        primary_dataset_id=wf.dataset_id,
+        primary_dataset_name=wf.dataset_name,
+        nodes=wf.nodes or [],
+        node_configs=wf.node_configs or {},
+        edges=wf.edges or []
+    )
+    wf.workflow_id = wf.id
     return wf
 
 
@@ -948,6 +1186,15 @@ async def save_workflow_execution_report(
     except Exception:
         pass
 
+    wf.datasets = await resolve_all_workflow_datasets(
+        db=db,
+        primary_dataset_id=wf.dataset_id,
+        primary_dataset_name=wf.dataset_name,
+        nodes=wf.nodes or [],
+        node_configs=wf.node_configs or {},
+        edges=wf.edges or []
+    )
+    wf.workflow_id = wf.id
     return wf
 
 
@@ -1006,6 +1253,15 @@ async def restore_workflow(
     wf.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(wf)
+    wf.datasets = await resolve_all_workflow_datasets(
+        db=db,
+        primary_dataset_id=wf.dataset_id,
+        primary_dataset_name=wf.dataset_name,
+        nodes=wf.nodes or [],
+        node_configs=wf.node_configs or {},
+        edges=wf.edges or []
+    )
+    wf.workflow_id = wf.id
     return wf
 
 
@@ -1409,6 +1665,320 @@ async def autowire_workflow_nodes(payload: Dict[str, Any] = Body(...)):
     from backend.app.recommendation.router import autowire_nodes, AutoWireRequest
     nodes = payload.get("nodes", [])
     return await autowire_nodes(AutoWireRequest(nodes=nodes))
+
+
+async def _get_execution_node_dataframe(
+    db: AsyncSession,
+    execution_id: str,
+    node_id: str
+) -> Optional[pd.DataFrame]:
+    """Helper to locate, load, or reconstruct any node's full DataFrame for an execution run."""
+    from backend.app.infrastructure.storage.storage_manager import storage_manager
+    p_rel = f"executions/{execution_id}/{node_id}.parquet"
+    p_abs = storage_manager.get_absolute_path(p_rel)
+    if p_abs.exists():
+        try:
+            return pd.read_parquet(p_abs)
+        except Exception:
+            pass
+
+    job = job_manager.get_job(execution_id)
+    if job:
+        res = job.get("results") or job.get("result")
+        node_outs = getattr(res, "node_outputs", {}) if not isinstance(res, dict) else res.get("node_outputs", {})
+        if node_id in node_outs:
+            df = node_outs[node_id].get("dataframe")
+            if isinstance(df, pd.DataFrame):
+                return df
+
+    ex_res = await db.execute(select(WorkflowExecution).where(WorkflowExecution.id == execution_id))
+    ex_row = ex_res.scalar_one_or_none()
+    if ex_row:
+        from backend.app.engine.dag.graph import WorkflowGraph, WorkflowNode, WorkflowEdge
+        nodes = []
+        saved_configs = ex_row.snapshot_node_configs or {}
+        for nd in ex_row.snapshot_nodes or []:
+            nid = nd["id"]
+            n_cfg = saved_configs.get(nid, {})
+            recipe_id = nd.get("recipe_id") or n_cfg.get("recipe_id", "csv_loader")
+            config = nd.get("config") or n_cfg.get("config", {})
+            label = nd.get("label") or nd.get("content") or n_cfg.get("label", nid)
+            nodes.append(WorkflowNode(id=nid, recipe_id=recipe_id, config=config, label=label))
+        edges = [
+            WorkflowEdge(source=ed["source"], target=ed["target"], target_handle=ed.get("target_handle") or ed.get("targetHandle"))
+            for ed in ex_row.snapshot_edges or []
+        ]
+        graph = WorkflowGraph(nodes=nodes, edges=edges)
+        exec_res = DAGExecutor.execute_workflow(
+            execution_id=str(uuid.uuid4()),
+            workflow=graph,
+            include_node_outputs=True
+        )
+        node_outs = exec_res.node_outputs or {}
+        if node_id in node_outs and isinstance(node_outs[node_id].get("dataframe"), pd.DataFrame):
+            df = node_outs[node_id]["dataframe"]
+            try:
+                p_abs.parent.mkdir(parents=True, exist_ok=True)
+                df.to_parquet(p_abs, index=False)
+            except Exception:
+                pass
+            return df
+    return None
+
+
+@router.post(
+    "/export-dataset",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_role("Tenant Admin", "Data Scientist", "ML Engineer"))]
+)
+async def export_workflow_node_dataset(
+    payload: Dict[str, Any] = Body(..., description="Export intermediate or joined node output as a permanent dataset in the library"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Exports the output DataFrame of any executed workflow node (e.g. dataset_join)
+    directly into a permanent dataset in the Datasets library.
+    """
+    import time
+    from backend.app.infrastructure.storage.storage_manager import storage_manager
+    from backend.app.profiling.profiler import DataProfiler
+
+    workflow_id = payload.get("workflow_id")
+    execution_id = payload.get("execution_id")
+    target_node_id = payload.get("node_id")
+    custom_name = payload.get("dataset_name") or payload.get("name")
+    description = payload.get("description")
+
+    df_to_save: Optional[pd.DataFrame] = None
+
+    # 1. Use cached Parquet / execution helper
+    if execution_id and target_node_id:
+        df_to_save = await _get_execution_node_dataframe(db=db, execution_id=execution_id, node_id=target_node_id)
+
+    # 2. Try finding in-memory execution job result if target_node_id omitted
+    if df_to_save is None and execution_id:
+        job = job_manager.get_job(execution_id)
+        if job:
+            res = job.get("results") or job.get("result")
+            node_outs = getattr(res, "node_outputs", {}) if not isinstance(res, dict) else res.get("node_outputs", {})
+            if target_node_id and target_node_id in node_outs:
+                cand = node_outs[target_node_id].get("dataframe")
+                if isinstance(cand, pd.DataFrame):
+                    df_to_save = cand
+            elif not target_node_id and node_outs:
+                for nid, n_out in reversed(list(node_outs.items())):
+                    if isinstance(n_out.get("dataframe"), pd.DataFrame):
+                        df_to_save = n_out["dataframe"]
+                        target_node_id = nid
+                        break
+
+    # 3. If still not found, execute workflow from DB
+    if df_to_save is None:
+        wf = None
+        if workflow_id:
+            wf_res = await db.execute(select(Workflow).where(Workflow.id == workflow_id))
+            wf = wf_res.scalar_one_or_none()
+        elif execution_id:
+            ex_res = await db.execute(select(WorkflowExecution).where(WorkflowExecution.id == execution_id))
+            ex_row = ex_res.scalar_one_or_none()
+            if ex_row and ex_row.workflow_id:
+                wf_res = await db.execute(select(Workflow).where(Workflow.id == ex_row.workflow_id))
+                wf = wf_res.scalar_one_or_none()
+
+        if wf:
+            graph = db_workflow_to_graph(wf)
+            exec_res = DAGExecutor.execute_workflow(
+                execution_id=str(uuid.uuid4()),
+                workflow=graph,
+                include_node_outputs=True
+            )
+            node_outs = exec_res.node_outputs or {}
+            if target_node_id and target_node_id in node_outs:
+                cand = node_outs[target_node_id].get("dataframe")
+                if isinstance(cand, pd.DataFrame):
+                    df_to_save = cand
+            elif not target_node_id and node_outs:
+                for nid, n_out in reversed(list(node_outs.items())):
+                    if isinstance(n_out.get("dataframe"), pd.DataFrame):
+                        df_to_save = n_out["dataframe"]
+                        target_node_id = nid
+                        break
+
+    if df_to_save is None or len(df_to_save) == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Could not find output tabular data for node '{target_node_id or 'unknown'}' in execution '{execution_id or 'unknown'}'."
+        )
+
+    df_clean = df_to_save.drop(columns=["_merge"], errors="ignore")
+
+    new_ds_id = str(uuid.uuid4())
+    ds_name = custom_name.strip() if custom_name and str(custom_name).strip() else f"Exported_{target_node_id or 'Dataset'}_{int(time.time())}"
+    if not ds_name.lower().endswith(".csv"):
+        file_name = f"{ds_name}.csv"
+    else:
+        file_name = ds_name
+        ds_name = ds_name[:-4]
+
+    rel_storage_path = f"datasets/{new_ds_id}_{file_name}"
+    abs_path = storage_manager.get_absolute_path(rel_storage_path)
+    abs_path.parent.mkdir(parents=True, exist_ok=True)
+    df_clean.to_csv(abs_path, index=False)
+    file_size_bytes = abs_path.stat().st_size
+
+    profile_data = DataProfiler.profile_dataframe(df_clean)
+
+    new_dataset = Dataset(
+        id=new_ds_id,
+        name=ds_name,
+        description=description or f"Exported from workflow node '{target_node_id}'",
+        file_name=file_name,
+        file_format="csv",
+        file_size_bytes=file_size_bytes,
+        storage_path=rel_storage_path,
+        row_count=len(df_clean),
+        column_count=len(df_clean.columns),
+        quality_score=float(profile_data.get("quality_score", 100.0)),
+        profile=profile_data
+    )
+    db.add(new_dataset)
+    await db.commit()
+    await db.refresh(new_dataset)
+
+    return {
+        "status": "SUCCESS",
+        "message": f"Successfully exported node '{target_node_id}' to Datasets library as '{ds_name}'.",
+        "dataset": {
+            "id": new_dataset.id,
+            "name": new_dataset.name,
+            "file_name": new_dataset.file_name,
+            "row_count": new_dataset.row_count,
+            "column_count": new_dataset.column_count,
+            "storage_path": new_dataset.storage_path
+        }
+    }
+
+
+@router.post(
+    "/infer-schema",
+    response_model=WorkflowInferSchemaResponse,
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_role("Tenant Admin", "Data Scientist", "ML Engineer", "Business User"))]
+)
+async def infer_workflow_schema(
+    payload: WorkflowInferSchemaRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Calculates and returns expected output columns and data types for each node
+    in a DAG workflow before execution. Provides available_left_columns and
+    available_right_columns for multi-port join inspector dropdowns.
+    """
+    from backend.app.workflows.schema_inference import WorkflowSchemaInferencer
+
+    nodes = payload.nodes
+    edges = payload.edges
+    node_configs = payload.node_configs or {}
+
+    # If workflow_id provided but nodes/edges omitted, load from saved workflow
+    if (not nodes or len(nodes) == 0) and payload.workflow_id:
+        result = await db.execute(select(Workflow).where(Workflow.id == payload.workflow_id))
+        wf = result.scalar_one_or_none()
+        if wf:
+            nodes = wf.nodes or []
+            edges = wf.edges or []
+            if not node_configs and wf.node_configs:
+                node_configs = wf.node_configs
+
+    nodes = nodes or []
+    edges = edges or []
+
+    return await WorkflowSchemaInferencer.infer_schema(
+        nodes=nodes,
+        edges=edges,
+        node_configs=node_configs,
+        db=db
+    )
+
+
+@router.get(
+    "/{execution_id}/nodes/{node_id}/data",
+    dependencies=[Depends(get_current_user)]
+)
+async def get_node_table_data(
+    execution_id: str,
+    node_id: str,
+    page: int = Query(1, ge=1, description="1-indexed page number"),
+    limit: int = Query(50, ge=1, le=500, description="Records per page"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Renders the full tabular output of any node (e.g. dataset_join) with server-side pagination.
+    Returns: execution_id, node_id, total_rows, total_columns, page, limit, total_pages, columns, and data rows.
+    """
+    df = await _get_execution_node_dataframe(db=db, execution_id=execution_id, node_id=node_id)
+    if df is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Tabular output for node '{node_id}' in execution '{execution_id}' not found."
+        )
+
+    df = df.drop(columns=["_merge"], errors="ignore")
+
+    total_rows = len(df)
+    total_cols = len(df.columns)
+    total_pages = math.ceil(total_rows / limit) if (limit > 0 and total_rows > 0) else 1
+    skip = (page - 1) * limit
+    page_df = df.iloc[skip:skip + limit]
+    clean_page = page_df.replace({float("nan"): None, float("inf"): None, float("-inf"): None})
+
+    return {
+        "execution_id": execution_id,
+        "node_id": node_id,
+        "total_rows": total_rows,
+        "total_columns": total_cols,
+        "page": page,
+        "limit": limit,
+        "total_pages": total_pages,
+        "columns": list(df.columns),
+        "data": clean_page.to_dict(orient="records")
+    }
+
+
+@router.get(
+    "/{execution_id}/nodes/{node_id}/export-csv",
+    dependencies=[Depends(get_current_user)]
+)
+async def export_node_data_to_csv(
+    execution_id: str,
+    node_id: str,
+    limit: Optional[int] = Query(None, ge=1, description="Optional max rows to export"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Directly streams the output DataFrame of any executed node as a downloadable CSV file.
+    """
+    df = await _get_execution_node_dataframe(db=db, execution_id=execution_id, node_id=node_id)
+    if df is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Tabular output for node '{node_id}' in execution '{execution_id}' not found."
+        )
+
+    df = df.drop(columns=["_merge"], errors="ignore")
+    if limit is not None:
+        df = df.head(limit)
+
+    csv_str = df.to_csv(index=False)
+    filename = f"{node_id}_{execution_id[:8]}.csv"
+
+    return Response(
+        content=csv_str,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}"
+        }
+    )
 
 
 # -------------------------------------------------------------

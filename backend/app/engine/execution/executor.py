@@ -88,6 +88,14 @@ def diagnose_execution_error(
             "suggestion": "Ensure the exact same preprocessing steps (Imputer, Scaler, Encoder) are applied before both training and testing."
         }
 
+    # 7. Dataset Join / Merge Column Missing
+    if any(k in err_str for k in ["Join key", "join_type", "KeyError: 'left_on'", "MergeError", "requires two incoming datasets"]):
+        return {
+            "title": "Dataset Join Error",
+            "message": f"Dataset Join processor '{rec_name}' failed: {err_str}",
+            "suggestion": "Verify that two datasets are connected and that the join keys (left_on / right_on) exist in both datasets."
+        }
+
     # Default fallback
     return {
         "title": f"Execution Error in {rec_name}",
@@ -205,10 +213,12 @@ class DAGExecutor:
                 logs=logs
             )
 
-        # 2. Build In-Edge map to find parent nodes
+        # 2. Build In-Edge map to find parent nodes and incoming edge details
         parent_map: Dict[str, List[str]] = {n.id: [] for n in workflow.nodes}
+        in_edges_map: Dict[str, List[Any]] = {n.id: [] for n in workflow.nodes}
         for edge in workflow.edges:
             parent_map[edge.target].append(edge.source)
+            in_edges_map[edge.target].append(edge)
 
         overall_status = "SUCCESS"
 
@@ -257,9 +267,65 @@ class DAGExecutor:
                     overall_status = "FAILED"
                     break
             else:
+                incoming_edges = in_edges_map.get(node.id, [])
+                parent_outputs_map: Dict[str, Dict[str, Any]] = {}
+                parent_dfs: List[pd.DataFrame] = []
+
                 for parent_id in parents:
                     parent_out = node_outputs.get(parent_id, {})
+                    parent_outputs_map[parent_id] = parent_out
+                    if "dataframe" in parent_out and isinstance(parent_out["dataframe"], pd.DataFrame):
+                        parent_dfs.append(parent_out["dataframe"])
                     node_inputs.update(parent_out)
+
+                # Store multi-parent collections for multi-input nodes (e.g. joins, unions, ensembles)
+                node_inputs["parent_outputs"] = parent_outputs_map
+                node_inputs["parent_dataframes"] = parent_dfs
+
+                # Handle handle-aware assignment (e.g. source_handle and target_handle)
+                for edge in incoming_edges:
+                    p_out = node_outputs.get(edge.source, {})
+                    sh = (getattr(edge, "source_handle", None) or "").lower().strip()
+
+                    # Resolve output dataframe partition from upstream based on source_handle
+                    p_df = None
+                    if sh in ["unmatched_left", "left_unmatched"]:
+                        p_df = p_out.get("left_unmatched_dataframe")
+                        if p_df is None:
+                            p_df = p_out.get("dataframe")
+                    elif sh in ["unmatched_right", "right_unmatched"]:
+                        p_df = p_out.get("right_unmatched_dataframe")
+                        if p_df is None:
+                            p_df = p_out.get("dataframe")
+                    elif sh in ["joined", "matched", "matched_dataframe"]:
+                        p_df = p_out.get("matched_dataframe") or p_out.get("dataframe")
+                    elif sh and sh in p_out and isinstance(p_out[sh], pd.DataFrame):
+                        p_df = p_out[sh]
+                    else:
+                        p_df = p_out.get("dataframe")
+
+                    if isinstance(p_df, pd.DataFrame):
+                        th = (getattr(edge, "target_handle", None) or "").lower().strip()
+                        if th in ["left", "left_dataset", "df_left", "upstream_left"]:
+                            node_inputs["left_dataframe"] = p_df
+                            node_inputs["left_parent_id"] = edge.source
+                        elif th in ["right", "right_dataset", "df_right", "upstream_right"]:
+                            node_inputs["right_dataframe"] = p_df
+                            node_inputs["right_parent_id"] = edge.source
+                        else:
+                            # Single-port target or explicit default input port
+                            if len(incoming_edges) == 1 or not th or th in ["input", "in", "dataframe"]:
+                                node_inputs["dataframe"] = p_df
+
+                # If left/right dataframes are not explicitly bound by handles, default from parent_dfs
+                if "left_dataframe" not in node_inputs and len(parent_dfs) >= 1:
+                    node_inputs["left_dataframe"] = parent_dfs[0]
+                    if len(parents) >= 1:
+                        node_inputs["left_parent_id"] = parents[0]
+                if "right_dataframe" not in node_inputs and len(parent_dfs) >= 2:
+                    node_inputs["right_dataframe"] = parent_dfs[1]
+                    if len(parents) >= 2:
+                        node_inputs["right_parent_id"] = parents[1]
 
                 # Fallback to pipeline_context if node requires model/scaler/encoder but immediate parent didn't pass it
                 for ctx_key in ["model", "scaler", "encoder", "target_classes", "target_encoder", "feature_names", "imputer_stats", "vectorizer"]:
@@ -281,6 +347,18 @@ class DAGExecutor:
                 ]:
                     if key in outputs and outputs[key] is not None:
                         pipeline_context[key] = outputs[key]
+
+                # Cache dataframe output to disk for instant pagination and CSV download
+                df_out = outputs.get("dataframe")
+                if isinstance(df_out, pd.DataFrame) and len(df_out) > 0:
+                    try:
+                        from backend.app.infrastructure.storage.storage_manager import storage_manager
+                        p_rel = f"executions/{execution_id}/{node.id}.parquet"
+                        p_abs = storage_manager.get_absolute_path(p_rel)
+                        p_abs.parent.mkdir(parents=True, exist_ok=True)
+                        df_out.to_parquet(p_abs, index=False)
+                    except Exception:
+                        pass
 
                 if "target_column" in node.config and node.config["target_column"]:
                     pipeline_context["target_column"] = node.config["target_column"]
@@ -312,23 +390,32 @@ class DAGExecutor:
                     "preview_rows": []
                 }
 
+                # Prioritize primary "dataframe" for node snapshot inspection, or first DataFrame found
+                primary_df = outputs.get("dataframe")
+                if primary_df is None or not isinstance(primary_df, pd.DataFrame):
+                    for v in outputs.values():
+                        if isinstance(v, pd.DataFrame):
+                            primary_df = v
+                            break
+
                 for k, v in outputs.items():
                     if isinstance(v, pd.DataFrame):
                         summary[k] = {"shape": list(v.shape), "type": "DataFrame"}
-                        snapshot_info["row_count"] = int(v.shape[0])
-                        snapshot_info["columns"] = list(v.columns)
-                        # Save top 5 rows for step inspection
-                        try:
-                            clean_v = v.head(5).replace({float("nan"): None, float("inf"): None, float("-inf"): None})
-                            snapshot_info["preview_rows"] = clean_v.to_dict(orient="records")
-                        except Exception:
-                            pass
                     elif hasattr(v, "shape"):
                         summary[k] = {"shape": list(v.shape), "type": "Array"}
                     elif k in ["metrics", "anomaly_summary", "forecasting_summary", "feature_importances", "output_summary"]:
                         summary[k] = make_json_safe(v)
                     else:
                         summary[k] = {"type": type(v).__name__}
+
+                if primary_df is not None and isinstance(primary_df, pd.DataFrame):
+                    snapshot_info["row_count"] = int(primary_df.shape[0])
+                    snapshot_info["columns"] = list(primary_df.columns)
+                    try:
+                        clean_v = primary_df.head(5).replace({float("nan"): None, float("inf"): None, float("-inf"): None})
+                        snapshot_info["preview_rows"] = clean_v.to_dict(orient="records")
+                    except Exception:
+                        pass
 
                 if "output_summary" in outputs:
                     snapshot_info["output_summary"] = make_json_safe(outputs["output_summary"])

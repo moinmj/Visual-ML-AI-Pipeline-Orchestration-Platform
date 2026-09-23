@@ -172,6 +172,9 @@ async def autowire_nodes(payload: AutoWireRequest):
         "duplicate_remover": 1.2,
         "duplicates": 1.2,
 
+        # Multi-Dataset Join / Merge
+        "dataset_join": 1.3,
+
         # Type Safety & Conversion
         "data_type_converter": 1.4,
 
@@ -238,6 +241,8 @@ async def autowire_nodes(payload: AutoWireRequest):
             return 1.1
         elif any(k in label for k in ["column_select", "col_select", "dup", "dedup"]):
             return 1.2
+        elif any(k in label for k in ["join", "merge", "dataset_join"]):
+            return 1.3
         elif any(k in label for k in ["type_convert", "dtype", "cast"]):
             return 1.4
         elif any(k in label for k in ["impute", "missing", "nan", "guardrail", "outlier", "iqr", "zscore"]):
@@ -279,9 +284,60 @@ async def autowire_nodes(payload: AutoWireRequest):
     split_node_id = None
     model_node_id = None
     eval_node_id = None
-    prev_node_id = None
 
-    for idx, node in enumerate(sorted_nodes):
+    # Check if a dataset_join node exists on the whiteboard
+    join_indices = [
+        i for i, n in enumerate(sorted_nodes)
+        if (n.get("recipe_id") or n.get("data", {}).get("recipe_id")) == "dataset_join"
+        or "join" in str(n.get("label") or n.get("id") or "").lower()
+    ]
+
+    if join_indices:
+        # Multi-Branch Join Wiring:
+        # All nodes before the join node represent upstream feeder branches (e.g. 2 CSV loaders).
+        # Wire all upstream nodes directly into the join node with distinct left/right handles.
+        join_idx = join_indices[0]
+        join_node_id = sorted_nodes[join_idx]["id"]
+        upstream_nodes = sorted_nodes[:join_idx]
+        downstream_nodes = sorted_nodes[join_idx + 1:]
+
+        for u_idx, u_node in enumerate(upstream_nodes):
+            u_id = u_node["id"]
+            handle = "left" if u_idx == 0 else "right"
+            edges.append({
+                "id": f"e_{u_id}_{join_node_id}",
+                "source": u_id,
+                "target": join_node_id,
+                "target_handle": handle,
+                "animated": True
+            })
+
+        prev_node_id = join_node_id
+        for d_node in downstream_nodes:
+            d_id = d_node["id"]
+            edges.append({
+                "id": f"e_{prev_node_id}_{d_id}",
+                "source": prev_node_id,
+                "target": d_id,
+                "animated": True
+            })
+            prev_node_id = d_id
+    else:
+        # Standard Linear Sequential Pipeline
+        prev_node_id = None
+        for idx, node in enumerate(sorted_nodes):
+            n_id = node["id"]
+            if idx > 0 and prev_node_id:
+                edges.append({
+                    "id": f"e_{prev_node_id}_{n_id}",
+                    "source": prev_node_id,
+                    "target": n_id,
+                    "animated": True
+                })
+            prev_node_id = n_id
+
+    # Secondary edge: Splitter -> Evaluator (for X_test/y_test propagation)
+    for node in sorted_nodes:
         n_id = node["id"]
         r_id = node.get("recipe_id") or node.get("data", {}).get("recipe_id")
         recipe = recipe_registry.get(r_id) if r_id else None
@@ -292,20 +348,8 @@ async def autowire_nodes(payload: AutoWireRequest):
             eval_node_id = n_id
         elif r_id == "train_test_split" or cat == "splitting" or "split" in label:
             split_node_id = n_id
-        elif cat in ["training", "forecasting", "anomaly"] or any(k in label for k in ["xgb", "lightgbm", "catboost", "train", "classifier", "regressor", "forest"]):
-            model_node_id = n_id
 
-        if idx > 0 and prev_node_id:
-            edges.append({
-                "id": f"e_{prev_node_id}_{n_id}",
-                "source": prev_node_id,
-                "target": n_id,
-                "animated": True
-            })
-        prev_node_id = n_id
-
-    # Secondary edge: Splitter -> Evaluator (for X_test/y_test propagation)
-    if split_node_id and eval_node_id:
+    if split_node_id and eval_node_id and split_node_id != eval_node_id:
         split_eval_exists = any(e["source"] == split_node_id and e["target"] == eval_node_id for e in edges)
         if not split_eval_exists:
             edges.append({
