@@ -478,6 +478,14 @@ class AIRecommender:
 
             # 3. Intelligent Train/Test Splitter Selection
             split_id = "node_split"
+            is_discrete_cls = False
+            if task == "classification" and df is not None and target_col and target_col in df.columns:
+                s = df[target_col].dropna()
+                nunique = s.nunique()
+                is_float_cont = any(s % 1 != 0) if not s.empty and pd.api.types.is_numeric_dtype(s) else False
+                if not is_float_cont and nunique <= 20:
+                    is_discrete_cls = True
+
             if date_column:
                 split_recipe_id = "time_series_split"
                 split_label = "Time-Series Split"
@@ -486,7 +494,7 @@ class AIRecommender:
                     "date_column": date_column,
                     "test_size": 0.2
                 }
-            elif task == "classification":
+            elif is_discrete_cls:
                 split_recipe_id = "stratified_split"
                 split_label = "Stratified Split"
                 split_cfg = {

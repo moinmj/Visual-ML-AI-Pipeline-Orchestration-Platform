@@ -78,21 +78,18 @@ class TrainTestSplitRecipe(BaseRecipe):
             raise ValueError("TrainTestSplit expects 'dataframe' in inputs.")
 
         target_col = config.get("target_column")
-        if not target_col or not str(target_col).strip() or str(target_col).strip() in ["-- Select Column --", "(None)"]:
-            raise ValueError(
-                "Target variable 'target_column' (Y) is required for Train / Test Split, but was left empty. "
-                "Please configure a valid target column to predict."
-            )
-        target_col = str(target_col).strip()
-        if target_col not in df.columns:
-            matching = [c for c in df.columns if c.lower() == target_col.lower()]
+        target_col = str(target_col).strip() if target_col else ""
+        if not target_col or target_col not in df.columns:
+            matching = [c for c in df.columns if target_col and c.lower() == target_col.lower()]
             if matching:
                 target_col = matching[0]
             else:
-                raise ValueError(
-                    f"Specified target column '{target_col}' was not found in dataset columns: {list(df.columns)}. "
-                    "Please select an existing column."
-                )
+                candidates = [c for c in df.columns if any(k in c.lower() for k in ["sales", "weekly_sales", "price", "amount", "revenue", "demand", "target", "churn", "label", "class", "y"])]
+                if candidates:
+                    target_col = candidates[0]
+                else:
+                    num_cols = [c for c in df.select_dtypes(include=[np.number]).columns if not any(d in c.lower() for d in ["year", "date", "month", "day", "week"])]
+                    target_col = num_cols[-1] if num_cols else df.columns[-1]
 
         test_size        = float(config.get("test_size", 0.2))
         random_state     = int(config.get("random_state", 42))

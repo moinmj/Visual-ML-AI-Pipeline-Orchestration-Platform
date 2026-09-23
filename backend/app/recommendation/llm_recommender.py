@@ -444,6 +444,10 @@ class LLMRecommender:
                         "config": n.get("config", {}),
                         "reason": f"Recommended preprocessing step {r_id}."
                     })
+            if not pre_recs and isinstance(df, pd.DataFrame):
+                from backend.app.recommendation.recommender import AIRecommender
+                heur_res = AIRecommender._heuristic_recommend_pipeline(df, target_column=target_col, task_type=task_type)
+                pre_recs = heur_res.get("preprocessing_recommendations", [])
 
         m_rankings = result.get("model_rankings", [])
         if not m_rankings:

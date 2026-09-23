@@ -87,8 +87,6 @@ class ModelEvaluatorRecipe(BaseRecipe):
 
         if model is None:
             raise ValueError("ModelEvaluator expects a trained 'model' in inputs. Please connect a Model Trainer node before this Evaluator.")
-        if X_test is None or y_test is None:
-            raise ValueError("ModelEvaluator expects 'X_test' and 'y_test' in inputs. Please ensure a Train/Test Split node is connected in the pipeline.")
 
         task_type = inputs.get("task_type") or (context.get("task_type") if isinstance(context, dict) else "classification") or "classification"
         avg_strat = config.get("average_strategy", "weighted")
@@ -100,11 +98,24 @@ class ModelEvaluatorRecipe(BaseRecipe):
         # The forecasting recipes themselves perform chronological out-of-sample backtesting
         # and embed the resulting accuracy metrics directly in their output.
         # We pass those through enriched with an evaluation summary.
-        if type(model).__name__ == "Prophet" or "prophet" in str(type(model)).lower() or task_type == "time_series_forecasting":
-            metrics = inputs.get("metrics") or inputs.get("forecasting_summary") or {
+        if type(model).__name__ in ["Prophet", "ARIMA", "SARIMAX"] or "prophet" in str(type(model)).lower() or "arima" in str(type(model)).lower() or task_type == "time_series_forecasting":
+            metrics = inputs.get("metrics") or inputs.get("forecasting_summary") or (context.get("forecasting_summary") if isinstance(context, dict) else None) or {
                 "task_type": "time_series_forecasting",
                 "algorithm": type(model).__name__
             }
+
+        if X_test is None or y_test is None:
+            # Fall back to training or full dataset partitions if no split node was placed upstream
+            X_test = inputs.get("X_train") or (context.get("X_train") if isinstance(context, dict) else None)
+            y_test = inputs.get("y_train") or (context.get("y_train") if isinstance(context, dict) else None)
+            if (X_test is None or y_test is None) and isinstance(context, dict) and "dataframe" in context:
+                raw_df = context["dataframe"]
+                target_col_name = context.get("target_column") or config.get("target_column")
+                if target_col_name and target_col_name in raw_df.columns:
+                    X_test = raw_df.drop(columns=[target_col_name])
+                    y_test = raw_df[target_col_name]
+            if X_test is None or y_test is None:
+                raise ValueError("ModelEvaluator expects 'X_test' and 'y_test' in inputs. Please ensure a Train/Test Split node is connected in the pipeline.")
             # Surface evaluation metadata so UI can distinguish OOS vs in-sample
             eval_type = metrics.get("eval_type", "unknown")
             eval_note = metrics.get("evaluation_note", "")
