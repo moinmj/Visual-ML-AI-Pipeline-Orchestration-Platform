@@ -214,3 +214,130 @@ async def test_template_multi_dataset_join():
     assert tpl["id"] == "multi_dataset_join"
     assert tpl["node_count"] == 6
     assert any(n["recipe_id"] == "dataset_join" for n in tpl["dag"]["nodes"])
+
+
+@pytest.mark.asyncio
+async def test_autowire_with_dataset_join():
+    from backend.app.recommendation.router import autowire_nodes, AutoWireRequest
+
+    req = AutoWireRequest(
+        nodes=[
+            {"id": "node_loader_a", "recipe_id": "csv_loader", "label": "Customers", "position": {"x": 40, "y": 50}},
+            {"id": "node_loader_b", "recipe_id": "csv_loader", "label": "Transactions", "position": {"x": 40, "y": 200}},
+            {"id": "node_join", "recipe_id": "dataset_join", "label": "Join Customers and Transactions", "position": {"x": 300, "y": 120}},
+            {"id": "node_split", "recipe_id": "train_test_split", "label": "Splitter", "position": {"x": 550, "y": 120}},
+            {"id": "node_model", "recipe_id": "xgboost_trainer", "label": "XGBoost", "position": {"x": 800, "y": 120}},
+            {"id": "node_eval", "recipe_id": "model_evaluator", "label": "Evaluator", "position": {"x": 1050, "y": 120}},
+        ]
+    )
+
+    res = await autowire_nodes(req)
+    assert res["status"] == "AUTOWIRED"
+    edges = res["edges"]
+
+    # Verify both loader_a and loader_b connect to node_join with handles
+    edge_a = next((e for e in edges if e["source"] == "node_loader_a" and e["target"] == "node_join"), None)
+    assert edge_a is not None
+    assert edge_a["target_handle"] == "left"
+
+    edge_b = next((e for e in edges if e["source"] == "node_loader_b" and e["target"] == "node_join"), None)
+    assert edge_b is not None
+    assert edge_b["target_handle"] == "right"
+
+    # Verify loaders do NOT connect to each other!
+    assert not any(e["source"] == "node_loader_a" and e["target"] == "node_loader_b" for e in edges)
+    assert not any(e["source"] == "node_loader_b" and e["target"] == "node_loader_a" for e in edges)
+
+    # Verify join connects downstream to splitter
+    assert any(e["source"] == "node_join" and e["target"] == "node_split" for e in edges)
+
+    # Verify splitter connects to model and evaluator
+    assert any(e["source"] == "node_split" and e["target"] == "node_model" for e in edges)
+    assert any(e["source"] == "node_split" and e["target"] == "node_eval" for e in edges)
+
+
+def test_dataset_join_databricks_conditions_selection_and_renaming():
+    recipe = DatasetJoinRecipe()
+
+    df_sales = pd.DataFrame({
+        "Store": [1, 1, 2, 3],
+        "Date": ["2012-01-01", "2012-01-08", "2012-01-01", "2012-01-01"],
+        "Weekly_Sales": [24000, 26000, 15000, 18000],
+        "Temperature": [45.0, 47.0, 50.0, 52.0],
+        "Fuel_Price": [3.5, 3.6, 3.5, 3.7]
+    })
+
+    df_weather = pd.DataFrame({
+        "Store_ID": [1, 1, 2, 4],
+        "Date_Val": ["2012-01-01", "2012-01-08", "2012-01-01", "2012-01-01"],
+        "CPI": [211.0, 211.5, 190.0, 220.0],
+        "Unemployment": [8.1, 8.0, 7.5, 6.9],
+        "Extra_Col_To_Drop": [1, 2, 3, 4]
+    })
+
+    config = {
+        "join_type": "inner",
+        # 1. Composite Databricks conditions: Store = Store_ID AND Date = Date_Val
+        "conditions": [
+            {"left": "Store", "right": "Store_ID"},
+            {"left": "Date", "right": "Date_Val"}
+        ],
+        # 2. Databricks Column Selection: Keep only Weekly_Sales from left, and CPI + Unemployment from right
+        "selected_columns_left": ["Weekly_Sales"],
+        "selected_columns_right": ["CPI", "Unemployment"],
+        # 3. Databricks Inline Renaming
+        "rename_columns_left": {"Weekly_Sales": "target_sales"},
+        "rename_columns_right": {"CPI": "consumer_price_index"}
+    }
+
+    res = recipe.execute(
+        inputs={"left_dataframe": df_sales, "right_dataframe": df_weather},
+        config=config
+    )
+
+    df_res = res["dataframe"]
+    # Verify Store 1 (2 dates) + Store 2 (1 date) = 3 rows matched
+    assert len(df_res) == 3
+    # Check that selected and renamed columns are present
+    assert "target_sales" in df_res.columns
+    assert "consumer_price_index" in df_res.columns
+    assert "Unemployment" in df_res.columns
+    # Check that unselected columns were omitted (e.g. Fuel_Price, Temperature, Extra_Col_To_Drop)
+    assert "Fuel_Price" not in df_res.columns
+    assert "Temperature" not in df_res.columns
+    assert "Extra_Col_To_Drop" not in df_res.columns
+
+
+def test_dataset_join_split_join_outputs():
+    recipe = DatasetJoinRecipe()
+
+    df_left = pd.DataFrame({"id": [1, 2, 3], "val_a": ["A1", "A2", "A3"]})
+    df_right = pd.DataFrame({"id": [2, 3, 4], "val_b": ["B2", "B3", "B4"]})
+
+    config = {
+        "join_type": "split",
+        "on": "id"
+    }
+
+    res = recipe.execute(
+        inputs={"left_dataframe": df_left, "right_dataframe": df_right},
+        config=config
+    )
+
+    assert "matched_dataframe" in res
+    assert "left_unmatched_dataframe" in res
+    assert "right_unmatched_dataframe" in res
+
+    # Matched rows: id=2, 3 (2 rows)
+    assert len(res["matched_dataframe"]) == 2
+    # Left unmatched: id=1 (1 row)
+    assert len(res["left_unmatched_dataframe"]) == 1
+    assert res["left_unmatched_dataframe"]["id"].values[0] == 1
+    # Right unmatched: id=4 (1 row)
+    assert len(res["right_unmatched_dataframe"]) == 1
+    assert res["right_unmatched_dataframe"]["id"].values[0] == 4
+
+    metrics = res["metrics"]
+    assert metrics["matched_rows"] == 2
+    assert metrics["left_unmatched_rows"] == 1
+    assert metrics["right_unmatched_rows"] == 1
