@@ -1,7 +1,45 @@
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from backend.app.recipes.base.recipe import BaseRecipe, RecipeMetadata
 from backend.app.core.exceptions import NotFoundException
 from backend.app.core.logging import logger
+
+
+_RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
+    "webhook_trigger": ("Ingestion & Orchestration", "Triggers"),
+    "cron_trigger": ("Ingestion & Orchestration", "Triggers"),
+    "csv_loader": ("Ingestion & Orchestration", "Load"),
+    "dataset_join": ("Data Preparation & Transformation", "Combine/Structure"),
+    "column_selector": ("Data Preparation & Transformation", "Combine/Structure"),
+    "data_type_converter": ("Data Preparation & Transformation", "Cleanup & Quality"),
+    "duplicate_remover": ("Data Preparation & Transformation", "Cleanup & Quality"),
+    "category_sanitizer": ("Data Preparation & Transformation", "Cleanup & Quality"),
+    "missing_value_imputer": ("Data Preparation & Transformation", "Cleanup & Quality"),
+    "outlier_handler": ("Data Preparation & Transformation", "Cleanup & Quality"),
+    "correlation_filter": ("Data Preparation & Transformation", "Feature Engineering"),
+    "variance_filter": ("Data Preparation & Transformation", "Feature Engineering"),
+    "feature_selector": ("Data Preparation & Transformation", "Feature Engineering"),
+    "feature_scaler": ("Data Preparation & Transformation", "Feature Engineering"),
+    "categorical_encoder": ("Data Preparation & Transformation", "Feature Engineering"),
+    "class_imbalance_resampler": ("Data Preparation & Transformation", "Feature Engineering"),
+    "text_preprocessor": ("Data Preparation & Transformation", "NLP/Text"),
+    "text_vectorizer": ("Data Preparation & Transformation", "NLP/Text"),
+    "train_test_split": ("Data Preparation & Transformation", "Splitting"),
+    "stratified_split": ("Data Preparation & Transformation", "Splitting"),
+    "time_series_split": ("Data Preparation & Transformation", "Splitting"),
+    "walk_forward_split": ("Data Preparation & Transformation", "Splitting"),
+    "xgboost_trainer": ("Modeling", "Supervised — Tree Ensembles"),
+    "random_forest_trainer": ("Modeling", "Supervised — Tree Ensembles"),
+    "lightgbm_trainer": ("Modeling", "Supervised — Tree Ensembles"),
+    "catboost_trainer": ("Modeling", "Supervised — Tree Ensembles"),
+    "linear_trainer": ("Modeling", "Supervised — Linear"),
+    "lag_feature_engineering": ("Modeling", "Forecasting"),
+    "prophet_forecaster": ("Modeling", "Forecasting"),
+    "arima_forecaster": ("Modeling", "Forecasting"),
+    "isolation_forest": ("Modeling", "Anomaly Detection"),
+    "statistical_guardrail": ("Modeling", "Anomaly Detection"),
+    "model_evaluator": ("Evaluation & Governance", "Evaluation"),
+    "mlflow_tracker": ("Evaluation & Governance", "Tracking & Registry"),
+}
 
 
 class RecipeRegistry:
@@ -22,6 +60,13 @@ class RecipeRegistry:
         self._aliases[alias] = target_id
         logger.debug(f"Registered recipe alias: '{alias}' -> '{target_id}'")
 
+    def _to_metadata_with_group(self, recipe: BaseRecipe) -> RecipeMetadata:
+        meta = recipe.to_metadata()
+        group, subgroup = _RECIPE_GROUPS.get(recipe.recipe_id, (None, None))
+        meta.group = group
+        meta.subgroup = subgroup
+        return meta
+
     def get(self, recipe_id: str) -> BaseRecipe:
         resolved_id = self._aliases.get(recipe_id, recipe_id)
         if resolved_id not in self._recipes:
@@ -36,7 +81,7 @@ class RecipeRegistry:
         recipes = list(self._recipes.values())
         if category:
             recipes = [r for r in recipes if r.category.lower() == category.lower()]
-        return [r.to_metadata() for r in recipes]
+        return [self._to_metadata_with_group(r) for r in recipes]
 
     def get_categories(self) -> List[str]:
         return sorted(list(set(r.category for r in self._recipes.values())))
