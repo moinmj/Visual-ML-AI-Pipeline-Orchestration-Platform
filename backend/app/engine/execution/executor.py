@@ -282,18 +282,40 @@ class DAGExecutor:
                 node_inputs["parent_outputs"] = parent_outputs_map
                 node_inputs["parent_dataframes"] = parent_dfs
 
-                # Handle handle-aware assignment (e.g. left and right handles)
+                # Handle handle-aware assignment (e.g. source_handle and target_handle)
                 for edge in incoming_edges:
                     p_out = node_outputs.get(edge.source, {})
-                    p_df = p_out.get("dataframe")
+                    sh = (getattr(edge, "source_handle", None) or "").lower().strip()
+
+                    # Resolve output dataframe partition from upstream based on source_handle
+                    p_df = None
+                    if sh in ["unmatched_left", "left_unmatched"]:
+                        p_df = p_out.get("left_unmatched_dataframe")
+                        if p_df is None:
+                            p_df = p_out.get("dataframe")
+                    elif sh in ["unmatched_right", "right_unmatched"]:
+                        p_df = p_out.get("right_unmatched_dataframe")
+                        if p_df is None:
+                            p_df = p_out.get("dataframe")
+                    elif sh in ["joined", "matched", "matched_dataframe"]:
+                        p_df = p_out.get("matched_dataframe") or p_out.get("dataframe")
+                    elif sh and sh in p_out and isinstance(p_out[sh], pd.DataFrame):
+                        p_df = p_out[sh]
+                    else:
+                        p_df = p_out.get("dataframe")
+
                     if isinstance(p_df, pd.DataFrame):
-                        th = (getattr(edge, "target_handle", None) or "").lower()
+                        th = (getattr(edge, "target_handle", None) or "").lower().strip()
                         if th in ["left", "left_dataset", "df_left", "upstream_left"]:
                             node_inputs["left_dataframe"] = p_df
                             node_inputs["left_parent_id"] = edge.source
                         elif th in ["right", "right_dataset", "df_right", "upstream_right"]:
                             node_inputs["right_dataframe"] = p_df
                             node_inputs["right_parent_id"] = edge.source
+                        else:
+                            # Single-port target or explicit default input port
+                            if len(incoming_edges) == 1 or not th or th in ["input", "in", "dataframe"]:
+                                node_inputs["dataframe"] = p_df
 
                 # If left/right dataframes are not explicitly bound by handles, default from parent_dfs
                 if "left_dataframe" not in node_inputs and len(parent_dfs) >= 1:
@@ -325,6 +347,18 @@ class DAGExecutor:
                 ]:
                     if key in outputs and outputs[key] is not None:
                         pipeline_context[key] = outputs[key]
+
+                # Cache dataframe output to disk for instant pagination and CSV download
+                df_out = outputs.get("dataframe")
+                if isinstance(df_out, pd.DataFrame) and len(df_out) > 0:
+                    try:
+                        from backend.app.infrastructure.storage.storage_manager import storage_manager
+                        p_rel = f"executions/{execution_id}/{node.id}.parquet"
+                        p_abs = storage_manager.get_absolute_path(p_rel)
+                        p_abs.parent.mkdir(parents=True, exist_ok=True)
+                        df_out.to_parquet(p_abs, index=False)
+                    except Exception:
+                        pass
 
                 if "target_column" in node.config and node.config["target_column"]:
                     pipeline_context["target_column"] = node.config["target_column"]

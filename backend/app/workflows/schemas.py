@@ -214,3 +214,39 @@ class WorkflowCompareResponse(BaseModel):
     metrics_diff: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
     config_diff: Dict[str, Any] = Field(default_factory=dict)
 
+
+class NodeColumnInfo(BaseModel):
+    name: str
+    type: str = "string"  # numeric, categorical, datetime, text, boolean, string
+    raw_dtype: Optional[str] = None
+
+
+class NodePortSchema(BaseModel):
+    port_id: str
+    columns: List[str] = Field(default_factory=list)
+    column_details: List[NodeColumnInfo] = Field(default_factory=list)
+
+
+class NodeInferredSchema(BaseModel):
+    node_id: str
+    recipe_id: str
+    columns: List[str] = Field(default_factory=list)
+    column_details: List[NodeColumnInfo] = Field(default_factory=list)
+    available_left_columns: List[str] = Field(default_factory=list)
+    available_right_columns: List[str] = Field(default_factory=list)
+    ports: Dict[str, NodePortSchema] = Field(default_factory=dict)
+
+
+class WorkflowInferSchemaRequest(BaseModel):
+    workflow_id: Optional[str] = None
+    nodes: Optional[List[Dict[str, Any]]] = None
+    edges: Optional[List[Dict[str, Any]]] = None
+    node_configs: Optional[Dict[str, Any]] = None
+
+
+class WorkflowInferSchemaResponse(BaseModel):
+    success: bool = True
+    node_schemas: Dict[str, NodeInferredSchema] = Field(default_factory=dict)
+    errors: List[str] = Field(default_factory=list)
+
+
