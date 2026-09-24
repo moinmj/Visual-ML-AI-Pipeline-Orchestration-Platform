@@ -194,6 +194,7 @@ class NativeCadenceDatasetResponse(BaseModel):
     total_rows: int = Field(default=0, description="Total number of generated rows across all entities.")
     columns: List[str] = Field(default_factory=list, description="Original dataset column headers.")
     preview_rows: List[Dict[str, Any]] = Field(default_factory=list, description="Top 10 generated rows formatted as dataset preview.")
+    is_trend_extrapolated: Optional[bool] = Field(default=None, description="True only when no feature carried a usable historical drift, so the target itself was extrapolated using its own historical trend as a last resort — the same honesty flag the annual trajectory path already surfaces.")
     records: List[Dict[str, Any]] = Field(default_factory=list, description="All generated records.")
 
 
@@ -223,4 +224,4 @@ class CombinedDatasetResponse(BaseModel):
     total_rows_count: int = Field(default=0, description="Total number of combined records.")
     columns: List[str] = Field(default_factory=list, description="Original dataset column headers plus RECORD_TYPE.")
     records: List[Dict[str, Any]] = Field(default_factory=list, description="All combined records (historical + predicted).")
-
+

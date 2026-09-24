@@ -519,6 +519,14 @@ class DAGExecutor:
                     try:
                         parsed = pd.to_datetime(X_eval[date_col_candidate], errors="coerce")
                         if parsed.notna().sum() >= 5:
+                            # Derive real calendar month/week BEFORE overwriting the date
+                            # column itself, so the existing subcomponent-detection logic
+                            # below (which scans column names for "month"/"week") picks
+                            # these up automatically and computes genuine seasonal_profile
+                            # entries for forecasting pipelines (Prophet/ARIMA), not just
+                            # tabular ones — reusing the exact same machinery either way.
+                            X_eval[f"{date_col_candidate}_month"] = parsed.dt.month
+                            X_eval[f"{date_col_candidate}_week"] = parsed.dt.isocalendar().week.astype(int)
                             X_eval[date_col_candidate] = parsed.dt.year + (parsed.dt.dayofyear - 1) / 365.25
                     except Exception:
                         pass

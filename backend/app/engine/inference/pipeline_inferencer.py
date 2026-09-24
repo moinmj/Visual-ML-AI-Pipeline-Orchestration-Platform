@@ -1,11 +1,14 @@
 import time
 import json
 import re
+import logging
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Union
 import numpy as np
 import pandas as pd
 import httpx
+
+logger = logging.getLogger(__name__)
 
 from backend.app.core.config import settings
 from backend.app.engine.inference.schemas import (
@@ -173,17 +176,28 @@ class PipelineInferencer:
                             unrecognized_features.append(w)
 
             if (request.future_periods or request.target_year) and temporal_col and task_type in ["regression", "classification"]:
-                inputs_dict = dict(bundle.get("last_historical_row") or bundle.get("sample_row", {}))
-                if isinstance(request.inputs, dict):
-                    inputs_dict.update(request.inputs)
-                res = cls._predict_tabular_future_projection(
+                base_year_val = (bundle.get("last_historical_row") or {}).get(temporal_col)
+                try:
+                    base_year_val = float(base_year_val)
+                except (TypeError, ValueError):
+                    base_year_val = float(bundle.get("max_year") or 2020)
+
+                if request.target_year is not None:
+                    horizon_years = max(1, int(request.target_year - base_year_val))
+                else:
+                    horizon_years = max(1, int(request.future_periods or 5))
+
+                nc_req = NativeCadenceDatasetRequest(
+                    horizon_years=horizon_years,
+                    step_unit=getattr(request, "time_unit", None) or getattr(request, "step_unit", None) or "year"
+                )
+                nc_res = cls.generate_native_cadence_dataset(
                     bundle=bundle,
-                    base_inputs=inputs_dict,
-                    temporal_col=temporal_col,
-                    future_periods=request.future_periods or 5,
-                    target_year=request.target_year,
+                    request=nc_req,
+                    anchor_overrides=request.inputs if isinstance(request.inputs, dict) else None,
                     future_feature_overrides=request.future_feature_overrides
                 )
+                res = cls._native_cadence_response_to_prediction_response(bundle, nc_res)
                 if nl_query:
                     res.ai_explanation = cls._generate_ai_explanation(
                         query=nl_query, task_type=task_type, prediction=res.prediction,
@@ -1420,6 +1434,117 @@ class PipelineInferencer:
             return res_str
 
         return f"Based on your query '{query}', the model projects a predicted {target_label} of {prediction} under the specified feature conditions."
+# INSERT (new method, place it directly above "def generate_native_cadence_dataset"):
+    @classmethod
+    def _native_cadence_response_to_prediction_response(
+        cls,
+        bundle: Dict[str, Any],
+        nc_res: "NativeCadenceDatasetResponse"
+    ) -> PredictionResponse:
+        """
+        Converts a NativeCadenceDatasetResponse into the PredictionResponse shape /predict
+        must return. Carries forward everything the old annual-stepping method returned —
+        including SHAP waterfall attribution and the flat-series honesty flag — so
+        delegating to native-cadence stepping is not a silent feature regression.
+        """
+        target_col = nc_res.target_column or bundle.get("target_column") or "Target"
+        records = nc_res.records
+        feature_trends = bundle.get("feature_trends") or {}
+        year_col = bundle.get("temporal_column")
+
+        trajectory = []
+        for i, rec in enumerate(records):
+            yhat = rec.get(target_col)
+            features = {k: v for k, v in rec.items() if k != target_col}
+            if features.get("DATE"):
+                ds_val = features["DATE"]
+            elif nc_res.cadence == "annual" or not nc_res.step_column or nc_res.step_column == year_col:
+                ds_val = str(features.get(year_col or nc_res.step_column, i))
+            elif year_col and nc_res.step_column and nc_res.step_column != year_col:
+                ds_val = f"{features.get(year_col)}-{features.get(nc_res.step_column)}"
+            else:
+                ds_val = str(features.get(nc_res.step_column, i))
+            trajectory.append({
+                "ds": str(ds_val),
+                "yhat": yhat,
+                "period_step": i,
+                "features": features
+            })
+
+        yhats = [t["yhat"] for t in trajectory if t["yhat"] is not None]
+        start_val = yhats[0] if yhats else 0.0
+        end_val = yhats[-1] if yhats else 0.0
+        chg_pct = round(((end_val - start_val) / (abs(start_val) if start_val else 1.0)) * 100.0, 2)
+        trend = "Upward" if end_val > start_val else "Downward" if end_val < start_val else "Neutral"
+        series_summary = {
+            "start_date": trajectory[0]["ds"] if trajectory else "N/A",
+            "end_date": trajectory[-1]["ds"] if trajectory else "N/A",
+            "start_value": start_val,
+            "end_value": end_val,
+            "min_value": min(yhats) if yhats else 0.0,
+            "max_value": max(yhats) if yhats else 0.0,
+            "avg_value": round(float(np.mean(yhats)), 4) if yhats else 0.0,
+            "total_points": len(trajectory)
+        }
+
+        feat_cols = trajectory[0]["features"].keys() if trajectory else []
+        feature_trend_basis = {
+            col: ({"source": "projected_from_history", **feature_trends[col]} if col in feature_trends
+                  else {"source": "frozen_at_input"})
+            for col in feat_cols
+        }
+        dataset_preview = cls._build_dataset_preview(
+            rows=[t["features"] for t in trajectory],
+            target_col=target_col,
+            target_values=[t["yhat"] for t in trajectory],
+            feature_trend_basis=feature_trend_basis
+        )
+
+        # Restore SHAP waterfall attribution — computed against the base (first) row,
+        # exactly like _predict_tabular_future_projection did. Without this, every
+        # delegated tabular prediction would silently lose feature-driver explainability.
+        model = bundle.get("model")
+        waterfall_meta = {}
+        if model is not None and trajectory:
+            try:
+                X_start = cls._preprocess_inputs(bundle, pd.DataFrame([trajectory[0]["features"]]))
+                waterfall_meta = compute_waterfall_breakdown(
+                    model=model, X_row=X_start, feature_names=list(X_start.columns),
+                    bundle=bundle, predicted_value=float(end_val), task_type="regression"
+                )
+            except Exception as e:
+                logger.warning(f"Native-cadence delegated waterfall calculation skipped: {e}")
+
+        target_name = bundle.get("target_column") or "Target"
+        last_ds = trajectory[-1]["ds"] if trajectory else ""
+        pred_label = f"Projected {target_name} ({last_ds})" if last_ds else f"Projected {target_name}"
+
+        return PredictionResponse(
+            status="SUCCESS",
+            task_type="time_series_forecasting",
+            execution_id=bundle.get("execution_id", "unknown"),
+            target_column=target_col,
+            prediction=end_val,
+            prediction_label=pred_label,
+            prediction_raw=end_val,
+            forecast_horizon=len(trajectory),
+            forecast_records=trajectory,
+            trajectory=trajectory,
+            projected_end_value=end_val,
+            projected_change_pct=chg_pct,
+            trend=trend,
+            series_summary=series_summary,
+            features_used=list(trajectory[0]["features"].keys()) if trajectory else [],
+            is_trend_extrapolated=nc_res.is_trend_extrapolated,
+            feature_trend_basis=feature_trend_basis,
+            dataset_preview=dataset_preview,
+            base_value=waterfall_meta.get("base_value"),
+            base_value_formatted=waterfall_meta.get("base_value_formatted"),
+            waterfall_breakdown=waterfall_meta.get("waterfall_breakdown"),
+            top_positive_drivers=waterfall_meta.get("top_positive_drivers"),
+            top_negative_drivers=waterfall_meta.get("top_negative_drivers"),
+            waterfall_summary=waterfall_meta.get("waterfall_summary")
+        )
 
     # -------------------------------------------------------------
     # 8. NATIVE CADENCE FUTURE DATASET GENERATOR
@@ -1428,12 +1553,23 @@ class PipelineInferencer:
     def generate_native_cadence_dataset(
         cls,
         bundle: Dict[str, Any],
-        request: NativeCadenceDatasetRequest
+        request: NativeCadenceDatasetRequest,
+        anchor_overrides: Optional[Dict[str, Any]] = None,
+        future_feature_overrides: Optional[Dict[str, Dict[str, Any]]] = None
     ) -> NativeCadenceDatasetResponse:
         """
         Generates a full row-by-row synthetic future dataset at the original dataset's native
         temporal cadence (e.g. weekly per Store ID or daily per SKU), with predicted target
         and predicted feature values formatted in the exact schema of the original CSV.
+
+        anchor_overrides: caller-supplied explicit values (e.g. from a /predict request)
+        that become the new BASE point for drift — an override still evolves forward via
+        feature_trends from there, matching the anchor-and-drift semantics used everywhere
+        else in this engine. Distinct from request.feature_overrides, which freezes a value
+        as a constant for the entire generated horizon (a genuine "held fixed" what-if).
+
+        future_feature_overrides: explicit values for a SPECIFIC future year only (e.g.
+        {"2014": {"CPI": 210.0}}), matching the annual trajectory path's what-if mechanism.
         """
         model = bundle.get("model")
         if model is None:
@@ -1443,6 +1579,9 @@ class PipelineInferencer:
         target_col = bundle.get("target_column") or "Target"
         fn_list = list(bundle.get("feature_names", []))
         last_row = dict(bundle.get("last_historical_row") or bundle.get("sample_row", {}))
+        if isinstance(anchor_overrides, dict):
+            last_row.update(anchor_overrides)
+        future_feature_overrides = future_feature_overrides or {}
         feature_trends = bundle.get("feature_trends", {})
         entity_value_sets = bundle.get("entity_value_sets", {})
         seasonal_profile = bundle.get("seasonal_profile", {})
@@ -1454,7 +1593,7 @@ class PipelineInferencer:
             if any(h in c.lower().replace("_", " ").split() for h in ("month", "dayofweek", "day_of_week", "quarter", "week", "day"))
             and not c.lower().startswith("holiday")
         ]
-        step_sub_col = sub_date_cols[0] if sub_date_cols else None
+        step_sub_col = sub_date_cols[0] if (sub_date_cols and request.step_unit != "year") else None
 
         # 2. Detect Main Year Column (e.g. Date_year, Year)
         year_col = bundle.get("temporal_column")
@@ -1597,6 +1736,13 @@ class PipelineInferencer:
                     if k in row_inputs:
                         row_inputs[k] = v
 
+                # Year-specific what-if override wins over both drift and the constant
+                # feature_overrides above, for that one year only.
+                if year_col:
+                    year_specific = future_feature_overrides.get(str(int(curr_year)), {})
+                    for k, v in year_specific.items():
+                        row_inputs[k] = v
+
                 # Run model prediction
                 X_row = cls._preprocess_inputs(bundle, pd.DataFrame([row_inputs]))
                 raw_pred = float(model.predict(X_row)[0])
@@ -1604,6 +1750,22 @@ class PipelineInferencer:
 
                 row_inputs[target_col] = pred_val
                 generated_records.append(row_inputs)
+        # Honesty check, mirroring the annual trajectory path's safety net: if literally no
+        # feature had a usable historical drift, the model has nothing to differentiate
+        # future periods from the base row, and the "prediction" is legitimately flat. Flag
+        # this rather than silently returning a flat series that looks like a real forecast.
+        is_trend_extrapolated = False
+        first_entity_vals = [r[target_col] for r in generated_records if not primary_entity_col or r.get(primary_entity_col) == primary_entity_vals[0]]
+        if first_entity_vals and len(set(first_entity_vals)) <= 1 and not feature_trends:
+            is_trend_extrapolated = True
+            annual_trend_pct = bundle.get("annual_trend_pct") or 0.0
+            rate = float(annual_trend_pct) / 100.0
+            base_val = first_entity_vals[0]
+            idx = 0
+            for r in generated_records:
+                if not primary_entity_col or r.get(primary_entity_col) == primary_entity_vals[0]:
+                    idx += 1
+                    r[target_col] = float(round(base_val * ((1.0 + rate) ** idx), 4))
 
         # 7. Reshape preview rows with "(Predicted)" labels
         preview_rows = cls._build_dataset_preview(
@@ -1626,6 +1788,7 @@ class PipelineInferencer:
             total_rows=len(generated_records),
             columns=all_cols,
             preview_rows=preview_rows,
+            is_trend_extrapolated=is_trend_extrapolated,
             records=generated_records
         )
 
@@ -1689,4 +1852,4 @@ class PipelineInferencer:
             total_rows_count=len(combined_records),
             columns=cols,
             records=combined_records
-        )
+        )
