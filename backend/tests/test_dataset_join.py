@@ -441,3 +441,43 @@ async def test_workflow_multi_dataset_endpoints():
         assert len(item["datasets"]) == 2
         assert item["datasets"][0]["role"] == "Primary (Left)"
         assert item["datasets"][1]["role"] == "Secondary (Right)"
+
+        # 6. Execute workflow to generate node output table
+        exec_resp = await client.post(f"/api/v1/workflows/{wf_id}/execute")
+        assert exec_resp.status_code == 200
+        exec_data = exec_resp.json()
+        exec_id = exec_data["execution_id"]
+
+        # 7. Test GET /{execution_id}/nodes/{node_id}/data (Paginated Table Grid for UI)
+        grid_resp = await client.get(f"/api/v1/workflows/{exec_id}/nodes/node_join/data?page=1&limit=10")
+        assert grid_resp.status_code == 200
+        grid_data = grid_resp.json()
+        assert grid_data["execution_id"] == exec_id
+        assert grid_data["node_id"] == "node_join"
+        assert grid_data["total_rows"] == 2
+        assert "_merge" not in grid_data["columns"]
+        assert "customer_id" in grid_data["columns"]
+        assert "amount" in grid_data["columns"]
+        assert len(grid_data["data"]) == 2
+
+        # 8. Test GET /{execution_id}/nodes/{node_id}/export-csv (Direct CSV File Download)
+        csv_resp = await client.get(f"/api/v1/workflows/{exec_id}/nodes/node_join/export-csv")
+        assert csv_resp.status_code == 200
+        assert "text/csv" in csv_resp.headers["content-type"]
+        assert "attachment" in csv_resp.headers["content-disposition"]
+        csv_text = csv_resp.text
+        assert "customer_id" in csv_text
+        assert "Alice" in csv_text
+        assert "_merge" not in csv_text
+
+        # 9. Test POST /export-dataset (Save to Datasets Library)
+        export_resp = await client.post("/api/v1/workflows/export-dataset", json={
+            "execution_id": exec_id,
+            "node_id": "node_join",
+            "dataset_name": "Exported_Joined_Table"
+        })
+        assert export_resp.status_code == 201
+        exp_res = export_resp.json()
+        assert exp_res["status"] == "SUCCESS"
+        assert exp_res["dataset"]["name"] == "Exported_Joined_Table"
+        assert exp_res["dataset"]["row_count"] == 2

@@ -1665,6 +1665,65 @@ async def autowire_workflow_nodes(payload: Dict[str, Any] = Body(...)):
     return await autowire_nodes(AutoWireRequest(nodes=nodes))
 
 
+async def _get_execution_node_dataframe(
+    db: AsyncSession,
+    execution_id: str,
+    node_id: str
+) -> Optional[pd.DataFrame]:
+    """Helper to locate, load, or reconstruct any node's full DataFrame for an execution run."""
+    from backend.app.infrastructure.storage.storage_manager import storage_manager
+    p_rel = f"executions/{execution_id}/{node_id}.parquet"
+    p_abs = storage_manager.get_absolute_path(p_rel)
+    if p_abs.exists():
+        try:
+            return pd.read_parquet(p_abs)
+        except Exception:
+            pass
+
+    job = job_manager.get_job(execution_id)
+    if job:
+        res = job.get("results") or job.get("result")
+        node_outs = getattr(res, "node_outputs", {}) if not isinstance(res, dict) else res.get("node_outputs", {})
+        if node_id in node_outs:
+            df = node_outs[node_id].get("dataframe")
+            if isinstance(df, pd.DataFrame):
+                return df
+
+    ex_res = await db.execute(select(WorkflowExecution).where(WorkflowExecution.id == execution_id))
+    ex_row = ex_res.scalar_one_or_none()
+    if ex_row:
+        from backend.app.engine.dag.graph import WorkflowGraph, WorkflowNode, WorkflowEdge
+        nodes = []
+        saved_configs = ex_row.snapshot_node_configs or {}
+        for nd in ex_row.snapshot_nodes or []:
+            nid = nd["id"]
+            n_cfg = saved_configs.get(nid, {})
+            recipe_id = nd.get("recipe_id") or n_cfg.get("recipe_id", "csv_loader")
+            config = nd.get("config") or n_cfg.get("config", {})
+            label = nd.get("label") or nd.get("content") or n_cfg.get("label", nid)
+            nodes.append(WorkflowNode(id=nid, recipe_id=recipe_id, config=config, label=label))
+        edges = [
+            WorkflowEdge(source=ed["source"], target=ed["target"], target_handle=ed.get("target_handle") or ed.get("targetHandle"))
+            for ed in ex_row.snapshot_edges or []
+        ]
+        graph = WorkflowGraph(nodes=nodes, edges=edges)
+        exec_res = DAGExecutor.execute_workflow(
+            execution_id=str(uuid.uuid4()),
+            workflow=graph,
+            include_node_outputs=True
+        )
+        node_outs = exec_res.node_outputs or {}
+        if node_id in node_outs and isinstance(node_outs[node_id].get("dataframe"), pd.DataFrame):
+            df = node_outs[node_id]["dataframe"]
+            try:
+                p_abs.parent.mkdir(parents=True, exist_ok=True)
+                df.to_parquet(p_abs, index=False)
+            except Exception:
+                pass
+            return df
+    return None
+
+
 @router.post(
     "/export-dataset",
     status_code=status.HTTP_201_CREATED,
@@ -1690,8 +1749,12 @@ async def export_workflow_node_dataset(
 
     df_to_save: Optional[pd.DataFrame] = None
 
-    # 1. Try finding in-memory execution job result
-    if execution_id:
+    # 1. Use cached Parquet / execution helper
+    if execution_id and target_node_id:
+        df_to_save = await _get_execution_node_dataframe(db=db, execution_id=execution_id, node_id=target_node_id)
+
+    # 2. Try finding in-memory execution job result if target_node_id omitted
+    if df_to_save is None and execution_id:
         job = job_manager.get_job(execution_id)
         if job:
             res = job.get("results") or job.get("result")
@@ -1707,7 +1770,7 @@ async def export_workflow_node_dataset(
                         target_node_id = nid
                         break
 
-    # 2. If not found in-memory, retrieve graph from DB and execute up to node_id
+    # 3. If still not found, execute workflow from DB
     if df_to_save is None:
         wf = None
         if workflow_id:
@@ -1792,6 +1855,86 @@ async def export_workflow_node_dataset(
             "storage_path": new_dataset.storage_path
         }
     }
+
+
+@router.get(
+    "/{execution_id}/nodes/{node_id}/data",
+    dependencies=[Depends(get_current_user)]
+)
+async def get_node_table_data(
+    execution_id: str,
+    node_id: str,
+    page: int = Query(1, ge=1, description="1-indexed page number"),
+    limit: int = Query(50, ge=1, le=500, description="Records per page"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Renders the full tabular output of any node (e.g. dataset_join) with server-side pagination.
+    Returns: execution_id, node_id, total_rows, total_columns, page, limit, total_pages, columns, and data rows.
+    """
+    df = await _get_execution_node_dataframe(db=db, execution_id=execution_id, node_id=node_id)
+    if df is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Tabular output for node '{node_id}' in execution '{execution_id}' not found."
+        )
+
+    df = df.drop(columns=["_merge"], errors="ignore")
+
+    total_rows = len(df)
+    total_cols = len(df.columns)
+    total_pages = math.ceil(total_rows / limit) if (limit > 0 and total_rows > 0) else 1
+    skip = (page - 1) * limit
+    page_df = df.iloc[skip:skip + limit]
+    clean_page = page_df.replace({float("nan"): None, float("inf"): None, float("-inf"): None})
+
+    return {
+        "execution_id": execution_id,
+        "node_id": node_id,
+        "total_rows": total_rows,
+        "total_columns": total_cols,
+        "page": page,
+        "limit": limit,
+        "total_pages": total_pages,
+        "columns": list(df.columns),
+        "data": clean_page.to_dict(orient="records")
+    }
+
+
+@router.get(
+    "/{execution_id}/nodes/{node_id}/export-csv",
+    dependencies=[Depends(get_current_user)]
+)
+async def export_node_data_to_csv(
+    execution_id: str,
+    node_id: str,
+    limit: Optional[int] = Query(None, ge=1, description="Optional max rows to export"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Directly streams the output DataFrame of any executed node as a downloadable CSV file.
+    """
+    df = await _get_execution_node_dataframe(db=db, execution_id=execution_id, node_id=node_id)
+    if df is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Tabular output for node '{node_id}' in execution '{execution_id}' not found."
+        )
+
+    df = df.drop(columns=["_merge"], errors="ignore")
+    if limit is not None:
+        df = df.head(limit)
+
+    csv_str = df.to_csv(index=False)
+    filename = f"{node_id}_{execution_id[:8]}.csv"
+
+    return Response(
+        content=csv_str,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}"
+        }
+    )
 
 
 # -------------------------------------------------------------

@@ -326,6 +326,18 @@ class DAGExecutor:
                     if key in outputs and outputs[key] is not None:
                         pipeline_context[key] = outputs[key]
 
+                # Cache dataframe output to disk for instant pagination and CSV download
+                df_out = outputs.get("dataframe")
+                if isinstance(df_out, pd.DataFrame) and len(df_out) > 0:
+                    try:
+                        from backend.app.infrastructure.storage.storage_manager import storage_manager
+                        p_rel = f"executions/{execution_id}/{node.id}.parquet"
+                        p_abs = storage_manager.get_absolute_path(p_rel)
+                        p_abs.parent.mkdir(parents=True, exist_ok=True)
+                        df_out.to_parquet(p_abs, index=False)
+                    except Exception:
+                        pass
+
                 if "target_column" in node.config and node.config["target_column"]:
                     pipeline_context["target_column"] = node.config["target_column"]
 
