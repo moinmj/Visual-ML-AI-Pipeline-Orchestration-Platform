@@ -36,6 +36,23 @@ from backend.app.recipes.governance.mlflow_tracker import MLflowTrackerRecipe
 from backend.app.recipes.triggers.webhook_trigger import WebhookTriggerRecipe
 from backend.app.recipes.triggers.cron_trigger import CronScheduleTriggerRecipe
 
+# Flow Control Recipes
+from backend.app.recipes.flow_control.if_condition import IfConditionRecipe
+from backend.app.recipes.flow_control.row_filter import RowFilterRecipe
+from backend.app.recipes.flow_control.switch_node import SwitchRecipe
+from backend.app.recipes.flow_control.merge_node import MergeDatasetsRecipe
+from backend.app.recipes.flow_control.loop_node import LoopBatchRecipe
+from backend.app.recipes.flow_control.delay_node import DelayRecipe
+
+# Apps & Integrations Recipes
+from backend.app.recipes.integrations.slack_notifier import SlackRecipe
+from backend.app.recipes.integrations.discord_notifier import DiscordRecipe
+from backend.app.recipes.integrations.telegram_notifier import TelegramRecipe
+from backend.app.recipes.integrations.gmail_notifier import GmailRecipe
+from backend.app.recipes.integrations.google_sheets import GoogleSheetsRecipe
+from backend.app.recipes.integrations.google_drive import GoogleDriveRecipe
+from backend.app.recipes.integrations.openweathermap import OpenWeatherMapRecipe
+
 
 def register_all_recipes():
     recipe_registry.register(CSVLoaderRecipe())
@@ -72,6 +89,23 @@ def register_all_recipes():
     recipe_registry.register(ProphetForecasterRecipe())
     recipe_registry.register(ARIMAForecasterRecipe())
     recipe_registry.register(MLflowTrackerRecipe())
+
+    # Flow Control
+    recipe_registry.register(IfConditionRecipe())
+    recipe_registry.register(RowFilterRecipe())
+    recipe_registry.register(SwitchRecipe())
+    recipe_registry.register(MergeDatasetsRecipe())
+    recipe_registry.register(LoopBatchRecipe())
+    recipe_registry.register(DelayRecipe())
+
+    # Apps & Integrations
+    recipe_registry.register(SlackRecipe())
+    recipe_registry.register(DiscordRecipe())
+    recipe_registry.register(TelegramRecipe())
+    recipe_registry.register(GmailRecipe())
+    recipe_registry.register(GoogleSheetsRecipe())
+    recipe_registry.register(GoogleDriveRecipe())
+    recipe_registry.register(OpenWeatherMapRecipe())
 
 
 # Automatically register upon module load
