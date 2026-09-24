@@ -1665,6 +1665,135 @@ async def autowire_workflow_nodes(payload: Dict[str, Any] = Body(...)):
     return await autowire_nodes(AutoWireRequest(nodes=nodes))
 
 
+@router.post(
+    "/export-dataset",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_role("Tenant Admin", "Data Scientist", "ML Engineer"))]
+)
+async def export_workflow_node_dataset(
+    payload: Dict[str, Any] = Body(..., description="Export intermediate or joined node output as a permanent dataset in the library"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Exports the output DataFrame of any executed workflow node (e.g. dataset_join)
+    directly into a permanent dataset in the Datasets library.
+    """
+    import time
+    from backend.app.infrastructure.storage.storage_manager import storage_manager
+    from backend.app.profiling.profiler import DataProfiler
+
+    workflow_id = payload.get("workflow_id")
+    execution_id = payload.get("execution_id")
+    target_node_id = payload.get("node_id")
+    custom_name = payload.get("dataset_name") or payload.get("name")
+    description = payload.get("description")
+
+    df_to_save: Optional[pd.DataFrame] = None
+
+    # 1. Try finding in-memory execution job result
+    if execution_id:
+        job = job_manager.get_job(execution_id)
+        if job:
+            res = job.get("results") or job.get("result")
+            node_outs = getattr(res, "node_outputs", {}) if not isinstance(res, dict) else res.get("node_outputs", {})
+            if target_node_id and target_node_id in node_outs:
+                cand = node_outs[target_node_id].get("dataframe")
+                if isinstance(cand, pd.DataFrame):
+                    df_to_save = cand
+            elif not target_node_id and node_outs:
+                for nid, n_out in reversed(list(node_outs.items())):
+                    if isinstance(n_out.get("dataframe"), pd.DataFrame):
+                        df_to_save = n_out["dataframe"]
+                        target_node_id = nid
+                        break
+
+    # 2. If not found in-memory, retrieve graph from DB and execute up to node_id
+    if df_to_save is None:
+        wf = None
+        if workflow_id:
+            wf_res = await db.execute(select(Workflow).where(Workflow.id == workflow_id))
+            wf = wf_res.scalar_one_or_none()
+        elif execution_id:
+            ex_res = await db.execute(select(WorkflowExecution).where(WorkflowExecution.id == execution_id))
+            ex_row = ex_res.scalar_one_or_none()
+            if ex_row and ex_row.workflow_id:
+                wf_res = await db.execute(select(Workflow).where(Workflow.id == ex_row.workflow_id))
+                wf = wf_res.scalar_one_or_none()
+
+        if wf:
+            graph = db_workflow_to_graph(wf)
+            exec_res = DAGExecutor.execute_workflow(
+                execution_id=str(uuid.uuid4()),
+                workflow=graph,
+                include_node_outputs=True
+            )
+            node_outs = exec_res.node_outputs or {}
+            if target_node_id and target_node_id in node_outs:
+                cand = node_outs[target_node_id].get("dataframe")
+                if isinstance(cand, pd.DataFrame):
+                    df_to_save = cand
+            elif not target_node_id and node_outs:
+                for nid, n_out in reversed(list(node_outs.items())):
+                    if isinstance(n_out.get("dataframe"), pd.DataFrame):
+                        df_to_save = n_out["dataframe"]
+                        target_node_id = nid
+                        break
+
+    if df_to_save is None or len(df_to_save) == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Could not find output tabular data for node '{target_node_id or 'unknown'}' in execution '{execution_id or 'unknown'}'."
+        )
+
+    df_clean = df_to_save.drop(columns=["_merge"], errors="ignore")
+
+    new_ds_id = str(uuid.uuid4())
+    ds_name = custom_name.strip() if custom_name and str(custom_name).strip() else f"Exported_{target_node_id or 'Dataset'}_{int(time.time())}"
+    if not ds_name.lower().endswith(".csv"):
+        file_name = f"{ds_name}.csv"
+    else:
+        file_name = ds_name
+        ds_name = ds_name[:-4]
+
+    rel_storage_path = f"datasets/{new_ds_id}_{file_name}"
+    abs_path = storage_manager.get_absolute_path(rel_storage_path)
+    abs_path.parent.mkdir(parents=True, exist_ok=True)
+    df_clean.to_csv(abs_path, index=False)
+    file_size_bytes = abs_path.stat().st_size
+
+    profile_data = DataProfiler.profile_dataframe(df_clean)
+
+    new_dataset = Dataset(
+        id=new_ds_id,
+        name=ds_name,
+        description=description or f"Exported from workflow node '{target_node_id}'",
+        file_name=file_name,
+        file_format="csv",
+        file_size_bytes=file_size_bytes,
+        storage_path=rel_storage_path,
+        row_count=len(df_clean),
+        column_count=len(df_clean.columns),
+        quality_score=float(profile_data.get("quality_score", 100.0)),
+        profile=profile_data
+    )
+    db.add(new_dataset)
+    await db.commit()
+    await db.refresh(new_dataset)
+
+    return {
+        "status": "SUCCESS",
+        "message": f"Successfully exported node '{target_node_id}' to Datasets library as '{ds_name}'.",
+        "dataset": {
+            "id": new_dataset.id,
+            "name": new_dataset.name,
+            "file_name": new_dataset.file_name,
+            "row_count": new_dataset.row_count,
+            "column_count": new_dataset.column_count,
+            "storage_path": new_dataset.storage_path
+        }
+    }
+
+
 # -------------------------------------------------------------
 # MODEL INFERENCE & LIVE PREDICTION ENDPOINTS
 # -------------------------------------------------------------
