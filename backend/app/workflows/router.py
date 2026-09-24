@@ -29,7 +29,9 @@ from backend.app.workflows.schemas import (
     WorkflowExecutionSummaryResponse,
     WorkflowExecutionDetailResponse,
     WorkflowCompareResponse,
-    AssociatedDatasetItem
+    AssociatedDatasetItem,
+    WorkflowInferSchemaRequest,
+    WorkflowInferSchemaResponse
 )
 from backend.app.engine.inference import (
     PipelineInferencer,
@@ -1855,6 +1857,48 @@ async def export_workflow_node_dataset(
             "storage_path": new_dataset.storage_path
         }
     }
+
+
+@router.post(
+    "/infer-schema",
+    response_model=WorkflowInferSchemaResponse,
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_role("Tenant Admin", "Data Scientist", "ML Engineer", "Business User"))]
+)
+async def infer_workflow_schema(
+    payload: WorkflowInferSchemaRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Calculates and returns expected output columns and data types for each node
+    in a DAG workflow before execution. Provides available_left_columns and
+    available_right_columns for multi-port join inspector dropdowns.
+    """
+    from backend.app.workflows.schema_inference import WorkflowSchemaInferencer
+
+    nodes = payload.nodes
+    edges = payload.edges
+    node_configs = payload.node_configs or {}
+
+    # If workflow_id provided but nodes/edges omitted, load from saved workflow
+    if (not nodes or len(nodes) == 0) and payload.workflow_id:
+        result = await db.execute(select(Workflow).where(Workflow.id == payload.workflow_id))
+        wf = result.scalar_one_or_none()
+        if wf:
+            nodes = wf.nodes or []
+            edges = wf.edges or []
+            if not node_configs and wf.node_configs:
+                node_configs = wf.node_configs
+
+    nodes = nodes or []
+    edges = edges or []
+
+    return await WorkflowSchemaInferencer.infer_schema(
+        nodes=nodes,
+        edges=edges,
+        node_configs=node_configs,
+        db=db
+    )
 
 
 @router.get(

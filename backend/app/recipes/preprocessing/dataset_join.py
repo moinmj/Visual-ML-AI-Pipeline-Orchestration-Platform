@@ -1,18 +1,58 @@
 import pandas as pd
 import numpy as np
 from typing import Dict, Any, List, Optional, Union, Tuple
-from backend.app.recipes.base.recipe import BaseRecipe
+from backend.app.recipes.base.recipe import BaseRecipe, RecipePort
 from backend.app.core.logging import logger
 
 
 class DatasetJoinRecipe(BaseRecipe):
     recipe_id = "dataset_join"
     name = "Dataset Join / Merge"
-    version = "1.1.0"
+    version = "1.2.0"
     category = "preprocessing"
     description = "Enterprise visual multi-dataset join matching Databricks visual data prep (Inner, Left, Right, Full, and Split joins with column selection and inline renaming)."
     input_types = ["dataframe"]
     output_types = ["dataframe"]
+
+    # Structured multi-port definitions for DAG canvas handles
+    inputs = [
+        RecipePort(
+            id="left",
+            label="Left Table (Primary)",
+            type="dataframe",
+            required=True,
+            max_connections=1,
+            description="Primary base table"
+        ),
+        RecipePort(
+            id="right",
+            label="Right Table (Lookup)",
+            type="dataframe",
+            required=True,
+            max_connections=1,
+            description="Secondary table to join"
+        )
+    ]
+    outputs = [
+        RecipePort(
+            id="joined",
+            label="Joined Output",
+            type="dataframe",
+            description="Combined dataset after join"
+        ),
+        RecipePort(
+            id="unmatched_left",
+            label="Unmatched Left (Split Only)",
+            type="dataframe",
+            description="Rows from left table that had no match"
+        ),
+        RecipePort(
+            id="unmatched_right",
+            label="Unmatched Right (Split Only)",
+            type="dataframe",
+            description="Rows from right table that had no match"
+        )
+    ]
 
     def get_schema(self) -> Dict[str, Any]:
         return {
@@ -27,31 +67,22 @@ class DatasetJoinRecipe(BaseRecipe):
                 },
                 "conditions": {
                     "type": "array",
-                    "title": "Join Conditions (Column Pairs)",
+                    "title": "Join Conditions",
                     "items": {
                         "type": "object",
                         "properties": {
                             "left": {"type": "string", "title": "Left Column"},
-                            "right": {"type": "string", "title": "Right Column"}
+                            "right": {"type": "string", "title": "Right Column"},
+                            "operator": {
+                                "type": "string",
+                                "enum": ["=", "!=", ">", "<", ">=", "<="],
+                                "default": "="
+                            }
                         },
                         "required": ["left", "right"]
                     },
-                    "description": "Pairs of matching columns from Left and Right datasets (supports multiple composite conditions, e.g. Store = Store AND Date = Date)."
-                },
-                "on": {
-                    "type": "string",
-                    "title": "Common Key (Single or Comma-Separated)",
-                    "description": "Column name present in BOTH datasets (e.g. 'customer_id' or 'Store, Date')."
-                },
-                "left_on": {
-                    "type": "string",
-                    "title": "Left Join Key",
-                    "description": "Column name(s) in Left dataset (used when column names differ)."
-                },
-                "right_on": {
-                    "type": "string",
-                    "title": "Right Join Key",
-                    "description": "Column name(s) in Right dataset (used when column names differ)."
+                    "default": [{"left": "", "right": "", "operator": "="}],
+                    "description": "Pairs of matching columns from Left and Right datasets (supports single or composite keys, e.g. store_id = store_id AND date = date)."
                 },
                 "selected_columns_left": {
                     "type": "array",
@@ -103,16 +134,6 @@ class DatasetJoinRecipe(BaseRecipe):
                     "type": "string",
                     "title": "New Dataset Description",
                     "description": "Optional description for the newly created dataset."
-                },
-                "left_parent_id": {
-                    "type": "string",
-                    "title": "Left Dataset Node ID",
-                    "description": "Explicit node ID of the upstream parent representing Left dataset."
-                },
-                "right_parent_id": {
-                    "type": "string",
-                    "title": "Right Dataset Node ID",
-                    "description": "Explicit node ID of the upstream parent representing Right dataset."
                 }
             },
             "required": ["join_type"]
@@ -148,17 +169,17 @@ class DatasetJoinRecipe(BaseRecipe):
         left_parent_id = config.get("left_parent_id")
         right_parent_id = config.get("right_parent_id")
 
-        # A. Explicit Parent IDs in Config
-        if left_parent_id and left_parent_id in parent_outputs:
-            left_df = parent_outputs[left_parent_id].get("dataframe")
-        if right_parent_id and right_parent_id in parent_outputs:
-            right_df = parent_outputs[right_parent_id].get("dataframe")
-
-        # B. Handle-Aware Inputs from DAGExecutor
-        if left_df is None and "left_dataframe" in inputs and isinstance(inputs["left_dataframe"], pd.DataFrame):
+        # A. Handle-Aware Inputs from DAGExecutor (target_handle="left" / "right")
+        if "left_dataframe" in inputs and isinstance(inputs["left_dataframe"], pd.DataFrame):
             left_df = inputs["left_dataframe"]
-        if right_df is None and "right_dataframe" in inputs and isinstance(inputs["right_dataframe"], pd.DataFrame):
+        if "right_dataframe" in inputs and isinstance(inputs["right_dataframe"], pd.DataFrame):
             right_df = inputs["right_dataframe"]
+
+        # B. Fallback: Explicit Parent IDs in Config (legacy support)
+        if left_df is None and left_parent_id and left_parent_id in parent_outputs:
+            left_df = parent_outputs[left_parent_id].get("dataframe")
+        if right_df is None and right_parent_id and right_parent_id in parent_outputs:
+            right_df = parent_outputs[right_parent_id].get("dataframe")
 
         # C. Ordered Parent DataFrames List
         if (left_df is None or right_df is None) and "parent_dataframes" in inputs:

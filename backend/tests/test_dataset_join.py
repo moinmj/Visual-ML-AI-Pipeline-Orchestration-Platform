@@ -481,3 +481,210 @@ async def test_workflow_multi_dataset_endpoints():
         assert exp_res["status"] == "SUCCESS"
         assert exp_res["dataset"]["name"] == "Exported_Joined_Table"
         assert exp_res["dataset"]["row_count"] == 2
+
+
+def test_dataset_join_recipe_metadata_and_structured_ports():
+    recipe = DatasetJoinRecipe()
+    meta = recipe.to_metadata()
+    assert meta.recipe_id == "dataset_join"
+
+    # 1. Inputs port definitions
+    input_port_ids = [p.id for p in meta.inputs]
+    assert "left" in input_port_ids
+    assert "right" in input_port_ids
+    left_port = next(p for p in meta.inputs if p.id == "left")
+    assert left_port.label == "Left Table (Primary)"
+    assert left_port.type == "dataframe"
+    assert left_port.required is True
+    assert left_port.max_connections == 1
+
+    # 2. Outputs port definitions
+    output_port_ids = [p.id for p in meta.outputs]
+    assert "joined" in output_port_ids
+    assert "unmatched_left" in output_port_ids
+    assert "unmatched_right" in output_port_ids
+
+    # 3. Parameters schema does NOT leak topology (no left_parent_id / right_parent_id)
+    props = meta.parameters_schema.get("properties", {})
+    assert "left_parent_id" not in props
+    assert "right_parent_id" not in props
+    assert "conditions" in props
+    assert props["conditions"]["type"] == "array"
+
+
+def test_dataset_join_standardized_conditions_execution():
+    recipe = DatasetJoinRecipe()
+    df_left = pd.DataFrame({
+        "order_id": [101, 102, 103],
+        "cust_id": ["C1", "C2", "C3"],
+        "amount": [100.0, 200.0, 300.0]
+    })
+    df_right = pd.DataFrame({
+        "customer_id": ["C1", "C2", "C4"],
+        "name": ["Alice", "Bob", "Dan"]
+    })
+    inputs = {
+        "left_dataframe": df_left,
+        "right_dataframe": df_right
+    }
+    config = {
+        "join_type": "inner",
+        "conditions": [
+            {"left": "cust_id", "right": "customer_id", "operator": "="}
+        ]
+    }
+    res = recipe.execute(inputs=inputs, config=config)
+    df_out = res["dataframe"]
+    assert len(df_out) == 2
+    assert set(df_out["cust_id"]) == {"C1", "C2"}
+    assert "amount" in df_out.columns
+    assert "name" in df_out.columns
+
+
+@pytest.mark.asyncio
+async def test_workflow_schema_inference_endpoint():
+    from httpx import AsyncClient, ASGITransport
+    from backend.app.main import app
+    from backend.app.infrastructure.database.session import init_db
+    from backend.app.core.security import get_current_user, TokenData, create_access_token
+    from backend.app.datasets.models import Dataset
+    from backend.app.infrastructure.database.session import AsyncSessionLocal
+    import uuid
+
+    app.dependency_overrides[get_current_user] = lambda: TokenData("test", 1, ["Tenant Admin", "Data Scientist", "ML Engineer"], ["*"])
+
+    def auth_headers():
+        token = create_access_token(sub="test-user", tenant_id=1, roles=["Tenant Admin"])
+        return {"Authorization": f"Bearer {token}"}
+
+    await init_db()
+
+    ds_orders_id = f"ds_orders_{uuid.uuid4().hex[:8]}"
+    ds_customers_id = f"ds_customers_{uuid.uuid4().hex[:8]}"
+
+    async with AsyncSessionLocal() as session:
+        ds_orders = Dataset(
+            id=ds_orders_id,
+            name="Orders Dataset",
+            file_name="orders.csv",
+            file_format="csv",
+            file_size_bytes=1024,
+            storage_path="mock/orders.csv",
+            row_count=100,
+            column_count=3,
+            profile={
+                "columns": {
+                    "order_id": {"name": "order_id", "inferred_type": "numeric"},
+                    "cust_id": {"name": "cust_id", "inferred_type": "string"},
+                    "amount": {"name": "amount", "inferred_type": "numeric"}
+                }
+            }
+        )
+        ds_customers = Dataset(
+            id=ds_customers_id,
+            name="Customers Dataset",
+            file_name="customers.csv",
+            file_format="csv",
+            file_size_bytes=1024,
+            storage_path="mock/customers.csv",
+            row_count=50,
+            column_count=3,
+            profile={
+                "columns": {
+                    "customer_id": {"name": "customer_id", "inferred_type": "string"},
+                    "name": {"name": "name", "inferred_type": "string"},
+                    "city": {"name": "city", "inferred_type": "string"}
+                }
+            }
+        )
+        session.add_all([ds_orders, ds_customers])
+        await session.commit()
+
+    infer_payload = {
+        "nodes": [
+            {"id": "node_orders", "recipe_id": "csv_loader", "config": {"dataset_id": ds_orders_id}},
+            {"id": "node_customers", "recipe_id": "csv_loader", "config": {"dataset_id": ds_customers_id}},
+            {
+                "id": "node_join",
+                "recipe_id": "dataset_join",
+                "config": {
+                    "join_type": "inner",
+                    "conditions": [{"left": "cust_id", "right": "customer_id", "operator": "="}]
+                }
+            }
+        ],
+        "edges": [
+            {"source": "node_orders", "target": "node_join", "source_handle": "output", "target_handle": "left"},
+            {"source": "node_customers", "target": "node_join", "source_handle": "output", "target_handle": "right"}
+        ]
+    }
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test", headers=auth_headers()) as client:
+        resp = await client.post("/api/v1/workflows/infer-schema", json=infer_payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success"] is True
+        schemas = data["node_schemas"]
+
+        assert "node_orders" in schemas
+        assert schemas["node_orders"]["columns"] == ["order_id", "cust_id", "amount"]
+
+        assert "node_customers" in schemas
+        assert schemas["node_customers"]["columns"] == ["customer_id", "name", "city"]
+
+        assert "node_join" in schemas
+        join_schema = schemas["node_join"]
+        assert join_schema["available_left_columns"] == ["order_id", "cust_id", "amount"]
+        assert join_schema["available_right_columns"] == ["customer_id", "name", "city"]
+        assert "order_id" in join_schema["columns"]
+        assert "name" in join_schema["columns"]
+        assert "city" in join_schema["columns"]
+
+        # Verify per-port definitions
+        ports = join_schema["ports"]
+        assert "joined" in ports
+        assert "unmatched_left" in ports
+        assert "unmatched_right" in ports
+        assert ports["unmatched_left"]["columns"] == ["order_id", "cust_id", "amount"]
+        assert ports["unmatched_right"]["columns"] == ["customer_id", "name", "city"]
+
+
+def test_dag_executor_source_handle_routing_split_join():
+    df_customers = pd.DataFrame({
+        "customer_id": [1, 2, 3, 4],
+        "name": ["Alice", "Bob", "Charlie", "David"]
+    })
+    df_orders = pd.DataFrame({
+        "customer_id": [2, 3],
+        "amount": [200.0, 300.0]
+    })
+
+    node_left = WorkflowNode(id="loader_left", recipe_id="csv_loader", config={"dataframe": df_customers})
+    node_right = WorkflowNode(id="loader_right", recipe_id="csv_loader", config={"dataframe": df_orders})
+    node_join = WorkflowNode(id="join_node", recipe_id="dataset_join", config={
+        "join_type": "split",
+        "on": "customer_id"
+    })
+    node_unmatched = WorkflowNode(id="filter_unmatched", recipe_id="column_selector", config={"mode": "keep", "columns": ["customer_id", "name"]})
+
+    edge1 = WorkflowEdge(source="loader_left", target="join_node", source_handle="output", target_handle="left")
+    edge2 = WorkflowEdge(source="loader_right", target="join_node", source_handle="output", target_handle="right")
+    edge_split = WorkflowEdge(source="join_node", target="filter_unmatched", source_handle="unmatched_left", target_handle="input")
+
+    graph = WorkflowGraph(
+        nodes=[node_left, node_right, node_join, node_unmatched],
+        edges=[edge1, edge2, edge_split]
+    )
+
+    res = DAGExecutor.execute_workflow(
+        execution_id="test_split_exec",
+        workflow=graph
+    )
+    assert res.status == "SUCCESS"
+
+    node_results = {nr.node_id: nr for nr in res.node_results}
+    assert node_results["filter_unmatched"].status == "SUCCESS"
+    assert node_results["filter_unmatched"].output_summary["dataframe"]["shape"][0] == 2
+
+
