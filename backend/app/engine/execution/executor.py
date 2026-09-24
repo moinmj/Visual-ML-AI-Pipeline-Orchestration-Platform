@@ -356,23 +356,32 @@ class DAGExecutor:
                     "preview_rows": []
                 }
 
+                # Prioritize primary "dataframe" for node snapshot inspection, or first DataFrame found
+                primary_df = outputs.get("dataframe")
+                if primary_df is None or not isinstance(primary_df, pd.DataFrame):
+                    for v in outputs.values():
+                        if isinstance(v, pd.DataFrame):
+                            primary_df = v
+                            break
+
                 for k, v in outputs.items():
                     if isinstance(v, pd.DataFrame):
                         summary[k] = {"shape": list(v.shape), "type": "DataFrame"}
-                        snapshot_info["row_count"] = int(v.shape[0])
-                        snapshot_info["columns"] = list(v.columns)
-                        # Save top 5 rows for step inspection
-                        try:
-                            clean_v = v.head(5).replace({float("nan"): None, float("inf"): None, float("-inf"): None})
-                            snapshot_info["preview_rows"] = clean_v.to_dict(orient="records")
-                        except Exception:
-                            pass
                     elif hasattr(v, "shape"):
                         summary[k] = {"shape": list(v.shape), "type": "Array"}
                     elif k in ["metrics", "anomaly_summary", "forecasting_summary", "feature_importances", "output_summary"]:
                         summary[k] = make_json_safe(v)
                     else:
                         summary[k] = {"type": type(v).__name__}
+
+                if primary_df is not None and isinstance(primary_df, pd.DataFrame):
+                    snapshot_info["row_count"] = int(primary_df.shape[0])
+                    snapshot_info["columns"] = list(primary_df.columns)
+                    try:
+                        clean_v = primary_df.head(5).replace({float("nan"): None, float("inf"): None, float("-inf"): None})
+                        snapshot_info["preview_rows"] = clean_v.to_dict(orient="records")
+                    except Exception:
+                        pass
 
                 if "output_summary" in outputs:
                     snapshot_info["output_summary"] = make_json_safe(outputs["output_summary"])
