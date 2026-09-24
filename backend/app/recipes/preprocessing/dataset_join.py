@@ -88,6 +88,22 @@ class DatasetJoinRecipe(BaseRecipe):
                     "default": False,
                     "description": "If enabled, appends a '_merge' column ('left_only', 'right_only', 'both')."
                 },
+                "save_as_dataset": {
+                    "type": "boolean",
+                    "title": "Save Output as New Dataset",
+                    "default": False,
+                    "description": "If enabled, automatically persists the merged result to your Datasets library."
+                },
+                "output_dataset_name": {
+                    "type": "string",
+                    "title": "New Dataset Name",
+                    "description": "Custom name for the newly created dataset (e.g. 'Customers_Orders_Joined')."
+                },
+                "output_dataset_description": {
+                    "type": "string",
+                    "title": "New Dataset Description",
+                    "description": "Optional description for the newly created dataset."
+                },
                 "left_parent_id": {
                     "type": "string",
                     "title": "Left Dataset Node ID",
@@ -249,7 +265,12 @@ class DatasetJoinRecipe(BaseRecipe):
         else:
             suffix_tuple = ("_left", "_right")
 
-        indicator_requested = bool(config.get("indicator", False))
+        raw_indicator = config.get("indicator", False)
+        if isinstance(raw_indicator, str):
+            indicator_requested = raw_indicator.strip().lower() in ("true", "1", "yes")
+        else:
+            indicator_requested = bool(raw_indicator)
+
         # If split join or match statistics need indicator, force indicator=True
         use_indicator = True
 
@@ -314,16 +335,84 @@ class DatasetJoinRecipe(BaseRecipe):
 
         # Clean _merge indicator if user didn't explicitly request it
         if not indicator_requested:
-            if "_merge" in final_df.columns:
-                final_df.drop(columns=["_merge"], inplace=True)
-            if "_merge" in matched_df.columns:
-                matched_df.drop(columns=["_merge"], inplace=True)
-            if "_merge" in left_unmatched_df.columns:
-                left_unmatched_df.drop(columns=["_merge"], inplace=True)
-            if "_merge" in right_unmatched_df.columns:
-                right_unmatched_df.drop(columns=["_merge"], inplace=True)
+            final_df = final_df.drop(columns=["_merge"], errors="ignore")
+            matched_df = matched_df.drop(columns=["_merge"], errors="ignore")
+            left_unmatched_df = left_unmatched_df.drop(columns=["_merge"], errors="ignore")
+            right_unmatched_df = right_unmatched_df.drop(columns=["_merge"], errors="ignore")
 
         key_repr = ", ".join(left_keys) if is_same_keys else f"[{', '.join(left_keys)}] = [{', '.join(right_keys)}]"
+
+        # 6. Optional: Persist Merged Dataset into Datasets Library
+        raw_save = config.get("save_as_dataset", False)
+        save_as_dataset = (raw_save.strip().lower() in ("true", "1", "yes")) if isinstance(raw_save, str) else bool(raw_save)
+        saved_dataset_info = None
+
+        if save_as_dataset and len(final_df) > 0:
+            try:
+                import uuid
+                import time
+                import asyncio
+                import concurrent.futures
+                from backend.app.infrastructure.storage.storage_manager import storage_manager
+                from backend.app.infrastructure.database.session import AsyncSessionLocal
+                from backend.app.datasets.models import Dataset
+                from backend.app.profiling.profiler import DataProfiler
+
+                new_ds_id = str(uuid.uuid4())
+                custom_name = str(config.get("output_dataset_name") or "").strip()
+                new_ds_name = custom_name if custom_name else f"Joined_Dataset_{int(time.time())}"
+                if not new_ds_name.lower().endswith(".csv"):
+                    file_name = f"{new_ds_name}.csv"
+                else:
+                    file_name = new_ds_name
+                    new_ds_name = new_ds_name[:-4]
+
+                rel_storage_path = f"datasets/{new_ds_id}_{file_name}"
+                abs_path = storage_manager.get_absolute_path(rel_storage_path)
+                abs_path.parent.mkdir(parents=True, exist_ok=True)
+                final_df.to_csv(abs_path, index=False)
+                file_size_bytes = abs_path.stat().st_size
+
+                profile_data = DataProfiler.profile_dataframe(final_df)
+
+                async def _save_record():
+                    async with AsyncSessionLocal() as session:
+                        ds_rec = Dataset(
+                            id=new_ds_id,
+                            name=new_ds_name,
+                            description=config.get("output_dataset_description") or f"Automatically generated via dataset join on {key_repr}",
+                            file_name=file_name,
+                            file_format="csv",
+                            file_size_bytes=file_size_bytes,
+                            storage_path=rel_storage_path,
+                            row_count=len(final_df),
+                            column_count=len(final_df.columns),
+                            quality_score=float(profile_data.get("quality_score", 100.0)),
+                            profile=profile_data
+                        )
+                        session.add(ds_rec)
+                        await session.commit()
+
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                            pool.submit(lambda: asyncio.run(_save_record())).result()
+                    else:
+                        loop.run_until_complete(_save_record())
+                except Exception:
+                    asyncio.run(_save_record())
+
+                saved_dataset_info = {
+                    "id": new_ds_id,
+                    "name": new_ds_name,
+                    "file_name": file_name,
+                    "row_count": len(final_df),
+                    "column_count": len(final_df.columns)
+                }
+                logger.info(f"Successfully saved joined dataset as '{new_ds_name}' ({new_ds_id}) in Datasets library.")
+            except Exception as e:
+                logger.exception(f"Failed to auto-save joined dataset: {e}")
 
         join_metrics = {
             "join_type": join_type.upper(),
@@ -342,12 +431,16 @@ class DatasetJoinRecipe(BaseRecipe):
             "selected_columns_left": list(left_df.columns),
             "selected_columns_right": list(right_df.columns)
         }
+        if saved_dataset_info:
+            join_metrics["saved_dataset"] = saved_dataset_info
 
         output_summary = {
             "title": f"{join_type.upper()} Join Result",
             "message": f"Successfully merged {left_rows:,} left rows with {right_rows:,} right rows into {len(final_df):,} output rows.",
             "match_rate": f"Matched: {matched_count:,} ({left_match_pct}% Left, {right_match_pct}% Right) | Left Unmatched: {left_unmatched_count:,} | Right Unmatched: {right_unmatched_count:,}"
         }
+        if saved_dataset_info:
+            output_summary["saved_dataset"] = f"Saved into Datasets library as '{saved_dataset_info['name']}' (ID: {saved_dataset_info['id']})."
 
         return {
             "dataframe": final_df,
