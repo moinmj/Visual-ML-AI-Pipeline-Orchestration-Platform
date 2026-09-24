@@ -99,12 +99,23 @@ class WorkflowUpdate(BaseModel):
         return self.workflow_id
 
 
+class AssociatedDatasetItem(BaseModel):
+    id: str = Field(..., description="Dataset UUID")
+    name: str = Field(..., description="Dataset display or filename")
+    role: Optional[str] = Field("Primary", description="Role e.g. 'Primary (Left)' or 'Secondary (Right)'")
+    node_id: Optional[str] = Field(None, description="Canvas node ID loading this dataset")
+
+    model_config = {"from_attributes": True}
+
+
 class WorkflowResponse(BaseModel):
     id: str
+    workflow_id: Optional[str] = None
     name: str
     description: Optional[str] = None
     dataset_id: Optional[str] = None
     dataset_name: Optional[str] = None
+    datasets: List[AssociatedDatasetItem] = Field(default_factory=list, description="All associated datasets loaded in this pipeline")
     nodes: List[Dict[str, Any]] = Field(default_factory=list)
     edges: List[Dict[str, Any]] = Field(default_factory=list)
     node_configs: Dict[str, Any] = Field(default_factory=dict)
@@ -115,13 +126,21 @@ class WorkflowResponse(BaseModel):
     updated_at: UTCDateTime
     model_config = {"from_attributes": True}
 
+    @model_validator(mode="after")
+    def populate_workflow_id(self) -> "WorkflowResponse":
+        if not self.workflow_id and self.id:
+            self.workflow_id = self.id
+        return self
+
 
 class WorkflowListItemResponse(BaseModel):
     id: str
+    workflow_id: Optional[str] = None
     name: str
     description: Optional[str] = None
     dataset_id: Optional[str] = None
     dataset_name: Optional[str] = None
+    datasets: List[AssociatedDatasetItem] = Field(default_factory=list, description="All associated datasets loaded in this pipeline")
     is_active: bool = True
     deleted_at: OptUTCDateTime = None
     created_at: UTCDateTime
@@ -132,6 +151,12 @@ class WorkflowListItemResponse(BaseModel):
     edges_count: int = Field(0, description="Total number of edge connections in this pipeline")
 
     model_config = {"from_attributes": True}
+
+    @model_validator(mode="after")
+    def populate_workflow_id(self) -> "WorkflowListItemResponse":
+        if not self.workflow_id and self.id:
+            self.workflow_id = self.id
+        return self
 
 
 WorkflowSummaryResponse = WorkflowListItemResponse

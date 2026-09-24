@@ -341,3 +341,103 @@ def test_dataset_join_split_join_outputs():
     assert metrics["matched_rows"] == 2
     assert metrics["left_unmatched_rows"] == 1
     assert metrics["right_unmatched_rows"] == 1
+
+
+@pytest.mark.asyncio
+async def test_workflow_multi_dataset_endpoints():
+    from httpx import AsyncClient, ASGITransport
+    from backend.app.main import app
+    from backend.app.infrastructure.database.session import init_db
+    from backend.app.core.security import get_current_user, TokenData, create_access_token
+    import uuid
+
+    app.dependency_overrides[get_current_user] = lambda: TokenData("test", 1, ["Tenant Admin", "Data Scientist", "ML Engineer"], ["*"])
+
+    def auth_headers():
+        token = create_access_token(sub="test-user", tenant_id=1, roles=["Tenant Admin"])
+        return {"Authorization": f"Bearer {token}"}
+
+    await init_db()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test", headers=auth_headers()) as client:
+        # 1. Upload two datasets: Customers.csv and Orders.csv
+        csv_customers = b"customer_id,name,age\n1,Alice,25\n2,Bob,30\n"
+        up_c = await client.post(
+            "/api/v1/datasets/upload",
+            files={"file": ("Customers.csv", csv_customers, "text/csv")},
+            data={"name": "Customers.csv"}
+        )
+        assert up_c.status_code == 201
+        cust_id = up_c.json()["id"]
+
+        csv_orders = b"customer_id,order_id,amount\n1,101,50.0\n2,102,120.0\n"
+        up_o = await client.post(
+            "/api/v1/datasets/upload",
+            files={"file": ("Orders.csv", csv_orders, "text/csv")},
+            data={"name": "Orders.csv"}
+        )
+        assert up_o.status_code == 201
+        ord_id = up_o.json()["id"]
+
+        # 2. Create a join workflow
+        wf_id = str(uuid.uuid4())
+        payload = {
+            "workflow_id": wf_id,
+            "name": "Customer Churn Prediction",
+            "dataset_id": cust_id,
+            "dataset_name": "Customers.csv",
+            "nodes": [
+                {"id": "node_left", "recipe_id": "csv_loader", "config": {"dataset_id": cust_id, "dataset_name": "Customers.csv"}},
+                {"id": "node_right", "recipe_id": "csv_loader", "config": {"dataset_id": ord_id, "dataset_name": "Orders.csv"}},
+                {"id": "node_join", "recipe_id": "dataset_join", "config": {"join_type": "inner", "on": "customer_id"}}
+            ],
+            "edges": [
+                {"source": "node_left", "target": "node_join", "target_handle": "left"},
+                {"source": "node_right", "target": "node_join", "target_handle": "right"}
+            ],
+            "node_configs": {
+                "node_left": {"recipe_id": "csv_loader", "config": {"dataset_id": cust_id, "dataset_name": "Customers.csv"}},
+                "node_right": {"recipe_id": "csv_loader", "config": {"dataset_id": ord_id, "dataset_name": "Orders.csv"}},
+                "node_join": {"recipe_id": "dataset_join", "config": {"join_type": "inner", "on": "customer_id"}}
+            }
+        }
+
+        # 3. Test POST /api/v1/workflows/
+        save_resp = await client.post("/api/v1/workflows/", json=payload)
+        assert save_resp.status_code == 201
+        data = save_resp.json()
+        assert data["workflow_id"] == wf_id
+        assert data["id"] == wf_id
+        assert data["name"] == "Customer Churn Prediction"
+        assert data["dataset_id"] == cust_id
+        assert data["dataset_name"] == "Customers.csv"
+        assert len(data["datasets"]) == 2
+
+        ds_left = next(d for d in data["datasets"] if d["id"] == cust_id)
+        assert ds_left["name"] == "Customers.csv"
+        assert ds_left["role"] == "Primary (Left)"
+
+        ds_right = next(d for d in data["datasets"] if d["id"] == ord_id)
+        assert ds_right["name"] == "Orders.csv"
+        assert ds_right["role"] == "Secondary (Right)"
+
+        # 4. Test GET /api/v1/workflows/{id}
+        get_resp = await client.get(f"/api/v1/workflows/{wf_id}")
+        assert get_resp.status_code == 200
+        get_data = get_resp.json()
+        assert get_data["workflow_id"] == wf_id
+        assert len(get_data["datasets"]) == 2
+        assert get_data["datasets"][0]["role"] == "Primary (Left)"
+        assert get_data["datasets"][1]["role"] == "Secondary (Right)"
+
+        # 5. Test GET /api/v1/workflows/ (list)
+        list_resp = await client.get("/api/v1/workflows/?search=Customer+Churn")
+        assert list_resp.status_code == 200
+        list_data = list_resp.json()
+        matching = [w for w in list_data["data"] if w["id"] == wf_id]
+        assert len(matching) == 1
+        item = matching[0]
+        assert item["workflow_id"] == wf_id
+        assert len(item["datasets"]) == 2
+        assert item["datasets"][0]["role"] == "Primary (Left)"
+        assert item["datasets"][1]["role"] == "Secondary (Right)"

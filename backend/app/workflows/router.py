@@ -28,7 +28,8 @@ from backend.app.workflows.schemas import (
     WorkflowStatusFilter,
     WorkflowExecutionSummaryResponse,
     WorkflowExecutionDetailResponse,
-    WorkflowCompareResponse
+    WorkflowCompareResponse,
+    AssociatedDatasetItem
 )
 from backend.app.engine.inference import (
     PipelineInferencer,
@@ -87,6 +88,179 @@ async def resolve_workflow_dataset(
             pass
 
     return resolved_id, resolved_name
+
+
+async def resolve_all_workflow_datasets(
+    db: AsyncSession,
+    primary_dataset_id: Optional[str] = None,
+    primary_dataset_name: Optional[str] = None,
+    nodes: Optional[List[Dict[str, Any]]] = None,
+    node_configs: Optional[Dict[str, Any]] = None,
+    edges: Optional[List[Dict[str, Any]]] = None,
+    dataset_name_cache: Optional[Dict[str, str]] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Intelligently inspects the visual workflow DAG to discover all loaded datasets,
+    mapping their identities, names, canvas loader nodes, and roles (e.g. 'Primary (Left)', 'Secondary (Right)').
+    """
+    nodes = nodes or []
+    node_configs = node_configs or {}
+    edges = edges or []
+
+    # 1. Identify dataset_join nodes
+    join_node_ids = set()
+    for n in nodes:
+        nid = n.get("id")
+        rec = n.get("recipe_id")
+        if not rec and nid in node_configs and isinstance(node_configs[nid], dict):
+            rec = node_configs[nid].get("recipe_id")
+        if rec == "dataset_join":
+            join_node_ids.add(nid)
+    for nid, n_dict in node_configs.items():
+        if isinstance(n_dict, dict) and n_dict.get("recipe_id") == "dataset_join":
+            join_node_ids.add(nid)
+
+    has_join_node = len(join_node_ids) > 0
+
+    # 2. Build graph connectivity for handle inspection
+    incoming_to_node: Dict[str, List[Dict[str, Any]]] = {}
+    outgoing_from_node: Dict[str, List[Dict[str, Any]]] = {}
+    for e in edges:
+        s = e.get("source")
+        t = e.get("target")
+        if s and t:
+            outgoing_from_node.setdefault(s, []).append(e)
+            incoming_to_node.setdefault(t, []).append(e)
+
+    def find_join_handle_for_source(start_node_id: str) -> Optional[str]:
+        visited = set()
+        queue = [start_node_id]
+        while queue:
+            curr = queue.pop(0)
+            if curr in visited:
+                continue
+            visited.add(curr)
+            for out_edge in outgoing_from_node.get(curr, []):
+                tgt = out_edge.get("target")
+                if tgt in join_node_ids:
+                    h = out_edge.get("target_handle") or out_edge.get("targetHandle")
+                    if h:
+                        return str(h).lower()
+                    inc = incoming_to_node.get(tgt, [])
+                    if inc and inc[0].get("source") == curr:
+                        return "left"
+                    elif len(inc) > 1 and inc[1].get("source") == curr:
+                        return "right"
+                    return "left"
+                elif tgt and tgt not in visited:
+                    queue.append(tgt)
+        return None
+
+    # 3. Discover loader candidates
+    all_loader_candidates = []
+    for n in nodes:
+        nid = n.get("id")
+        cfg = n.get("config", {}) if isinstance(n.get("config"), dict) else {}
+        if not cfg and nid in node_configs and isinstance(node_configs[nid], dict):
+            cfg = node_configs[nid].get("config", {})
+        rec = n.get("recipe_id") or (node_configs.get(nid, {}).get("recipe_id") if isinstance(node_configs.get(nid), dict) else None)
+        ds_id = cfg.get("dataset_id")
+        if ds_id or rec in ("csv_loader", "data_ingestion", "dataset_loader"):
+            all_loader_candidates.append({
+                "node_id": nid,
+                "dataset_id": str(ds_id) if ds_id else None,
+                "dataset_name": cfg.get("dataset_name") or cfg.get("filename") or cfg.get("name"),
+            })
+
+    for nid, n_dict in node_configs.items():
+        if not any(c["node_id"] == nid for c in all_loader_candidates) and isinstance(n_dict, dict):
+            cfg = n_dict.get("config", {}) if isinstance(n_dict.get("config"), dict) else {}
+            ds_id = cfg.get("dataset_id")
+            rec = n_dict.get("recipe_id")
+            if ds_id or rec in ("csv_loader", "data_ingestion", "dataset_loader"):
+                all_loader_candidates.append({
+                    "node_id": nid,
+                    "dataset_id": str(ds_id) if ds_id else None,
+                    "dataset_name": cfg.get("dataset_name") or cfg.get("filename") or cfg.get("name"),
+                })
+
+    discovered_datasets: List[Dict[str, Any]] = []
+    seen_ds_ids = set()
+    missing_name_ids = set()
+
+    for cand in all_loader_candidates:
+        ds_id = cand["dataset_id"]
+        if not ds_id:
+            if primary_dataset_id and primary_dataset_id not in seen_ds_ids:
+                ds_id = primary_dataset_id
+            else:
+                continue
+
+        if ds_id in seen_ds_ids:
+            continue
+        seen_ds_ids.add(ds_id)
+
+        handle = find_join_handle_for_source(cand["node_id"]) if cand["node_id"] else None
+        is_first = (len(discovered_datasets) == 0)
+        is_primary = (ds_id == primary_dataset_id) or is_first
+
+        if has_join_node:
+            if handle == "right":
+                role = "Secondary (Right)"
+            elif handle == "left":
+                role = "Primary (Left)"
+            elif is_primary:
+                role = "Primary (Left)"
+            else:
+                role = "Secondary (Right)"
+        else:
+            role = "Primary" if is_primary else "Secondary"
+
+        ds_name = cand["dataset_name"]
+        if not ds_name and ds_id == primary_dataset_id:
+            ds_name = primary_dataset_name
+        if not ds_name or ds_name == ds_id:
+            missing_name_ids.add(ds_id)
+
+        discovered_datasets.append({
+            "id": ds_id,
+            "name": ds_name or ds_id,
+            "role": role,
+            "node_id": cand["node_id"]
+        })
+
+    # If primary_dataset_id not found among loaders, insert it as primary
+    if primary_dataset_id and primary_dataset_id not in seen_ds_ids:
+        role = "Primary (Left)" if has_join_node else "Primary"
+        if not primary_dataset_name:
+            missing_name_ids.add(primary_dataset_id)
+        discovered_datasets.insert(0, {
+            "id": primary_dataset_id,
+            "name": primary_dataset_name or primary_dataset_id,
+            "role": role,
+            "node_id": None
+        })
+        seen_ds_ids.add(primary_dataset_id)
+
+    # Batch resolve any missing names from cache or DB
+    if missing_name_ids:
+        name_map = dict(dataset_name_cache or {})
+        need_query = [i for i in missing_name_ids if i not in name_map]
+        if need_query:
+            try:
+                ds_stmt = select(Dataset).where(Dataset.id.in_(list(need_query)))
+                ds_rows = await db.execute(ds_stmt)
+                for d in ds_rows.scalars().all():
+                    name_map[d.id] = d.name
+            except Exception:
+                pass
+        for item in discovered_datasets:
+            if item["id"] in name_map and (item["name"] == item["id"] or not item["name"]):
+                item["name"] = name_map[item["id"]]
+
+    # Order Primary first
+    discovered_datasets.sort(key=lambda d: 0 if "Primary" in d.get("role", "") else 1)
+    return discovered_datasets
 
 
 async def resolve_or_normalize_last_execution(
@@ -609,6 +783,15 @@ async def save_workflow(
             logger.exception(f"Failed to record workflow execution history on save: {e}")
 
     await db.refresh(wf)
+    wf.datasets = await resolve_all_workflow_datasets(
+        db=db,
+        primary_dataset_id=wf.dataset_id,
+        primary_dataset_name=wf.dataset_name,
+        nodes=wf.nodes or [],
+        node_configs=wf.node_configs or {},
+        edges=wf.edges or []
+    )
+    wf.workflow_id = wf.id
     return wf
 
 
@@ -692,15 +875,50 @@ async def list_workflows(
     workflows = result.scalars().all()
 
     items = []
+    all_needed_ds_ids = set()
+    for wf in workflows:
+        if wf.dataset_id:
+            all_needed_ds_ids.add(wf.dataset_id)
+        for n in (wf.nodes or []):
+            cfg = n.get("config", {}) if isinstance(n.get("config"), dict) else {}
+            if cfg.get("dataset_id"):
+                all_needed_ds_ids.add(str(cfg["dataset_id"]))
+        for nid, n_dict in (wf.node_configs or {}).items():
+            if isinstance(n_dict, dict):
+                cfg = n_dict.get("config", {}) if isinstance(n_dict.get("config"), dict) else {}
+                if cfg.get("dataset_id"):
+                    all_needed_ds_ids.add(str(cfg["dataset_id"]))
+
+    dataset_name_cache: Dict[str, str] = {}
+    if all_needed_ds_ids:
+        try:
+            ds_stmt = select(Dataset).where(Dataset.id.in_(list(all_needed_ds_ids)))
+            ds_rows = await db.execute(ds_stmt)
+            for d in ds_rows.scalars().all():
+                dataset_name_cache[d.id] = d.name
+        except Exception:
+            pass
+
     for wf in workflows:
         last_exec = wf.last_execution if isinstance(wf.last_execution, dict) else {}
+        wf_datasets = await resolve_all_workflow_datasets(
+            db=db,
+            primary_dataset_id=wf.dataset_id,
+            primary_dataset_name=wf.dataset_name,
+            nodes=wf.nodes or [],
+            node_configs=wf.node_configs or {},
+            edges=wf.edges or [],
+            dataset_name_cache=dataset_name_cache
+        )
         items.append(
             WorkflowListItemResponse(
                 id=wf.id,
+                workflow_id=wf.id,
                 name=wf.name,
                 description=wf.description,
                 dataset_id=wf.dataset_id,
                 dataset_name=wf.dataset_name,
+                datasets=wf_datasets,
                 is_active=wf.is_active,
                 deleted_at=wf.deleted_at,
                 created_at=wf.created_at,
@@ -772,6 +990,15 @@ async def get_workflow(
             await db.commit()
             await db.refresh(wf)
 
+    wf.datasets = await resolve_all_workflow_datasets(
+        db=db,
+        primary_dataset_id=wf.dataset_id,
+        primary_dataset_name=wf.dataset_name,
+        nodes=wf.nodes or [],
+        node_configs=wf.node_configs or {},
+        edges=wf.edges or []
+    )
+    wf.workflow_id = wf.id
     return wf
 
 
@@ -883,6 +1110,15 @@ async def upsert_workflow(
             logger.exception(f"Failed to record workflow execution history on upsert: {e}")
 
     await db.refresh(wf)
+    wf.datasets = await resolve_all_workflow_datasets(
+        db=db,
+        primary_dataset_id=wf.dataset_id,
+        primary_dataset_name=wf.dataset_name,
+        nodes=wf.nodes or [],
+        node_configs=wf.node_configs or {},
+        edges=wf.edges or []
+    )
+    wf.workflow_id = wf.id
     return wf
 
 
@@ -948,6 +1184,15 @@ async def save_workflow_execution_report(
     except Exception:
         pass
 
+    wf.datasets = await resolve_all_workflow_datasets(
+        db=db,
+        primary_dataset_id=wf.dataset_id,
+        primary_dataset_name=wf.dataset_name,
+        nodes=wf.nodes or [],
+        node_configs=wf.node_configs or {},
+        edges=wf.edges or []
+    )
+    wf.workflow_id = wf.id
     return wf
 
 
@@ -1006,6 +1251,15 @@ async def restore_workflow(
     wf.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(wf)
+    wf.datasets = await resolve_all_workflow_datasets(
+        db=db,
+        primary_dataset_id=wf.dataset_id,
+        primary_dataset_name=wf.dataset_name,
+        nodes=wf.nodes or [],
+        node_configs=wf.node_configs or {},
+        edges=wf.edges or []
+    )
+    wf.workflow_id = wf.id
     return wf
 
 
