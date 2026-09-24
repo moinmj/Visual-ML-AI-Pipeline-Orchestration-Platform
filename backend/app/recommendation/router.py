@@ -153,12 +153,14 @@ async def autowire_nodes(payload: AutoWireRequest):
         "ingestion": 1.0,
         "nlp": 1.5,
         "preprocessing": 2.0,
+        "flow_control": 2.1,
         "splitting": 3.0,
         "training": 4.0,
         "forecasting": 4.0,
         "anomaly": 4.0,
         "evaluation": 5.0,
-        "governance": 6.0
+        "governance": 6.0,
+        "integrations": 6.5
     }
 
     recipe_weights = {
@@ -166,6 +168,9 @@ async def autowire_nodes(payload: AutoWireRequest):
         "webhook_trigger": 1.0,
         "cron_trigger": 1.0,
         "csv_loader": 1.1,
+        "openweathermap": 1.15,
+        "google_sheets": 1.25,
+        "google_drive": 1.25,
 
         # Early Schema & Deduplication Pruning
         "column_selector": 1.2,
@@ -174,11 +179,14 @@ async def autowire_nodes(payload: AutoWireRequest):
 
         # Multi-Dataset Join / Merge
         "dataset_join": 1.3,
+        "merge": 1.35,
 
         # Type Safety & Conversion
         "data_type_converter": 1.4,
 
-        # Missing Values & Outlier Guardrails
+        # Flow Control: Row Filter & Missing Values & Outlier Guardrails
+        "row_filter": 1.55,
+        "filter": 1.55,
         "missing_value_imputer": 1.6,
         "missing_values": 1.6,
         "outlier_handler": 1.6,
@@ -194,6 +202,14 @@ async def autowire_nodes(payload: AutoWireRequest):
         "feature_scaler": 2.2,
         "lag_feature_engineering": 2.4,
         "lag_features": 2.4,
+
+        # Flow Control: Routing, Branching & Delays
+        "if_condition": 2.45,
+        "if_else": 2.45,
+        "switch": 2.48,
+        "delay": 2.49,
+        "wait": 2.49,
+        "loop": 2.495,
 
         # Feature Selection
         "correlation_filter": 2.5,
@@ -223,7 +239,14 @@ async def autowire_nodes(payload: AutoWireRequest):
         "model_evaluator": 5.0,
 
         # Governance
-        "mlflow_tracker": 6.0
+        "mlflow_tracker": 6.0,
+
+        # Alerts & Notifications (End of Pipeline)
+        "slack": 6.5,
+        "discord": 6.5,
+        "telegram": 6.5,
+        "gmail": 6.5,
+        "email": 6.5
     }
 
     def get_node_weight(node: Dict[str, Any]) -> float:

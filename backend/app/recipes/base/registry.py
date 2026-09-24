@@ -39,6 +39,23 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "statistical_guardrail": ("Modeling", "Anomaly Detection"),
     "model_evaluator": ("Evaluation & Governance", "Evaluation"),
     "mlflow_tracker": ("Evaluation & Governance", "Tracking & Registry"),
+
+    # Flow Control
+    "if_condition": ("Flow Control", "Routing & Branching"),
+    "row_filter": ("Flow Control", "Filter"),
+    "switch": ("Flow Control", "Routing & Branching"),
+    "merge": ("Flow Control", "Combine"),
+    "loop": ("Flow Control", "Iteration"),
+    "delay": ("Flow Control", "Timing"),
+
+    # Apps / Integrations
+    "slack": ("Apps & Integrations", "Communication"),
+    "discord": ("Apps & Integrations", "Communication"),
+    "telegram": ("Apps & Integrations", "Communication"),
+    "gmail": ("Apps & Integrations", "Email & Notification"),
+    "google_sheets": ("Apps & Integrations", "Google Workspace"),
+    "google_drive": ("Apps & Integrations", "Google Workspace"),
+    "openweathermap": ("Apps & Integrations", "External APIs"),
 }
 
 
@@ -50,6 +67,12 @@ class RecipeRegistry:
             "regression_evaluator": "model_evaluator",
             "model_governance_card": "mlflow_tracker",
             "governance_card": "mlflow_tracker",
+            "if_else": "if_condition",
+            "filter": "row_filter",
+            "wait": "delay",
+            "email": "gmail",
+            "weather": "openweathermap",
+            "union": "merge",
         }
 
     def register(self, recipe: BaseRecipe):
