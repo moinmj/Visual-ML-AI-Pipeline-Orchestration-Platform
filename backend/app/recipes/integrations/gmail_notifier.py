@@ -107,6 +107,7 @@ class GmailRecipe(BaseRecipe):
         status_msg = f"Email simulated to {to_email} (No SMTP credentials configured)."
 
         if smtp_user and smtp_pass and to_email:
+            server = None
             try:
                 msg = MIMEMultipart()
                 msg["From"] = smtp_user
@@ -123,17 +124,38 @@ class GmailRecipe(BaseRecipe):
                     part.add_header("Content-Disposition", "attachment; filename=\"pipeline_data.csv\"")
                     msg.attach(part)
 
-                with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as server:
+                # Auto-detect SSL port (465) vs STARTTLS (587 / 25)
+                if smtp_port == 465 or "ssl" in smtp_host.lower():
+                    server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=15)
+                    server.ehlo()
+                else:
+                    server = smtplib.SMTP(smtp_host, smtp_port, timeout=15)
+                    server.ehlo()
                     server.starttls()
-                    server.login(smtp_user, smtp_pass)
-                    server.send_message(msg)
+                    server.ehlo()
+
+                server.login(smtp_user, smtp_pass)
+                server.send_message(msg)
 
                 delivery_status = "SENT"
                 status_msg = f"Email successfully sent to {to_email}."
+            except smtplib.SMTPAuthenticationError as auth_err:
+                logger.warning(f"Gmail SMTP authentication failed: {auth_err}")
+                delivery_status = "FAILED"
+                status_msg = "SMTP Authentication Failed: Please ensure 2-Step Verification is active on your Google account and you are using a 16-character App Password (not your regular personal password)."
             except Exception as e:
                 logger.warning(f"Gmail send failed: {e}")
                 delivery_status = "FAILED"
                 status_msg = f"SMTP error: {str(e)}"
+            finally:
+                if server is not None:
+                    try:
+                        server.quit()
+                    except Exception:
+                        try:
+                            server.close()
+                        except Exception:
+                            pass
 
         result = {
             "output_summary": {

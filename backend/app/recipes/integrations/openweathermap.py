@@ -86,9 +86,17 @@ class OpenWeatherMapRecipe(BaseRecipe):
                             "weather_description": weather_info.get("description"),
                             "timestamp": datetime.now(timezone.utc).isoformat()
                         }])
-                        source_note = f"Fetched live OpenWeatherMap data for '{city}'."
+            except urllib.error.HTTPError as http_err:
+                logger.warning(f"OpenWeatherMap HTTP error: {http_err}")
+                if http_err.code == 401:
+                    source_note = "OpenWeatherMap API Key Unauthorized (401). New OpenWeatherMap keys typically take 1-2 hours to activate globally after account creation. Falling back to simulated weather features for this run."
+                elif http_err.code == 404:
+                    source_note = f"City '{city}' not found on OpenWeatherMap (404). Falling back to simulated weather features."
+                else:
+                    source_note = f"OpenWeatherMap API returned HTTP {http_err.code} ({http_err.reason}). Falling back to simulated weather features."
             except Exception as e:
                 logger.warning(f"OpenWeatherMap fetch failed: {e}")
+                source_note = f"OpenWeatherMap connection error: {e}. Falling back to simulated weather features."
 
         if weather_df is None:
             # Realistic synthetic demo features for pipeline training / testing
