@@ -287,6 +287,22 @@ class DAGExecutor:
                     p_out = node_outputs.get(edge.source, {})
                     sh = (getattr(edge, "source_handle", None) or "").lower().strip()
 
+                    # Handle train/test partition routing based on source_handle
+                    if sh in ["output_2", "test_data", "test", "te"]:
+                        if "X_test" in p_out:
+                            node_inputs["X_test"] = p_out["X_test"]
+                        if "y_test" in p_out:
+                            node_inputs["y_test"] = p_out["y_test"]
+                        if "test_data" in p_out:
+                            node_inputs["test_data"] = p_out["test_data"]
+                    elif sh in ["output_1", "train_data", "train", "tr"]:
+                        if "X_train" in p_out:
+                            node_inputs["X_train"] = p_out["X_train"]
+                        if "y_train" in p_out:
+                            node_inputs["y_train"] = p_out["y_train"]
+                        if "train_data" in p_out:
+                            node_inputs["train_data"] = p_out["train_data"]
+
                     # Resolve output dataframe partition from upstream based on source_handle
                     p_df = None
                     if sh in ["unmatched_left", "left_unmatched"]:
@@ -299,6 +315,10 @@ class DAGExecutor:
                             p_df = p_out.get("dataframe")
                     elif sh in ["joined", "matched", "matched_dataframe"]:
                         p_df = p_out.get("matched_dataframe") or p_out.get("dataframe")
+                    elif sh in ["output_2", "test_data", "test", "te"] and "dataframe_test" in p_out:
+                        p_df = p_out["dataframe_test"]
+                    elif sh in ["output_1", "train_data", "train", "tr"] and "dataframe_train" in p_out:
+                        p_df = p_out["dataframe_train"]
                     elif sh and sh in p_out and isinstance(p_out[sh], pd.DataFrame):
                         p_df = p_out[sh]
                     else:
