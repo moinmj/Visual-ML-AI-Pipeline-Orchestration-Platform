@@ -189,13 +189,14 @@ class PipelineInferencer:
 
                 nc_req = NativeCadenceDatasetRequest(
                     horizon_years=horizon_years,
-                    step_unit=getattr(request, "time_unit", None) or getattr(request, "step_unit", None) or "year"
+                    step_unit=request.freq or "auto"
                 )
                 nc_res = cls.generate_native_cadence_dataset(
                     bundle=bundle,
                     request=nc_req,
                     anchor_overrides=request.inputs if isinstance(request.inputs, dict) else None,
-                    future_feature_overrides=request.future_feature_overrides
+                    future_feature_overrides=request.future_feature_overrides,
+                    single_series=True
                 )
                 res = cls._native_cadence_response_to_prediction_response(bundle, nc_res)
                 if nl_query:
@@ -1555,7 +1556,8 @@ class PipelineInferencer:
         bundle: Dict[str, Any],
         request: NativeCadenceDatasetRequest,
         anchor_overrides: Optional[Dict[str, Any]] = None,
-        future_feature_overrides: Optional[Dict[str, Dict[str, Any]]] = None
+        future_feature_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
+        single_series: bool = False
     ) -> NativeCadenceDatasetResponse:
         """
         Generates a full row-by-row synthetic future dataset at the original dataset's native
@@ -1636,14 +1638,18 @@ class PipelineInferencer:
         # entirely, since those are essentially never a genuine per-row entity ID.
         primary_entity_col = None
         primary_entity_vals = [None]
-        best_cardinality = 0
-        for col, val_set in entity_value_sets.items():
-            if col == step_sub_col or col == year_col:
-                continue
-            if 1 < len(val_set) <= 50 and len(val_set) > best_cardinality:
-                primary_entity_col = col
-                primary_entity_vals = val_set
-                best_cardinality = len(val_set)
+        if not single_series:
+            # /predict delegates with single_series=True: it wants ONE trajectory for the
+            # caller's specific input (whatever entity value is already in the anchor row),
+            # not the bulk multi-entity dataset this replication is built for.
+            best_cardinality = 0
+            for col, val_set in entity_value_sets.items():
+                if col == step_sub_col or col == year_col:
+                    continue
+                if 1 < len(val_set) <= 50 and len(val_set) > best_cardinality:
+                    primary_entity_col = col
+                    primary_entity_vals = val_set
+                    best_cardinality = len(val_set)
 
         # 5. Starting Temporal Coordinates
         base_year = float(last_row.get(year_col, 2020) if year_col else 2020)
