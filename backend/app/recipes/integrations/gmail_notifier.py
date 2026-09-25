@@ -94,10 +94,11 @@ class GmailRecipe(BaseRecipe):
         subject = config.get("subject", "Pipeline Update")
         body = config.get("body", "Execution finished.")
         attach_csv = bool(config.get("attach_csv", False))
-        smtp_user = str(config.get("smtp_user", "")).strip()
-        smtp_pass = str(config.get("smtp_password", "")).strip()
-        smtp_host = config.get("smtp_host", "smtp.gmail.com")
-        smtp_port = int(config.get("smtp_port", 587))
+        smtp_user = str(config.get("smtp_user") or "").strip()
+        smtp_pass = str(config.get("smtp_password") or "").strip()
+        smtp_host = str(config.get("smtp_host") or "").strip() or "smtp.gmail.com"
+        raw_port = config.get("smtp_port")
+        smtp_port = int(raw_port) if raw_port and str(raw_port).strip().isdigit() else 587
 
         df = inputs.get("dataframe")
         if df is None and context and isinstance(context, dict):
