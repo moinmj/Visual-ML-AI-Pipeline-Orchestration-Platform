@@ -189,7 +189,7 @@ class PipelineInferencer:
 
                 nc_req = NativeCadenceDatasetRequest(
                     horizon_years=horizon_years,
-                    step_unit=request.freq or getattr(request, "time_unit", None) or getattr(request, "step_unit", None) or "year"
+                    step_unit=request.freq or "auto"
                 )
                 nc_res = cls.generate_native_cadence_dataset(
                     bundle=bundle,
