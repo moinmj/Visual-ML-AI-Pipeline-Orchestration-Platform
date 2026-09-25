@@ -43,6 +43,12 @@ from backend.app.recipes.flow_control.switch_node import SwitchRecipe
 from backend.app.recipes.flow_control.merge_node import MergeDatasetsRecipe
 from backend.app.recipes.flow_control.loop_node import LoopBatchRecipe
 from backend.app.recipes.flow_control.delay_node import DelayRecipe
+from backend.app.recipes.preprocessing.sql_step import SQLStepRecipe
+from backend.app.recipes.preprocessing.limit import LimitRecipe
+from backend.app.recipes.preprocessing.sort_rows import SortRecipe
+from backend.app.recipes.preprocessing.aggregate import AggregateRecipe
+from backend.app.recipes.preprocessing.combine import CombineRecipe
+from backend.app.recipes.preprocessing.pivot import PivotRecipe
 
 # Apps & Integrations Recipes
 from backend.app.recipes.integrations.slack_notifier import SlackRecipe
@@ -97,6 +103,12 @@ def register_all_recipes():
     recipe_registry.register(MergeDatasetsRecipe())
     recipe_registry.register(LoopBatchRecipe())
     recipe_registry.register(DelayRecipe())
+    recipe_registry.register(SQLStepRecipe())
+    recipe_registry.register(LimitRecipe())
+    recipe_registry.register(SortRecipe())
+    recipe_registry.register(AggregateRecipe())
+    recipe_registry.register(CombineRecipe())
+    recipe_registry.register(PivotRecipe())
 
     # Apps & Integrations
     recipe_registry.register(SlackRecipe())

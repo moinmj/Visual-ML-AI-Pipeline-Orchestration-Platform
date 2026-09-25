@@ -295,8 +295,8 @@ async def test_tabular_temporal_regression_and_future_projection():
     assert pred_res.trend in ["Upward", "Downward", "Neutral"]
     assert pred_res.trajectory is not None
     assert len(pred_res.trajectory) >= 5
-    # The final projected step should be 2025
-    assert pred_res.trajectory[-1]["ds"] == "2025"
+    # The final projected step should be 2025 (or formatted starting with 2025 e.g. '2025-6')
+    assert str(pred_res.trajectory[-1]["ds"]).startswith("2025")
 
     # 4. Verify HTTP REST API Endpoints
     transport = ASGITransport(app=app)

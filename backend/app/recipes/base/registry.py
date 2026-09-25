@@ -47,6 +47,12 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "merge": ("Flow Control", "Combine"),
     "loop": ("Flow Control", "Iteration"),
     "delay": ("Flow Control", "Timing"),
+    "sql_step": ("Data Preparation & Transformation", "Custom Logic"),
+    "limit": ("Data Preparation & Transformation", "Combine/Structure"),
+    "sort": ("Data Preparation & Transformation", "Combine/Structure"),
+    "aggregate": ("Data Preparation & Transformation", "Combine/Structure"),
+    "combine": ("Data Preparation & Transformation", "Combine/Structure"),
+    "pivot": ("Data Preparation & Transformation", "Combine/Structure"),
 
     # Apps / Integrations
     "slack": ("Apps & Integrations", "Communication"),
