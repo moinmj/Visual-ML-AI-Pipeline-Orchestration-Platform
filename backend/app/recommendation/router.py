@@ -359,28 +359,9 @@ async def autowire_nodes(payload: AutoWireRequest):
                 })
             prev_node_id = n_id
 
-    # Secondary edge: Splitter -> Evaluator (for X_test/y_test propagation)
-    for node in sorted_nodes:
-        n_id = node["id"]
-        r_id = node.get("recipe_id") or node.get("data", {}).get("recipe_id")
-        recipe = recipe_registry.get(r_id) if r_id else None
-        cat = recipe.category if recipe else ""
-        label = str(node.get("label") or node.get("id") or "").lower()
-
-        if r_id == "model_evaluator" or cat == "evaluation" or any(k in label for k in ["eval", "metric", "performance"]):
-            eval_node_id = n_id
-        elif r_id == "train_test_split" or cat == "splitting" or "split" in label:
-            split_node_id = n_id
-
-    if split_node_id and eval_node_id and split_node_id != eval_node_id:
-        split_eval_exists = any(e["source"] == split_node_id and e["target"] == eval_node_id for e in edges)
-        if not split_eval_exists:
-            edges.append({
-                "id": f"e_{split_node_id}_{eval_node_id}",
-                "source": split_node_id,
-                "target": eval_node_id,
-                "animated": True
-            })
+    # Post-process edges with intelligent semantic handle assignment
+    from backend.app.recommendation.autowire_utils import ensure_semantic_edge_handles
+    edges = ensure_semantic_edge_handles(sorted_nodes, edges)
 
     # Validate whether any nodes have unconfigured required fields
     warnings = []
