@@ -590,6 +590,9 @@ class AIRecommender:
                 "animated": True
             })
 
+        from backend.app.recommendation.autowire_utils import ensure_semantic_edge_handles
+        edges = ensure_semantic_edge_handles(nodes, edges)
+
         return {
             "nodes": nodes,
             "edges": edges,

@@ -427,6 +427,9 @@ class LLMRecommender:
                     })
             valid_edges = auto_edges
 
+        from backend.app.recommendation.autowire_utils import ensure_semantic_edge_handles
+        valid_edges = ensure_semantic_edge_handles(valid_nodes, valid_edges)
+
         dag["nodes"] = valid_nodes
         dag["edges"] = valid_edges
         dag["node_configs"] = node_configs
