@@ -13,10 +13,19 @@ class OpenWeatherMapRecipe(BaseRecipe):
     version = "1.0.0"
     category = "integrations"
     description = "Fetches live or historical weather features (temperature, humidity, wind, pressure) by city name or GPS coordinates to enrich ML datasets."
-    input_types = []
+    input_types = ["dataframe"]
     output_types = ["dataframe"]
 
-    inputs = []
+    inputs = [
+        RecipePort(
+            id="input",
+            label="Trigger / Input Data",
+            type="dataframe",
+            required=False,
+            max_connections=1,
+            description="Optional upstream trigger signal (e.g. Cron) or dataset to enrich"
+        )
+    ]
 
     outputs = [
         RecipePort(
