@@ -91,18 +91,24 @@ class SQLStepRecipe(BaseRecipe):
 
         try:
             import duckdb
+            con = None
             try:
                 con = duckdb.connect()
                 # Register aliases for maximum developer usability
                 con.register("df", df)
                 con.register("data", df)
                 con.register("input_df", df)
+                # Block file/network access (read_csv, FROM '/path', glob, httpfs) BEFORE
+                # running user SQL, then lock so the query can't turn it back on.
+                con.execute("SET enable_external_access=false")
+                con.execute("SET lock_configuration=true")
                 result_df = con.execute(query).df()
             finally:
-                try:
-                    con.close()
-                except Exception:
-                    pass
+                if con is not None:
+                    try:
+                        con.close()
+                    except Exception:
+                        pass
         except ImportError:
             # Resilient fallback to Python's built-in sqlite3 in-memory engine
             import sqlite3

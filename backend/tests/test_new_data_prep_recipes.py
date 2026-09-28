@@ -46,6 +46,11 @@ def test_sql_step_recipe_comprehensive():
     errs = recipe.validate_config({"query": "DROP TABLE df"})
     assert len(errs) > 0
 
+    # 6. External file access blocked by sandbox in execution
+    with pytest.raises(Exception) as exc_info:
+        recipe.execute({"dataframe": df}, {"query": "SELECT * FROM read_csv('secret_passwords.csv')"})
+    assert "disabled by configuration" in str(exc_info.value) or "external" in str(exc_info.value)
+
 
 def test_limit_recipe_comprehensive():
     recipe = LimitRecipe()

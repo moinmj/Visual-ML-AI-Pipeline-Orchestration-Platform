@@ -85,8 +85,8 @@ def ensure_semantic_edge_handles(
             if not e.get("target_handle"):
                 e["target_handle"] = "input"
 
-        # Case E: Multi-Dataset Join Target
-        elif tgt_recipe == "dataset_join":
+        # Case E: Multi-Dataset Join / Combine Target
+        elif tgt_recipe in ["dataset_join", "combine"]:
             cnt = join_incoming_counts.get(tgt_id, 0)
             if not e.get("target_handle"):
                 e["target_handle"] = "left" if cnt == 0 else "right"

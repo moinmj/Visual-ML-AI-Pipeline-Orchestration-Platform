@@ -252,14 +252,20 @@ class LLMRecommender:
             result = json.loads(content)
 
             # Validate and format result
-            return cls._validate_and_enrich_dag(result, df)
+            return cls._validate_and_enrich_dag(result, df, target_column=target_column, task_type=task_type)
 
         except Exception as e:
             logger.error(f"Error during LLM pipeline recommendation: {str(e)}. Falling back to heuristic recommender.", exc_info=True)
             return cls._heuristic_fallback(df, target_column, task_type, reason=f"LLM recommendation raised an exception: {str(e)}")
 
     @classmethod
-    def _validate_and_enrich_dag(cls, result: Dict[str, Any], df: pd.DataFrame) -> Dict[str, Any]:
+    def _validate_and_enrich_dag(
+        cls,
+        result: Dict[str, Any],
+        df: pd.DataFrame,
+        target_column: Optional[str] = None,
+        task_type: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
         Validates node recipe IDs against recipe_registry, fixes coordinates,
         and constructs node_configs map.
@@ -318,6 +324,17 @@ class LLMRecommender:
                     r_id = "outlier_handler"
                 elif "col" in r_id and "select" in r_id:
                     r_id = "column_selector"
+                elif any(k in r_id for k in ["train", "model", "regress", "classif", "tree", "boost", "forest", "linear", "logistic"]):
+                    if task_type == "time_series_forecasting" or "prophet" in r_id or "arima" in r_id:
+                        r_id = "prophet_forecaster"
+                    elif task_type == "classification" or "classif" in r_id or "logistic" in r_id:
+                        r_id = "random_forest_trainer"
+                    else:
+                        r_id = "xgboost_trainer"
+                elif any(k in r_id for k in ["prophet", "arima", "forecast"]):
+                    r_id = "prophet_forecaster"
+                elif "anomaly" in r_id or "isolation" in r_id:
+                    r_id = "isolation_forest"
                 else:
                     r_id = "csv_loader"
                 n["recipe_id"] = r_id
@@ -429,6 +446,11 @@ class LLMRecommender:
 
         from backend.app.recommendation.autowire_utils import ensure_semantic_edge_handles
         valid_edges = ensure_semantic_edge_handles(valid_nodes, valid_edges)
+
+        # Enforce minimum complete pipeline guarantee
+        if len(valid_nodes) < 3:
+            logger.warning(f"LLM generated insufficient DAG nodes ({len(valid_nodes)}). Falling back to heuristic recommender.")
+            return cls._heuristic_fallback(df, target_col, task_type, reason="LLM generated incomplete DAG (< 3 nodes).")
 
         dag["nodes"] = valid_nodes
         dag["edges"] = valid_edges
