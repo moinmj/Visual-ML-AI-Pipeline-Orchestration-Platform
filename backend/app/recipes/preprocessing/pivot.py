@@ -129,9 +129,9 @@ class PivotRecipe(BaseRecipe):
             raise ValueError("PivotRecipe expects 'dataframe' in inputs.")
 
         mode = str(config.get("mode", "pivot")).lower().strip()
-        index_cols = self._normalize_col_list(config.get("index"))
+        index_cols = self._normalize_col_list(config.get("index") if config.get("index") is not None else config.get("id_vars"))
         pivot_cols = self._normalize_col_list(config.get("columns"))
-        value_cols = self._normalize_col_list(config.get("values"))
+        value_cols = self._normalize_col_list(config.get("values") if config.get("values") is not None else config.get("value_vars"))
 
         if mode == "pivot":
             if not pivot_cols:
