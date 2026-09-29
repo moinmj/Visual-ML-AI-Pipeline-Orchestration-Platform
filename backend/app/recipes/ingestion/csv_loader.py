@@ -61,19 +61,29 @@ class CSVLoaderRecipe(BaseRecipe):
                     if storage_path:
                         break
 
-            # Fallback: Query SQLite database for dataset record
+            # Fallback: look up the dataset record in the platform database (SQLite or PostgreSQL)
             if not storage_path:
                 try:
-                    import sqlite3
-                    db_file = settings.DATABASE_URL.replace("sqlite+aiosqlite:///", "").replace("sqlite:///", "")
-                    if os.path.exists(db_file):
-                        conn = sqlite3.connect(db_file)
-                        cur = conn.cursor()
-                        cur.execute("SELECT storage_path FROM datasets WHERE id = ? LIMIT 1", (str(dataset_id),))
-                        row = cur.fetchone()
-                        if row and row[0]:
-                            storage_path = row[0]
-                        conn.close()
+                    from sqlalchemy import create_engine, text
+                    from sqlalchemy.pool import NullPool
+                    sync_url = (
+                        settings.DATABASE_URL
+                        .replace("+aiosqlite", "")
+                        .replace("+asyncpg", "")
+                    )
+                    if sync_url.startswith(("postgres://", "postgresql://")):
+                        sync_url = "postgresql+psycopg2://" + sync_url.split("://", 1)[1]
+                    eng = create_engine(sync_url, poolclass=NullPool)
+                    try:
+                        with eng.connect() as conn:
+                            row = conn.execute(
+                                text("SELECT storage_path FROM datasets WHERE id = :id LIMIT 1"),
+                                {"id": str(dataset_id)},
+                            ).fetchone()
+                            if row and row[0]:
+                                storage_path = row[0]
+                    finally:
+                        eng.dispose()
                 except Exception:
                     pass
 

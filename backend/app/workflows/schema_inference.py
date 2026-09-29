@@ -135,18 +135,11 @@ class WorkflowSchemaInferencer:
                             col_details.append(NodeColumnInfo(name=str(cname), type=ctype, raw_dtype=raw_dtype))
                 elif dataset.storage_path:
                     try:
-                        abs_p = storage_manager.get_absolute_path(dataset.storage_path)
-                        if abs_p.exists():
-                            if str(abs_p).endswith(".csv"):
-                                df_header = pd.read_csv(abs_p, nrows=0)
-                            elif str(abs_p).endswith(".parquet"):
-                                df_header = pd.read_parquet(abs_p)
-                            else:
-                                df_header = pd.DataFrame()
-                            cols = list(df_header.columns)
-                            col_details = [NodeColumnInfo(name=str(c), type="string") for c in cols]
+                        df_header = storage_manager.read_dataframe(dataset.storage_path)
+                        cols = list(df_header.columns)
+                        col_details = [NodeColumnInfo(name=str(c), type="string") for c in cols]
                     except Exception as ex:
-                        logger.debug(f"Failed to read dataset header from disk: {ex}")
+                        logger.debug(f"Failed to read dataset header: {ex}")
 
         # Port definition
         port_out = NodePortSchema(port_id="output", columns=cols, column_details=col_details)

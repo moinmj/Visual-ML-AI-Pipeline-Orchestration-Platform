@@ -19,8 +19,32 @@ async def upload_dataset(
     """
     Upload a dataset (CSV, XLSX, JSON, Parquet).
     Automatically computes schema, column metrics, and statistical profile.
+    Saved to local disk or the Ozone datalake, based on STORAGE_BACKEND.
     """
     return await dataset_service.upload_dataset(db, file=file, name=name, description=description)
+
+
+@router.get("/ozone/browse")
+async def browse_ozone_datasets(prefix: str = Query("", description="Optional key prefix to filter by")):
+    """
+    Lists files already sitting in the Ozone datalake bucket, so one can be
+    picked and registered as a dataset without re-uploading it.
+    """
+    return dataset_service.browse_ozone(prefix=prefix)
+
+
+@router.post("/ozone/register", response_model=DatasetResponse, status_code=status.HTTP_201_CREATED)
+async def register_ozone_dataset(
+    ozone_key: str = Form(..., description="Object key returned by /ozone/browse"),
+    name: Optional[str] = Form(None),
+    description: Optional[str] = Form(None),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Registers a file that's already in the Ozone datalake as a dataset,
+    without re-uploading it.
+    """
+    return await dataset_service.register_from_ozone(db, ozone_key=ozone_key, name=name, description=description)
 
 
 @router.get("/", response_model=List[DatasetResponse])
