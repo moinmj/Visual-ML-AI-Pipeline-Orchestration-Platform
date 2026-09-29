@@ -31,7 +31,10 @@ from backend.app.workflows.schemas import (
     WorkflowCompareResponse,
     AssociatedDatasetItem,
     WorkflowInferSchemaRequest,
-    WorkflowInferSchemaResponse
+    WorkflowInferSchemaResponse,
+    NodeTestStepRequest,
+    NodeTestStepResponse,
+    SessionClearResponse
 )
 from backend.app.engine.inference import (
     PipelineInferencer,
@@ -1899,6 +1902,129 @@ async def infer_workflow_schema(
         node_configs=node_configs,
         db=db
     )
+
+
+@router.post(
+    "/nodes/{node_id}/test-step",
+    response_model=NodeTestStepResponse,
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_role("Tenant Admin", "Data Scientist", "ML Engineer", "Business User"))]
+)
+async def test_workflow_node_step(
+    node_id: str,
+    payload: NodeTestStepRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Executes a single visual canvas node in isolation (n8n/Boomi-style 'Test Step').
+    Caches intermediate DataFrames and ML artifacts per test session, auto-resolves
+    unrun ancestors, and returns instant preview rows, columns, and execution diagnostics.
+    """
+    from backend.app.engine.execution.step_executor import NodeStepExecutor
+
+    nodes = payload.nodes or []
+    edges = payload.edges or []
+    node_configs = payload.node_configs or {}
+
+    if (not nodes or len(nodes) == 0) and payload.workflow_id:
+        result = await db.execute(select(Workflow).where(Workflow.id == payload.workflow_id))
+        wf = result.scalar_one_or_none()
+        if wf:
+            nodes = wf.nodes or []
+            edges = wf.edges or []
+            if not node_configs and wf.node_configs:
+                node_configs = wf.node_configs
+
+    session_id = payload.session_id or payload.workflow_id or "default_session"
+
+    return await NodeStepExecutor.execute_node_step(
+        target_node_id=node_id,
+        nodes=nodes,
+        edges=edges,
+        node_configs=node_configs,
+        session_id=session_id,
+        sample_size=payload.sample_size,
+        auto_run_ancestors=payload.auto_run_ancestors,
+        dry_run=payload.dry_run,
+        db=db
+    )
+
+
+@router.post(
+    "/{workflow_id}/nodes/{node_id}/test-step",
+    response_model=NodeTestStepResponse,
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_role("Tenant Admin", "Data Scientist", "ML Engineer", "Business User"))]
+)
+async def test_workflow_node_step_with_id(
+    workflow_id: str,
+    node_id: str,
+    payload: NodeTestStepRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Alternative route with workflow_id in path for testing a specific node.
+    """
+    payload.workflow_id = workflow_id
+    return await test_workflow_node_step(node_id=node_id, payload=payload, db=db)
+
+
+@router.get(
+    "/sessions/{session_id}/nodes/{node_id}/preview",
+    dependencies=[Depends(get_current_user)]
+)
+async def get_test_step_table_preview(
+    session_id: str,
+    node_id: str,
+    page: int = Query(1, ge=1, description="1-indexed page number"),
+    limit: int = Query(50, ge=1, le=500, description="Records per page")
+):
+    """
+    Renders server-side paginated tabular data from a previously executed test step in this session.
+    """
+    from backend.app.engine.execution.step_executor import NodeStepExecutor
+
+    outputs = NodeStepExecutor.load_node_output(session_id=session_id, node_id=node_id)
+    df = outputs.get("dataframe")
+    if df is None or not isinstance(df, pd.DataFrame):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No tabular test output found for node '{node_id}' in session '{session_id}'."
+        )
+
+    df = df.drop(columns=["_merge"], errors="ignore")
+    total_rows = len(df)
+    total_cols = len(df.columns)
+    total_pages = math.ceil(total_rows / limit) if (limit > 0 and total_rows > 0) else 1
+    skip = (page - 1) * limit
+    page_df = df.iloc[skip:skip + limit]
+    clean_page = page_df.replace({float("nan"): None, float("inf"): None, float("-inf"): None})
+
+    return {
+        "session_id": session_id,
+        "node_id": node_id,
+        "total_rows": total_rows,
+        "total_columns": total_cols,
+        "page": page,
+        "limit": limit,
+        "total_pages": total_pages,
+        "columns": list(df.columns),
+        "data": clean_page.to_dict(orient="records")
+    }
+
+
+@router.delete(
+    "/sessions/{session_id}",
+    response_model=SessionClearResponse,
+    dependencies=[Depends(require_role("Tenant Admin", "Data Scientist", "ML Engineer", "Business User"))]
+)
+async def clear_test_session(session_id: str):
+    """
+    Cleans up all cached test session artifacts and parquet tables from disk.
+    """
+    from backend.app.engine.execution.step_executor import NodeStepExecutor
+    return NodeStepExecutor.clear_session(session_id)
+
 
 
 @router.get(
