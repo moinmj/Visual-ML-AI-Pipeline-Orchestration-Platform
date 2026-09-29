@@ -1,0 +1,377 @@
+import pytest
+import pandas as pd
+import numpy as np
+import uuid
+import os
+from httpx import AsyncClient, ASGITransport
+
+from backend.app.main import app
+from backend.app.engine.execution.step_executor import NodeStepExecutor
+from backend.app.infrastructure.storage.storage_manager import storage_manager
+
+
+@pytest.fixture(autouse=True)
+def cleanup_test_sessions():
+    """Cleanup test sessions directory after tests."""
+    yield
+    test_sessions_dir = storage_manager.get_absolute_path("test_sessions")
+    if test_sessions_dir.exists():
+        import shutil
+        for s in test_sessions_dir.glob("test_*"):
+            try:
+                shutil.rmtree(s)
+            except Exception:
+                pass
+
+
+@pytest.mark.asyncio
+async def test_single_node_execution_and_caching():
+    """Test executing a single data transformer node and caching its output."""
+    session_id = f"test_session_{uuid.uuid4().hex[:8]}"
+
+    # 1. Preload a mock dataset in storage
+    df_raw = pd.DataFrame({
+        "Store": [1, 2, 3],
+        "Sales": [100.5, 200.0, 300.2],
+        "Dept": ["A", "B", "A"]
+    })
+    rel_path = f"datasets/{session_id}_raw.parquet"
+    abs_path = storage_manager.get_absolute_path(rel_path)
+    abs_path.parent.mkdir(parents=True, exist_ok=True)
+    df_raw.to_parquet(abs_path, index=False)
+
+    nodes = [
+        {"id": "node_loader", "recipe_id": "csv_loader", "config": {}},
+        {"id": "node_filter", "recipe_id": "column_selector", "config": {"columns": ["Store", "Sales"]}}
+    ]
+    edges = [
+        {"source": "node_loader", "target": "node_filter", "source_handle": "output", "target_handle": "input"}
+    ]
+
+    # Pre-seed node_loader output into session cache
+    NodeStepExecutor.save_node_output(
+        session_id=session_id,
+        node_id="node_loader",
+        recipe_id="csv_loader",
+        outputs={"dataframe": df_raw}
+    )
+    assert NodeStepExecutor.is_node_cached(session_id, "node_loader") is True
+
+    # 2. Test Step on node_filter
+    resp = await NodeStepExecutor.execute_node_step(
+        target_node_id="node_filter",
+        nodes=nodes,
+        edges=edges,
+        node_configs={"node_filter": {"columns": ["Store", "Sales"]}},
+        session_id=session_id,
+        auto_run_ancestors=False
+    )
+
+    assert resp.success is True
+    assert resp.status == "SUCCESS"
+    assert resp.node_id == "node_filter"
+    assert resp.columns == ["Store", "Sales"]
+    assert resp.row_count == 3
+    assert len(resp.preview_rows) == 3
+
+    # Check cache persistence
+    assert NodeStepExecutor.is_node_cached(session_id, "node_filter") is True
+    loaded_out = NodeStepExecutor.load_node_output(session_id, "node_filter")
+    assert "dataframe" in loaded_out
+    assert list(loaded_out["dataframe"].columns) == ["Store", "Sales"]
+
+
+@pytest.mark.asyncio
+async def test_chained_dataset_join_step_by_step():
+    """
+    Test the exact chained dataset join scenario:
+    Walmart_Sales (8 cols) + stores (3 cols) -> Join 1 (XYz with 10 cols)
+    Then Join 2 joins online_retail (4 cols) with XYz!
+    """
+    session_id = f"test_session_{uuid.uuid4().hex[:8]}"
+
+    # Create 3 test tables
+    df_walmart = pd.DataFrame({
+        "Store": [1, 2, 3],
+        "Date": ["2026-01-01", "2026-01-02", "2026-01-03"],
+        "Weekly_Sales": [15000, 22000, 18000],
+        "Holiday_Flag": [0, 1, 0],
+        "Temperature": [45.0, 52.0, 48.0],
+        "Fuel_Price": [3.5, 3.6, 3.4],
+        "CPI": [211.0, 212.0, 211.5],
+        "Unemployment": [7.8, 7.5, 7.9]
+    })
+
+    df_stores = pd.DataFrame({
+        "Store": [1, 2, 3],
+        "Type": ["A", "B", "A"],
+        "Size": [150000, 120000, 160000]
+    })
+
+    df_retail = pd.DataFrame({
+        "Store": [1, 2, 3],
+        "InvoiceNo": [101, 102, 103],
+        "Quantity": [5, 10, 2],
+        "UnitPrice": [12.5, 8.0, 25.0]
+    })
+
+    nodes = [
+        {"id": "node_walmart", "recipe_id": "csv_loader"},
+        {"id": "node_stores", "recipe_id": "csv_loader"},
+        {"id": "node_join_1", "recipe_id": "dataset_join"},
+        {"id": "node_retail", "recipe_id": "csv_loader"},
+        {"id": "node_join_2", "recipe_id": "dataset_join"}
+    ]
+
+    edges = [
+        {"source": "node_walmart", "target": "node_join_1", "source_handle": "output", "target_handle": "left"},
+        {"source": "node_stores", "target": "node_join_1", "source_handle": "output", "target_handle": "right"},
+        {"source": "node_retail", "target": "node_join_2", "source_handle": "output", "target_handle": "left"},
+        {"source": "node_join_1", "target": "node_join_2", "source_handle": "joined", "target_handle": "right"}
+    ]
+
+    node_configs = {
+        "node_join_1": {
+            "join_type": "inner",
+            "conditions": [{"left": "Store", "right": "Store"}],
+            "new_dataset_name": "XYz"
+        },
+        "node_join_2": {
+            "join_type": "left",
+            "conditions": [{"left": "Store", "right": "Store"}],
+            "new_dataset_name": "Master_Joined"
+        }
+    }
+
+    # Pre-seed loaders into session cache
+    NodeStepExecutor.save_node_output(session_id, "node_walmart", "csv_loader", {"dataframe": df_walmart})
+    NodeStepExecutor.save_node_output(session_id, "node_stores", "csv_loader", {"dataframe": df_stores})
+    NodeStepExecutor.save_node_output(session_id, "node_retail", "csv_loader", {"dataframe": df_retail})
+
+    # Step A: Run Join 1 Test Step
+    resp_join1 = await NodeStepExecutor.execute_node_step(
+        target_node_id="node_join_1",
+        nodes=nodes,
+        edges=edges,
+        node_configs=node_configs,
+        session_id=session_id
+    )
+
+    assert resp_join1.success is True
+    assert resp_join1.status == "SUCCESS"
+    assert resp_join1.row_count == 3
+    # Check that all 10 columns are present in Join 1's output
+    for col in ["Store", "Date", "Weekly_Sales", "Holiday_Flag", "Temperature", "Fuel_Price", "CPI", "Unemployment", "Type", "Size"]:
+        assert col in resp_join1.columns
+
+    # Step B: Run Join 2 Test Step (using Join 1's cached result)
+    resp_join2 = await NodeStepExecutor.execute_node_step(
+        target_node_id="node_join_2",
+        nodes=nodes,
+        edges=edges,
+        node_configs=node_configs,
+        session_id=session_id
+    )
+
+    assert resp_join2.success is True
+    assert resp_join2.status == "SUCCESS"
+    assert resp_join2.row_count == 3
+    # Left table had 4 cols (Store, InvoiceNo, Quantity, UnitPrice)
+    # Right table XYz had 10 cols (Store, Date, Weekly_Sales, Holiday_Flag, Temperature, Fuel_Price, CPI, Unemployment, Type, Size)
+    # Merged on Store -> 4 + 9 = 13 columns
+    assert "InvoiceNo" in resp_join2.columns
+    assert "Type" in resp_join2.columns
+    assert "Size" in resp_join2.columns
+    assert "Weekly_Sales" in resp_join2.columns
+    assert len(resp_join2.columns) == 13
+
+
+@pytest.mark.asyncio
+async def test_auto_run_ancestors():
+    """
+    Test that calling test-step on a downstream node automatically executes
+    and caches all unrun ancestors in topological order.
+    """
+    session_id = f"test_session_{uuid.uuid4().hex[:8]}"
+
+    df = pd.DataFrame({
+        "A": [10, 20, 30, 40, 50],
+        "B": [1.5, 2.5, 3.5, 4.5, 5.5],
+        "Target": [0, 1, 0, 1, 0]
+    })
+
+    nodes = [
+        {"id": "loader", "recipe_id": "csv_loader"},
+        {"id": "imputer", "recipe_id": "missing_value_imputer"},
+        {"id": "scaler", "recipe_id": "feature_scaler", "config": {"method": "standard", "features": ["A", "B"]}}
+    ]
+
+    edges = [
+        {"source": "loader", "target": "imputer", "source_handle": "output", "target_handle": "input"},
+        {"source": "imputer", "target": "scaler", "source_handle": "output", "target_handle": "input"}
+    ]
+
+    # Pre-seed only the root loader
+    NodeStepExecutor.save_node_output(session_id, "loader", "csv_loader", {"dataframe": df})
+
+    # Call test-step directly on "scaler" (skipping "imputer") with auto_run_ancestors=True
+    resp = await NodeStepExecutor.execute_node_step(
+        target_node_id="scaler",
+        nodes=nodes,
+        edges=edges,
+        node_configs={},
+        session_id=session_id,
+        auto_run_ancestors=True
+    )
+
+    assert resp.success is True
+    assert resp.status == "SUCCESS"
+    assert "imputer" in resp.ancestors_executed
+    assert NodeStepExecutor.is_node_cached(session_id, "imputer") is True
+    assert NodeStepExecutor.is_node_cached(session_id, "scaler") is True
+
+
+@pytest.mark.asyncio
+async def test_ml_step_execution_with_model_artifact_caching():
+    """
+    Test ML training and evaluation step-by-step:
+    Verifies that the trained scikit-learn/xgboost model and train/test splits
+    are serialized via joblib and restored when testing model_evaluator in a separate call!
+    """
+    session_id = f"test_session_{uuid.uuid4().hex[:8]}"
+
+    df_ml = pd.DataFrame({
+        "Feature1": np.random.randn(60),
+        "Feature2": np.random.randn(60),
+        "target": np.random.choice([0, 1], size=60)
+    })
+
+    nodes = [
+        {"id": "node_loader", "recipe_id": "csv_loader"},
+        {"id": "node_split", "recipe_id": "train_test_split", "config": {"target_column": "target", "test_size": 0.25}},
+        {"id": "node_rf", "recipe_id": "random_forest_trainer", "config": {"target_column": "target", "n_estimators": 5}},
+        {"id": "node_eval", "recipe_id": "model_evaluator"}
+    ]
+
+    edges = [
+        {"source": "node_loader", "target": "node_split", "source_handle": "output", "target_handle": "input"},
+        {"source": "node_split", "target": "node_rf", "source_handle": "output_1", "target_handle": "input"},
+        {"source": "node_rf", "target": "node_eval", "source_handle": "output", "target_handle": "input_1"},
+        {"source": "node_split", "target": "node_eval", "source_handle": "output_2", "target_handle": "input_2"}
+    ]
+
+    # Pre-seed loader
+    NodeStepExecutor.save_node_output(session_id, "node_loader", "csv_loader", {"dataframe": df_ml})
+
+    # Step 1: Run Splitter
+    resp_split = await NodeStepExecutor.execute_node_step(
+        target_node_id="node_split",
+        nodes=nodes,
+        edges=edges,
+        node_configs={"node_split": {"target_column": "target", "test_size": 0.25}},
+        session_id=session_id
+    )
+    assert resp_split.success is True
+    assert resp_split.status == "SUCCESS"
+
+    # Step 2: Run Random Forest Trainer
+    resp_rf = await NodeStepExecutor.execute_node_step(
+        target_node_id="node_rf",
+        nodes=nodes,
+        edges=edges,
+        node_configs={"node_rf": {"target_column": "target", "n_estimators": 5}},
+        session_id=session_id
+    )
+    assert resp_rf.success is True
+    assert resp_rf.status == "SUCCESS"
+
+    # Step 3: Run Model Evaluator (must load model from RF and test data from Splitter)
+    resp_eval = await NodeStepExecutor.execute_node_step(
+        target_node_id="node_eval",
+        nodes=nodes,
+        edges=edges,
+        node_configs={},
+        session_id=session_id
+    )
+    assert resp_eval.success is True
+    assert resp_eval.status == "SUCCESS"
+    assert resp_eval.metrics is not None
+    assert "accuracy" in resp_eval.metrics or "f1" in resp_eval.metrics or "precision" in resp_eval.metrics
+
+
+@pytest.mark.asyncio
+async def test_session_clear():
+    """Test clearing the session cache directory."""
+    session_id = f"test_session_{uuid.uuid4().hex[:8]}"
+
+    df = pd.DataFrame({"x": [1, 2]})
+    NodeStepExecutor.save_node_output(session_id, "n1", "csv_loader", {"dataframe": df})
+    assert NodeStepExecutor.is_node_cached(session_id, "n1") is True
+
+    clear_resp = NodeStepExecutor.clear_session(session_id)
+    assert clear_resp.success is True
+    assert NodeStepExecutor.is_node_cached(session_id, "n1") is False
+
+
+from backend.app.core.security import create_access_token
+
+
+def auth_headers():
+    token = create_access_token(sub="test-user", tenant_id=1, roles=["Tenant Admin"])
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.mark.asyncio
+async def test_api_test_step_endpoint():
+    """Test calling the FastAPI test-step endpoint via HTTP."""
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=auth_headers()) as client:
+        session_id = f"test_api_session_{uuid.uuid4().hex[:8]}"
+
+        df_source = pd.DataFrame({
+            "col_a": [1, 2, 3],
+            "col_b": ["x", "y", "z"]
+        })
+        NodeStepExecutor.save_node_output(session_id, "loader_api", "csv_loader", {"dataframe": df_source})
+
+        payload = {
+            "session_id": session_id,
+            "nodes": [
+                {"id": "loader_api", "recipe_id": "csv_loader"},
+                {"id": "selector_api", "recipe_id": "column_selector", "config": {"columns": ["col_a"]}}
+            ],
+            "edges": [
+                {"source": "loader_api", "target": "selector_api", "source_handle": "output", "target_handle": "input"}
+            ],
+            "node_configs": {
+                "selector_api": {"columns": ["col_a"]}
+            }
+        }
+
+        resp = await client.post(
+            "/api/v1/workflows/nodes/selector_api/test-step",
+            json=payload
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success"] is True
+        assert data["status"] == "SUCCESS"
+        assert data["columns"] == ["col_a"]
+        assert data["row_count"] == 3
+
+        # Test preview endpoint
+        preview_resp = await client.get(
+            f"/api/v1/workflows/sessions/{session_id}/nodes/selector_api/preview?page=1&limit=10"
+        )
+        assert preview_resp.status_code == 200
+        preview_data = preview_resp.json()
+        assert preview_data["total_rows"] == 3
+        assert len(preview_data["data"]) == 3
+        assert preview_data["columns"] == ["col_a"]
+
+        # Test clear session endpoint
+        del_resp = await client.delete(
+            f"/api/v1/workflows/sessions/{session_id}"
+        )
+        assert del_resp.status_code == 200
+        assert del_resp.json()["success"] is True
+
