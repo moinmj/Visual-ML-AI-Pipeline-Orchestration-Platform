@@ -389,10 +389,21 @@ class DatasetJoinRecipe(BaseRecipe):
                     new_ds_name = new_ds_name[:-4]
 
                 rel_storage_path = f"datasets/{new_ds_id}_{file_name}"
-                abs_path = storage_manager.get_absolute_path(rel_storage_path)
-                abs_path.parent.mkdir(parents=True, exist_ok=True)
-                final_df.to_csv(abs_path, index=False)
-                file_size_bytes = abs_path.stat().st_size
+                csv_bytes = final_df.to_csv(index=False).encode("utf-8")
+                file_size_bytes = len(csv_bytes)
+
+                async def _upload():
+                    return await storage_manager.save_file(csv_bytes, rel_storage_path)
+
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                            storage_path = pool.submit(lambda: asyncio.run(_upload())).result()
+                    else:
+                        storage_path = loop.run_until_complete(_upload())
+                except Exception:
+                    storage_path = asyncio.run(_upload())
 
                 profile_data = DataProfiler.profile_dataframe(final_df)
 
@@ -405,7 +416,7 @@ class DatasetJoinRecipe(BaseRecipe):
                             file_name=file_name,
                             file_format="csv",
                             file_size_bytes=file_size_bytes,
-                            storage_path=rel_storage_path,
+                            storage_path=storage_path,
                             row_count=len(final_df),
                             column_count=len(final_df.columns),
                             quality_score=float(profile_data.get("quality_score", 100.0)),

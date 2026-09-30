@@ -1824,10 +1824,9 @@ async def export_workflow_node_dataset(
         ds_name = ds_name[:-4]
 
     rel_storage_path = f"datasets/{new_ds_id}_{file_name}"
-    abs_path = storage_manager.get_absolute_path(rel_storage_path)
-    abs_path.parent.mkdir(parents=True, exist_ok=True)
-    df_clean.to_csv(abs_path, index=False)
-    file_size_bytes = abs_path.stat().st_size
+    csv_bytes = df_clean.to_csv(index=False).encode("utf-8")
+    storage_path = await storage_manager.save_file(csv_bytes, rel_storage_path)
+    file_size_bytes = len(csv_bytes)
 
     profile_data = DataProfiler.profile_dataframe(df_clean)
 
@@ -1838,7 +1837,7 @@ async def export_workflow_node_dataset(
         file_name=file_name,
         file_format="csv",
         file_size_bytes=file_size_bytes,
-        storage_path=rel_storage_path,
+        storage_path=storage_path,
         row_count=len(df_clean),
         column_count=len(df_clean.columns),
         quality_score=float(profile_data.get("quality_score", 100.0)),
@@ -2653,4 +2652,3 @@ async def export_combined_dataset_csv(
             "Content-Disposition": f"attachment; filename=combined_dataset_{execution_id}.csv"
         }
     )
-

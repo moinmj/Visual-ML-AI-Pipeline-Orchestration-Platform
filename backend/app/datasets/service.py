@@ -38,16 +38,18 @@ class DatasetService:
         dataset_name = name or file_name.rsplit(".", 1)[0]
         storage_rel_path = f"datasets/{dataset_id}_{file_name}"
 
-        # 1. Save file to storage
-        await storage_manager.save_file(content, storage_rel_path)
+        # 1. Save file to storage (returns the local path, or an s3://bucket/key
+        #    Ozone path when STORAGE_BACKEND="ozone" -- must be used from here on,
+        #    not the raw key we asked it to save under).
+        storage_path = await storage_manager.save_file(content, storage_rel_path)
 
         # 2. Read DataFrame and perform automatic statistical profiling
         try:
-            df = storage_manager.read_dataframe(storage_rel_path)
+            df = storage_manager.read_dataframe(storage_path)
             profile_data = DataProfiler.profile_dataframe(df)
         except Exception as e:
             # Clean up on failure
-            storage_manager.delete_file(storage_rel_path)
+            storage_manager.delete_file(storage_path)
             logger.error(f"Error parsing uploaded tabular file: {e}")
             raise ValidationException(f"Failed to parse and profile dataset: {str(e)}")
 
@@ -59,7 +61,7 @@ class DatasetService:
             file_name=file_name,
             file_format=ext,
             file_size_bytes=file_size,
-            storage_path=storage_rel_path,
+            storage_path=storage_path,
             row_count=profile_data["row_count"],
             column_count=profile_data["column_count"],
             quality_score=profile_data["quality_score"],
@@ -76,6 +78,64 @@ class DatasetService:
     async def list_datasets(db: AsyncSession) -> List[Dataset]:
         result = await db.execute(select(Dataset).order_by(Dataset.created_at.desc()))
         return list(result.scalars().all())
+
+    @staticmethod
+    def browse_ozone(prefix: str = "") -> List[Dict[str, Any]]:
+        """
+        Lists objects already in the Ozone datalake bucket, so the user can pick
+        an existing file instead of uploading a new one.
+        """
+        return storage_manager.list_ozone_objects(prefix=prefix)
+
+    @staticmethod
+    async def register_from_ozone(
+        db: AsyncSession,
+        ozone_key: str,
+        name: Optional[str] = None,
+        description: Optional[str] = None
+    ) -> Dataset:
+        """
+        Registers an existing Ozone object as a dataset, without re-uploading it.
+        Reads it once to compute the same profile/schema an upload would get.
+        """
+        ext = ozone_key.rsplit(".", 1)[-1].lower() if "." in ozone_key else ""
+        if ext not in ["csv", "xlsx", "xls", "json", "parquet"]:
+            raise ValidationException(f"Unsupported file format: '.{ext}'. Allowed: CSV, XLSX, JSON, Parquet.")
+
+        from backend.app.core.config import settings
+        storage_path = f"s3://{settings.OZONE_BUCKET}/{ozone_key}"
+        dataset_id = str(uuid.uuid4())
+        file_name = ozone_key.rsplit("/", 1)[-1]
+        dataset_name = name or file_name.rsplit(".", 1)[0]
+
+        try:
+            df = storage_manager.read_dataframe(storage_path)
+            profile_data = DataProfiler.profile_dataframe(df)
+        except Exception as e:
+            logger.error(f"Error reading/profiling Ozone object '{ozone_key}': {e}")
+            raise ValidationException(f"Failed to read and profile '{ozone_key}': {str(e)}")
+
+        from backend.app.infrastructure.storage.ozone_client import get_s3_client
+        file_size = get_s3_client().head_object(Bucket=settings.OZONE_BUCKET, Key=ozone_key)["ContentLength"]
+
+        dataset = Dataset(
+            id=dataset_id,
+            name=dataset_name,
+            description=description,
+            file_name=file_name,
+            file_format=ext,
+            file_size_bytes=file_size,
+            storage_path=storage_path,
+            row_count=profile_data["row_count"],
+            column_count=profile_data["column_count"],
+            quality_score=profile_data["quality_score"],
+            profile=profile_data
+        )
+        db.add(dataset)
+        await db.commit()
+        await db.refresh(dataset)
+        logger.info(f"Dataset registered from Ozone: {dataset.id} ({dataset.name}) -> {storage_path}")
+        return dataset
 
     @staticmethod
     async def get_dataset(db: AsyncSession, dataset_id: str) -> Dataset:
