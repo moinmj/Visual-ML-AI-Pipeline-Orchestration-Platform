@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite+aiosqlite:///./data/platform.db"
 
     # Storage Settings
-    STORAGE_BACKEND: str = "local"  # "local" or "s3"
+    STORAGE_BACKEND: str = "local"  # "local", "s3", or "ozone"
     LOCAL_STORAGE_DIR: str = "./data/storage"
 
     # S3 / MinIO Settings
@@ -24,6 +24,13 @@ class Settings(BaseSettings):
     S3_ACCESS_KEY: Optional[str] = "minioadmin"
     S3_SECRET_KEY: Optional[str] = "minioadmin"
     S3_BUCKET_NAME: str = "pipeline-artifacts"
+
+    # Apache Ozone (S3-compatible datalake). Set STORAGE_BACKEND="ozone" to use it.
+    OZONE_ENDPOINT: Optional[str] = None
+    OZONE_ACCESS_KEY: Optional[str] = None
+    OZONE_SECRET_KEY: Optional[str] = None
+    OZONE_BUCKET: Optional[str] = None
+    OZONE_REGION: str = "us-east-1"
 
     # MLflow Settings
     MLFLOW_TRACKING_URI: str = "sqlite:///./data/mlflow.db"

@@ -23,10 +23,10 @@ class Workflow(Base):
 
     # Soft Delete & Governance
     is_active = Column(Boolean, nullable=False, default=True)
-    deleted_at = Column(DateTime, nullable=True)
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
 
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class WorkflowExecution(Base):
@@ -52,5 +52,4 @@ class WorkflowExecution(Base):
     step_snapshots = Column(JSON, nullable=True)
     logs = Column(JSON, nullable=True)
 
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
