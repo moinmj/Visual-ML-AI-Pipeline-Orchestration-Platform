@@ -1965,6 +1965,7 @@ async def get_test_step_table_preview(
     Renders server-side paginated tabular data from a previously executed test step in this session.
     """
     from backend.app.engine.execution.step_executor import NodeStepExecutor
+    from backend.app.engine.execution.executor import make_json_safe
 
     outputs = NodeStepExecutor.load_node_output(session_id=session_id, node_id=node_id)
     df = outputs.get("dataframe")
@@ -1979,8 +1980,11 @@ async def get_test_step_table_preview(
     total_cols = len(df.columns)
     total_pages = math.ceil(total_rows / limit) if (limit > 0 and total_rows > 0) else 1
     skip = (page - 1) * limit
-    page_df = df.iloc[skip:skip + limit]
+    page_df = df.iloc[skip:skip + limit].copy()
+    for c in page_df.select_dtypes(include=["datetime", "datetimetz"]).columns:
+        page_df[c] = page_df[c].dt.strftime("%Y-%m-%d %H:%M:%S")
     clean_page = page_df.replace({float("nan"): None, float("inf"): None, float("-inf"): None})
+    clean_page = clean_page.where(pd.notnull(clean_page), None)
 
     return {
         "session_id": session_id,
@@ -1991,7 +1995,7 @@ async def get_test_step_table_preview(
         "limit": limit,
         "total_pages": total_pages,
         "columns": list(df.columns),
-        "data": clean_page.to_dict(orient="records")
+        "data": [make_json_safe(r) for r in clean_page.to_dict(orient="records")]
     }
 
 
