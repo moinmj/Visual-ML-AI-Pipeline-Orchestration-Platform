@@ -173,7 +173,12 @@ class WorkflowSchemaInferencer:
         right_edge: Optional[Dict[str, Any]] = None
 
         for edge in incoming_edges:
-            th = (edge.get("target_handle") or "").lower().strip()
+            th = (
+                edge.get("targetHandle")
+                or edge.get("target_handle")
+                or edge.get("target_port")
+                or ""
+            ).lower().strip()
             if th in ["left", "left_dataset", "df_left", "upstream_left"]:
                 left_edge = edge
             elif th in ["right", "right_dataset", "df_right", "upstream_right"]:
@@ -199,7 +204,12 @@ class WorkflowSchemaInferencer:
             parent_schema = node_schemas.get(src)
             if not parent_schema:
                 return [], []
-            sh = (edge.get("source_handle") or "").lower().strip()
+            sh = (
+                edge.get("sourceHandle")
+                or edge.get("source_handle")
+                or edge.get("source_port")
+                or ""
+            ).lower().strip()
             if sh and sh in parent_schema.ports:
                 return parent_schema.ports[sh].columns, parent_schema.ports[sh].column_details
             return parent_schema.columns, parent_schema.column_details
@@ -336,7 +346,12 @@ class WorkflowSchemaInferencer:
             src = str(first_edge.get("source", ""))
             parent_schema = node_schemas.get(src)
             if parent_schema:
-                sh = (first_edge.get("source_handle") or "").lower().strip()
+                sh = (
+                    first_edge.get("sourceHandle")
+                    or first_edge.get("source_handle")
+                    or first_edge.get("source_port")
+                    or ""
+                ).lower().strip()
                 if sh and sh in parent_schema.ports:
                     parent_cols = list(parent_schema.ports[sh].columns)
                     parent_details = list(parent_schema.ports[sh].column_details)
