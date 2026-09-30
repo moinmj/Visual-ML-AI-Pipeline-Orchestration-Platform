@@ -1926,8 +1926,9 @@ async def test_workflow_node_step(
     edges = payload.edges or []
     node_configs = payload.node_configs or {}
 
-    if (not nodes or len(nodes) == 0) and payload.workflow_id:
-        result = await db.execute(select(Workflow).where(Workflow.id == payload.workflow_id))
+    wf_id = getattr(payload, "workflow_id", None)
+    if (not nodes or len(nodes) == 0) and wf_id:
+        result = await db.execute(select(Workflow).where(Workflow.id == wf_id))
         wf = result.scalar_one_or_none()
         if wf:
             nodes = wf.nodes or []
@@ -1935,7 +1936,7 @@ async def test_workflow_node_step(
             if not node_configs and wf.node_configs:
                 node_configs = wf.node_configs
 
-    session_id = payload.session_id or payload.workflow_id or "default_session"
+    session_id = payload.session_id or wf_id or f"draft_{uuid.uuid4().hex[:12]}"
 
     return await NodeStepExecutor.execute_node_step(
         target_node_id=node_id,
@@ -1948,25 +1949,6 @@ async def test_workflow_node_step(
         dry_run=payload.dry_run,
         db=db
     )
-
-
-@router.post(
-    "/{workflow_id}/nodes/{node_id}/test-step",
-    response_model=NodeTestStepResponse,
-    status_code=status.HTTP_200_OK,
-    dependencies=[Depends(require_role("Tenant Admin", "Data Scientist", "ML Engineer", "Business User"))]
-)
-async def test_workflow_node_step_with_id(
-    workflow_id: str,
-    node_id: str,
-    payload: NodeTestStepRequest,
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Alternative route with workflow_id in path for testing a specific node.
-    """
-    payload.workflow_id = workflow_id
-    return await test_workflow_node_step(node_id=node_id, payload=payload, db=db)
 
 
 @router.get(
