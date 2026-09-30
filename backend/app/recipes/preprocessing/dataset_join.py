@@ -297,8 +297,80 @@ class DatasetJoinRecipe(BaseRecipe):
 
         how_method = "outer" if join_type in ["split", "outer"] else join_type
 
+        # Align mismatched join key data types & temporal granularities automatically
+        left_join_keys = list(left_keys)
+        right_join_keys = list(right_keys)
+        temp_cols_to_drop: List[str] = []
+
+        for i, (l_k, r_k) in enumerate(zip(left_keys, right_keys)):
+            l_s = left_df[l_k]
+            r_s = right_df[r_k]
+            l_is_dt = pd.api.types.is_datetime64_any_dtype(l_s)
+            r_is_dt = pd.api.types.is_datetime64_any_dtype(r_s)
+
+            # Case 1: Temporal join (one or both are datetime, or string date vs datetime)
+            if l_is_dt or r_is_dt:
+                l_dt = l_s if l_is_dt else pd.to_datetime(l_s, format="mixed", dayfirst=True, errors="coerce")
+                r_dt = r_s if r_is_dt else pd.to_datetime(r_s, format="mixed", dayfirst=True, errors="coerce")
+
+                if pd.api.types.is_datetime64_any_dtype(l_dt) and pd.api.types.is_datetime64_any_dtype(r_dt):
+                    l_has_time = bool((l_dt.dt.hour != 0).any() or (l_dt.dt.minute != 0).any() or (l_dt.dt.second != 0).any())
+                    r_has_time = bool((r_dt.dt.hour != 0).any() or (r_dt.dt.minute != 0).any() or (r_dt.dt.second != 0).any())
+
+                    # If one has time component and the other does not (date-only), match at day-level
+                    if l_has_time != r_has_time:
+                        temp_l = f"__temp_join_{l_k}_{i}"
+                        temp_r = f"__temp_join_{r_k}_{i}"
+                        left_df[temp_l] = l_dt.dt.normalize()
+                        right_df[temp_r] = r_dt.dt.normalize()
+                        left_join_keys[i] = temp_l
+                        right_join_keys[i] = temp_r
+                        temp_cols_to_drop.extend([temp_l, temp_r])
+                    else:
+                        if not l_is_dt:
+                            temp_l = f"__temp_join_{l_k}_{i}"
+                            left_df[temp_l] = l_dt
+                            left_join_keys[i] = temp_l
+                            temp_cols_to_drop.append(temp_l)
+                        if not r_is_dt:
+                            temp_r = f"__temp_join_{r_k}_{i}"
+                            right_df[temp_r] = r_dt
+                            right_join_keys[i] = temp_r
+                            temp_cols_to_drop.append(temp_r)
+                else:
+                    # Fallback to string-based match if datetime conversion fails
+                    temp_l = f"__temp_join_{l_k}_{i}"
+                    temp_r = f"__temp_join_{r_k}_{i}"
+                    left_df[temp_l] = l_s.astype(str)
+                    right_df[temp_r] = r_s.astype(str)
+                    left_join_keys[i] = temp_l
+                    right_join_keys[i] = temp_r
+                    temp_cols_to_drop.extend([temp_l, temp_r])
+
+            # Case 2: Numeric vs String
+            elif pd.api.types.is_numeric_dtype(l_s) != pd.api.types.is_numeric_dtype(r_s):
+                try:
+                    if pd.api.types.is_numeric_dtype(l_s):
+                        temp_r = f"__temp_join_{r_k}_{i}"
+                        right_df[temp_r] = pd.to_numeric(r_s, errors="coerce")
+                        right_join_keys[i] = temp_r
+                        temp_cols_to_drop.append(temp_r)
+                    else:
+                        temp_l = f"__temp_join_{l_k}_{i}"
+                        left_df[temp_l] = pd.to_numeric(l_s, errors="coerce")
+                        left_join_keys[i] = temp_l
+                        temp_cols_to_drop.append(temp_l)
+                except Exception:
+                    temp_l = f"__temp_join_{l_k}_{i}"
+                    temp_r = f"__temp_join_{r_k}_{i}"
+                    left_df[temp_l] = l_s.astype(str)
+                    right_df[temp_r] = r_s.astype(str)
+                    left_join_keys[i] = temp_l
+                    right_join_keys[i] = temp_r
+                    temp_cols_to_drop.extend([temp_l, temp_r])
+
         # Check if identical keys on both sides
-        is_same_keys = (left_keys == right_keys)
+        is_same_keys = (left_join_keys == right_join_keys)
 
         try:
             if is_same_keys:
@@ -306,7 +378,7 @@ class DatasetJoinRecipe(BaseRecipe):
                     left_df,
                     right_df,
                     how=how_method,
-                    on=left_keys if len(left_keys) > 1 else left_keys[0],
+                    on=left_join_keys if len(left_join_keys) > 1 else left_join_keys[0],
                     suffixes=suffix_tuple,
                     indicator=use_indicator
                 )
@@ -315,14 +387,20 @@ class DatasetJoinRecipe(BaseRecipe):
                     left_df,
                     right_df,
                     how=how_method,
-                    left_on=left_keys if len(left_keys) > 1 else left_keys[0],
-                    right_on=right_keys if len(right_keys) > 1 else right_keys[0],
+                    left_on=left_join_keys if len(left_join_keys) > 1 else left_join_keys[0],
+                    right_on=right_join_keys if len(right_join_keys) > 1 else right_join_keys[0],
                     suffixes=suffix_tuple,
                     indicator=use_indicator
                 )
         except Exception as e:
             logger.error(f"pd.merge execution failed: {str(e)}")
             raise ValueError(f"Failed to join datasets with join_type='{join_type}': {str(e)}")
+
+        if temp_cols_to_drop:
+            drop_targets = [c for c in merged_full.columns if any(c == tc or c.startswith(f"{tc}_") for tc in temp_cols_to_drop)]
+            merged_full = merged_full.drop(columns=drop_targets, errors="ignore")
+            left_df = left_df.drop(columns=[c for c in temp_cols_to_drop if c in left_df.columns], errors="ignore")
+            right_df = right_df.drop(columns=[c for c in temp_cols_to_drop if c in right_df.columns], errors="ignore")
 
         # 5. Partition Matching (Split Join Support)
         matched_mask = merged_full["_merge"] == "both"

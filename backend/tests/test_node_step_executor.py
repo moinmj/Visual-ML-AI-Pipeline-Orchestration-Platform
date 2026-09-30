@@ -487,4 +487,55 @@ async def test_join_with_reactflow_camelcase_handles():
     assert "Weekly_Sales" in resp.columns
 
 
+@pytest.mark.asyncio
+async def test_join_datetime_with_object_string_date():
+    """Verify join succeeds when left key is datetime64[ns] (with hour:min) and right key is object string."""
+    session_id = f"test_dt_obj_{uuid.uuid4().hex[:8]}"
+
+    df_retail = pd.DataFrame({
+        "InvoiceDate": pd.to_datetime(["12/1/2010 8:26", "12/2/2010 11:00"]),
+        "Sales": [10.0, 20.0]
+    })
+    df_walmart = pd.DataFrame({
+        "Date": ["01-12-2010", "02-12-2010"],
+        "Weekly_Sales": [1000.0, 2000.0]
+    })
+
+    NodeStepExecutor.save_node_output(session_id, "node_retail", "csv_loader", {"dataframe": df_retail})
+    NodeStepExecutor.save_node_output(session_id, "node_walmart", "csv_loader", {"dataframe": df_walmart})
+
+    nodes = [
+        {"id": "node_retail", "recipe_id": "csv_loader"},
+        {"id": "node_walmart", "recipe_id": "csv_loader"},
+        {
+            "id": "node_join",
+            "recipe_id": "dataset_join",
+            "config": {
+                "join_type": "left",
+                "conditions": [{"left": "InvoiceDate", "right": "Date", "operator": "="}]
+            }
+        }
+    ]
+
+    edges = [
+        {"source": "node_retail", "target": "node_join", "sourceHandle": "output", "targetHandle": "left"},
+        {"source": "node_walmart", "target": "node_join", "sourceHandle": "output", "targetHandle": "right"}
+    ]
+
+    resp = await NodeStepExecutor.execute_node_step(
+        target_node_id="node_join",
+        nodes=nodes,
+        edges=edges,
+        session_id=session_id
+    )
+
+    assert resp.success is True, f"Failed: {resp.error_message}"
+    assert resp.status == "SUCCESS"
+    assert resp.row_count == 2
+    assert "Weekly_Sales" in resp.columns
+    # Ensure temporary columns were dropped cleanly
+    assert not any(c.startswith("__temp_join_") for c in resp.columns)
+
+
+
 
