@@ -251,11 +251,10 @@ class WorkflowInferSchemaResponse(BaseModel):
 
 
 class NodeTestStepRequest(BaseModel):
-    session_id: Optional[str] = Field(None, description="Test session ID for caching intermediate node results")
-    workflow_id: Optional[str] = Field(None, description="Workflow ID if executing a saved workflow")
-    nodes: Optional[List[Dict[str, Any]]] = Field(None, description="List of workflow nodes")
-    edges: Optional[List[Dict[str, Any]]] = Field(None, description="List of workflow edges")
-    node_configs: Optional[Dict[str, Any]] = Field(None, description="Per-node configurations")
+    nodes: List[Dict[str, Any]] = Field(default_factory=list, description="Visual canvas nodes")
+    edges: List[Dict[str, Any]] = Field(default_factory=list, description="DAG edges connecting nodes")
+    node_configs: Dict[str, Any] = Field(default_factory=dict, description="Per-node parameter configurations")
+    session_id: Optional[str] = Field(None, description="Optional session ID to link multi-step test caches (auto-generated if omitted)")
     sample_size: Optional[int] = Field(None, description="Optional row limit for fast testing of large datasets")
     auto_run_ancestors: bool = Field(True, description="Automatically execute and cache unrun ancestor nodes")
     dry_run: bool = Field(False, description="Simulate execution without external side effects (emails, messages)")
@@ -263,6 +262,7 @@ class NodeTestStepRequest(BaseModel):
 
 class NodeTestStepResponse(BaseModel):
     success: bool = True
+    session_id: Optional[str] = Field(None, description="Active session ID used for caching")
     node_id: str
     recipe_id: str
     recipe_name: str = "Component"

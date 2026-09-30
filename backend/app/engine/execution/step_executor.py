@@ -510,6 +510,7 @@ class NodeStepExecutor:
 
                 response = NodeTestStepResponse(
                     success=True,
+                    session_id=session_id,
                     node_id=nid,
                     recipe_id=r_id,
                     recipe_name=getattr(recipe, "name", r_id),
