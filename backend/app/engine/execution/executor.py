@@ -291,7 +291,15 @@ class DAGExecutor:
                 # Handle handle-aware assignment (e.g. source_handle and target_handle)
                 for edge in incoming_edges:
                     p_out = node_outputs.get(edge.source, {})
-                    sh = (getattr(edge, "source_handle", None) or "").lower().strip()
+                    sh = (
+                        getattr(edge, "sourceHandle", None)
+                        or getattr(edge, "source_handle", None)
+                        or getattr(edge, "source_port", None)
+                        or (edge.get("sourceHandle") if isinstance(edge, dict) else None)
+                        or (edge.get("source_handle") if isinstance(edge, dict) else None)
+                        or (edge.get("source_port") if isinstance(edge, dict) else None)
+                        or ""
+                    ).lower().strip()
 
                     # Handle train/test partition routing based on source_handle
                     if sh in ["output_2", "test_data", "test", "te"]:
@@ -331,7 +339,15 @@ class DAGExecutor:
                         p_df = p_out.get("dataframe")
 
                     if isinstance(p_df, pd.DataFrame):
-                        th = (getattr(edge, "target_handle", None) or "").lower().strip()
+                        th = (
+                            getattr(edge, "targetHandle", None)
+                            or getattr(edge, "target_handle", None)
+                            or getattr(edge, "target_port", None)
+                            or (edge.get("targetHandle") if isinstance(edge, dict) else None)
+                            or (edge.get("target_handle") if isinstance(edge, dict) else None)
+                            or (edge.get("target_port") if isinstance(edge, dict) else None)
+                            or ""
+                        ).lower().strip()
                         if th in ["left", "left_dataset", "df_left", "upstream_left"]:
                             node_inputs["left_dataframe"] = p_df
                             node_inputs["left_parent_id"] = edge.source

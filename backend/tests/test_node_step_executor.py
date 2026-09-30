@@ -437,3 +437,54 @@ async def test_api_test_step_datetime_serialization():
         assert isinstance(preview_data["data"][0]["InvoiceDate"], str)
 
 
+@pytest.mark.asyncio
+async def test_join_with_reactflow_camelcase_handles():
+    """Verify join assigns left and right dataframes accurately when ReactFlow sends camelCase targetHandle."""
+    session_id = f"test_camelcase_{uuid.uuid4().hex[:8]}"
+
+    df_retail = pd.DataFrame({
+        "InvoiceDate": ["2010-12-01", "2010-12-02"],
+        "UnitPrice": [2.5, 3.5]
+    })
+    df_walmart = pd.DataFrame({
+        "Date": ["2010-12-01", "2010-12-02"],
+        "Weekly_Sales": [10000.0, 20000.0]
+    })
+
+    NodeStepExecutor.save_node_output(session_id, "node_retail", "csv_loader", {"dataframe": df_retail})
+    NodeStepExecutor.save_node_output(session_id, "node_walmart", "csv_loader", {"dataframe": df_walmart})
+
+    nodes = [
+        {"id": "node_retail", "recipe_id": "csv_loader"},
+        {"id": "node_walmart", "recipe_id": "csv_loader"},
+        {
+            "id": "node_join",
+            "recipe_id": "dataset_join",
+            "config": {
+                "join_type": "inner",
+                "conditions": [{"left": "InvoiceDate", "right": "Date", "operator": "="}]
+            }
+        }
+    ]
+
+    # Note reverse order in edges and upstreamIds: walmart is first in list, but retail targets handle "left"
+    edges = [
+        {"source": "node_walmart", "target": "node_join", "sourceHandle": "joined", "targetHandle": "right"},
+        {"source": "node_retail", "target": "node_join", "sourceHandle": "output", "targetHandle": "left"}
+    ]
+
+    resp = await NodeStepExecutor.execute_node_step(
+        target_node_id="node_join",
+        nodes=nodes,
+        edges=edges,
+        session_id=session_id
+    )
+
+    assert resp.success is True, f"Failed: {resp.error_message}"
+    assert resp.status == "SUCCESS"
+    assert resp.row_count == 2
+    assert "InvoiceDate" in resp.columns
+    assert "Weekly_Sales" in resp.columns
+
+
+

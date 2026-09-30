@@ -428,7 +428,12 @@ class NodeStepExecutor:
                 for edge in incoming_edges:
                     src_id = edge.get("source")
                     p_out = parent_outputs_map.get(src_id, {})
-                    sh = (edge.get("source_handle") or "").lower().strip()
+                    sh = (
+                        edge.get("sourceHandle")
+                        or edge.get("source_handle")
+                        or edge.get("source_port")
+                        or ""
+                    ).lower().strip()
 
                     # Train/test partition routing
                     if sh in ["output_2", "test_data", "test", "te"]:
@@ -470,7 +475,12 @@ class NodeStepExecutor:
                         p_df = p_out.get("dataframe")
 
                     if isinstance(p_df, pd.DataFrame):
-                        th = (edge.get("target_handle") or "").lower().strip()
+                        th = (
+                            edge.get("targetHandle")
+                            or edge.get("target_handle")
+                            or edge.get("target_port")
+                            or ""
+                        ).lower().strip()
                         if th in ["left", "left_dataset", "df_left", "upstream_left"]:
                             node_inputs["left_dataframe"] = p_df
                             node_inputs["left_parent_id"] = src_id
