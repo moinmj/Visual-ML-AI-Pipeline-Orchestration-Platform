@@ -2,7 +2,7 @@ import time
 import re
 import traceback
 from typing import Dict, Any, List, Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 import pandas as pd
 import numpy as np
 from pydantic import BaseModel, Field
@@ -124,24 +124,30 @@ class WorkflowExecutionResult(BaseModel):
 
 def make_json_safe(obj: Any) -> Any:
     """
-    Recursively converts arbitrary Python/ML objects (DataFrames, ndarrays, numpy scalars,
+    Recursively converts arbitrary Python/ML objects (DataFrames, Timestamps, ndarrays, numpy scalars,
     models) into standard, JSON-serializable primitives for FastAPI Pydantic responses.
     """
     if obj is None:
         return None
+    if isinstance(obj, (pd.Timestamp, datetime, date)):
+        return obj.isoformat()
     if isinstance(obj, pd.DataFrame):
-        clean_df = obj.replace({float("nan"): None, float("inf"): None, float("-inf"): None})
+        clean_df = obj.copy()
+        for c in clean_df.select_dtypes(include=["datetime", "datetimetz"]).columns:
+            clean_df[c] = clean_df[c].dt.strftime("%Y-%m-%d %H:%M:%S")
+        clean_df = clean_df.replace({float("nan"): None, float("inf"): None, float("-inf"): None})
+        clean_df = clean_df.where(pd.notnull(clean_df), None)
         return {
             "type": "DataFrame",
             "shape": list(obj.shape),
             "columns": list(obj.columns),
-            "records": clean_df.to_dict(orient="records")
+            "records": [make_json_safe(r) for r in clean_df.to_dict(orient="records")]
         }
     elif isinstance(obj, pd.Series):
         clean_s = obj.replace({float("nan"): None, float("inf"): None, float("-inf"): None})
-        return clean_s.to_dict()
+        return {str(k): make_json_safe(v) for k, v in clean_s.to_dict().items()}
     elif isinstance(obj, np.ndarray):
-        return obj.tolist()
+        return [make_json_safe(v) for v in obj.tolist()]
     elif isinstance(obj, (np.bool_, bool)):
         return bool(obj)
     elif isinstance(obj, (np.integer, int)):

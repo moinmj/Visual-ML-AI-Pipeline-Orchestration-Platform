@@ -375,3 +375,65 @@ async def test_api_test_step_endpoint():
         assert del_resp.status_code == 200
         assert del_resp.json()["success"] is True
 
+
+@pytest.mark.asyncio
+async def test_api_test_step_datetime_serialization():
+    """Test executing DataTypeConverter to datetime and verifying Timestamp objects are JSON serialized without error."""
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=auth_headers()) as client:
+        session_id = f"test_dt_session_{uuid.uuid4().hex[:8]}"
+
+        df_source = pd.DataFrame({
+            "InvoiceDate": ["12/1/2010 8:26", "12/1/2010 8:34", "12/2/2010 11:20"],
+            "Price": [2.55, 3.39, 4.25]
+        })
+        NodeStepExecutor.save_node_output(session_id, "loader_dt", "csv_loader", {"dataframe": df_source})
+
+        payload = {
+            "session_id": session_id,
+            "nodes": [
+                {"id": "loader_dt", "recipe_id": "csv_loader"},
+                {
+                    "id": "converter_dt",
+                    "recipe_id": "data_type_converter",
+                    "config": {
+                        "conversions": {"InvoiceDate": "datetime"},
+                        "datetime_format": "%m/%d/%Y %H:%M",
+                        "errors": "coerce"
+                    }
+                }
+            ],
+            "edges": [
+                {"source": "loader_dt", "target": "converter_dt", "source_handle": "output", "target_handle": "input"}
+            ],
+            "node_configs": {
+                "converter_dt": {
+                    "conversions": {"InvoiceDate": "datetime"},
+                    "datetime_format": "%m/%d/%Y %H:%M",
+                    "errors": "coerce"
+                }
+            }
+        }
+
+        resp = await client.post(
+            "/api/v1/workflows/nodes/converter_dt/test-step",
+            json=payload
+        )
+        assert resp.status_code == 200, f"Response error: {resp.text}"
+        data = resp.json()
+        assert data["success"] is True
+        assert data["status"] == "SUCCESS"
+        assert "InvoiceDate" in data["columns"]
+        assert len(data["preview_rows"]) == 3
+        # Ensure timestamp was serialized as a string in preview rows
+        assert isinstance(data["preview_rows"][0]["InvoiceDate"], str)
+
+        # Test preview table endpoint
+        preview_resp = await client.get(
+            f"/api/v1/workflows/sessions/{session_id}/nodes/converter_dt/preview?page=1&limit=10"
+        )
+        assert preview_resp.status_code == 200, f"Preview error: {preview_resp.text}"
+        preview_data = preview_resp.json()
+        assert preview_data["total_rows"] == 3
+        assert isinstance(preview_data["data"][0]["InvoiceDate"], str)
+
+

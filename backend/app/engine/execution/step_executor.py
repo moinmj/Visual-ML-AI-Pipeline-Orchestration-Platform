@@ -155,8 +155,12 @@ class NodeStepExecutor:
         preview_rows = []
         if isinstance(primary_df, pd.DataFrame):
             try:
-                clean_head = primary_df.head(10).replace({float("nan"): None, float("inf"): None, float("-inf"): None})
-                preview_rows = clean_head.to_dict(orient="records")
+                clean_head = primary_df.head(10).copy()
+                for c in clean_head.select_dtypes(include=["datetime", "datetimetz"]).columns:
+                    clean_head[c] = clean_head[c].dt.strftime("%Y-%m-%d %H:%M:%S")
+                clean_head = clean_head.replace({float("nan"): None, float("inf"): None, float("-inf"): None})
+                clean_head = clean_head.where(pd.notnull(clean_head), None)
+                preview_rows = [make_json_safe(r) for r in clean_head.to_dict(orient="records")]
             except Exception:
                 pass
 
@@ -182,7 +186,7 @@ class NodeStepExecutor:
 
         meta_file = sdir / f"node_{node_id}_meta.json"
         with open(meta_file, "w", encoding="utf-8") as f:
-            json.dump(meta, f, indent=2)
+            json.dump(make_json_safe(meta), f, indent=2, default=str)
 
         return meta
 
@@ -360,6 +364,7 @@ class NodeStepExecutor:
                 err_msg = f"Recipe '{r_id}' not found in registry: {str(e)}"
                 return None, NodeTestStepResponse(
                     success=False,
+                    session_id=session_id,
                     node_id=nid,
                     recipe_id=r_id,
                     status="FAILED",
@@ -538,6 +543,7 @@ class NodeStepExecutor:
                 )
                 return None, NodeTestStepResponse(
                     success=False,
+                    session_id=session_id,
                     node_id=nid,
                     recipe_id=r_id,
                     recipe_name=getattr(recipe, "name", r_id),
@@ -566,6 +572,7 @@ class NodeStepExecutor:
 
         return NodeTestStepResponse(
             success=False,
+            session_id=session_id,
             node_id=target_node_id,
             recipe_id=str(node_map[target_node_id].get("recipe_id", "")),
             status="FAILED",
