@@ -12,9 +12,12 @@ from backend.app.recommendation.recommender import AIRecommender
 from backend.app.recommendation.llm_recommender import LLMRecommender
 from backend.app.recipes.base.registry import recipe_registry
 from backend.app.core.config import settings
+from backend.app.core.security import get_current_user
 from backend.app.workflows.router import extract_workflow_id_from_context
 
-router = APIRouter(prefix="/recommend", tags=["AI Recommendation & Auto-Architect"])
+# Every route requires a valid Bearer token; dataset/workflow lookups below are
+# automatically limited to the caller's tenant by the DB tenant guard.
+router = APIRouter(prefix="/recommend", tags=["AI Recommendation & Auto-Architect"], dependencies=[Depends(get_current_user)])
 
 
 class RecommendationRequest(BaseModel):
@@ -54,7 +57,7 @@ async def recommend_pipeline(
         if ds and ds.storage_path:
             dataset_name = ds.name
             try:
-                df = storage_manager.read_dataframe(ds.storage_path)
+                df = storage_manager.read_dataframe(ds.storage_path, ds.tenant_id)
             except Exception as e:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,

@@ -8,6 +8,12 @@ class Dataset(Base):
     __tablename__ = "datasets"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+
+    # Owning tenant (taken from the caller's token, never from the request).
+    # Every read/list/delete filters on it. Rows created before tenant scoping
+    # existed have NULL here, so they match no tenant and are invisible to all.
+    tenant_id = Column(Integer, nullable=True, index=True)
+
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
     file_name = Column(String(255), nullable=False)

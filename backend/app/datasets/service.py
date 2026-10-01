@@ -19,6 +19,7 @@ class DatasetService:
     @staticmethod
     async def upload_dataset(
         db: AsyncSession,
+        tenant_id: int,
         file: UploadFile,
         name: Optional[str] = None,
         description: Optional[str] = None
@@ -41,21 +42,22 @@ class DatasetService:
         # 1. Save file to storage (returns the local path, or an s3://bucket/key
         #    Ozone path when STORAGE_BACKEND="ozone" -- must be used from here on,
         #    not the raw key we asked it to save under).
-        storage_path = await storage_manager.save_file(content, storage_rel_path)
+        storage_path = await storage_manager.save_file(content, storage_rel_path, tenant_id)
 
         # 2. Read DataFrame and perform automatic statistical profiling
         try:
-            df = storage_manager.read_dataframe(storage_path)
+            df = storage_manager.read_dataframe(storage_path, tenant_id)
             profile_data = DataProfiler.profile_dataframe(df)
         except Exception as e:
             # Clean up on failure
-            storage_manager.delete_file(storage_path)
+            storage_manager.delete_file(storage_path, tenant_id)
             logger.error(f"Error parsing uploaded tabular file: {e}")
             raise ValidationException(f"Failed to parse and profile dataset: {str(e)}")
 
         # 3. Create DB Record
         dataset = Dataset(
             id=dataset_id,
+            tenant_id=tenant_id,
             name=dataset_name,
             description=description,
             file_name=file_name,
@@ -75,21 +77,35 @@ class DatasetService:
         return dataset
 
     @staticmethod
-    async def list_datasets(db: AsyncSession) -> List[Dataset]:
-        result = await db.execute(select(Dataset).order_by(Dataset.created_at.desc()))
+    async def list_datasets(db: AsyncSession, tenant_id: int) -> List[Dataset]:
+        # Only this tenant's datasets, and only those stored inside the tenant's
+        # folder in Ozone (e.g. s3://bucket/ml-workflow/t1/...).
+        from backend.app.core.config import settings
+        from backend.app.infrastructure.storage.ozone_client import tenant_prefix
+        folder_path = f"s3://{settings.OZONE_BUCKET}/{tenant_prefix(tenant_id)}"
+        result = await db.execute(
+            select(Dataset)
+            .where(Dataset.tenant_id == tenant_id)
+            .where(Dataset.storage_path.startswith(folder_path, autoescape=True))
+            .order_by(Dataset.created_at.desc())
+        )
         return list(result.scalars().all())
 
     @staticmethod
-    def browse_ozone(prefix: str = "") -> List[Dict[str, Any]]:
+    def browse_ozone(tenant_id: int, prefix: str = "") -> List[Dict[str, Any]]:
         """
-        Lists objects already in the Ozone datalake bucket, so the user can pick
+        Lists objects in the caller's tenant folder in Ozone, so the user can pick
         an existing file instead of uploading a new one.
         """
-        return storage_manager.list_ozone_objects(prefix=prefix)
+        try:
+            return storage_manager.list_ozone_objects(tenant_id=tenant_id, prefix=prefix)
+        except ValueError as e:
+            raise ValidationException(str(e))
 
     @staticmethod
     async def register_from_ozone(
         db: AsyncSession,
+        tenant_id: int,
         ozone_key: str,
         name: Optional[str] = None,
         description: Optional[str] = None
@@ -103,13 +119,16 @@ class DatasetService:
             raise ValidationException(f"Unsupported file format: '.{ext}'. Allowed: CSV, XLSX, JSON, Parquet.")
 
         from backend.app.core.config import settings
+        from backend.app.infrastructure.storage.ozone_client import is_in_tenant_prefix, tenant_prefix
+        if not is_in_tenant_prefix(ozone_key, tenant_id):
+            raise ValidationException(f"Only files under '{tenant_prefix(tenant_id)}' can be registered.")
         storage_path = f"s3://{settings.OZONE_BUCKET}/{ozone_key}"
         dataset_id = str(uuid.uuid4())
         file_name = ozone_key.rsplit("/", 1)[-1]
         dataset_name = name or file_name.rsplit(".", 1)[0]
 
         try:
-            df = storage_manager.read_dataframe(storage_path)
+            df = storage_manager.read_dataframe(storage_path, tenant_id)
             profile_data = DataProfiler.profile_dataframe(df)
         except Exception as e:
             logger.error(f"Error reading/profiling Ozone object '{ozone_key}': {e}")
@@ -120,6 +139,7 @@ class DatasetService:
 
         dataset = Dataset(
             id=dataset_id,
+            tenant_id=tenant_id,
             name=dataset_name,
             description=description,
             file_name=file_name,
@@ -138,17 +158,21 @@ class DatasetService:
         return dataset
 
     @staticmethod
-    async def get_dataset(db: AsyncSession, dataset_id: str) -> Dataset:
-        result = await db.execute(select(Dataset).where(Dataset.id == dataset_id))
+    async def get_dataset(db: AsyncSession, dataset_id: str, tenant_id: int) -> Dataset:
+        # A dataset that belongs to another tenant is reported as "not found" (404),
+        # so its existence is never revealed to the caller.
+        result = await db.execute(
+            select(Dataset).where(Dataset.id == dataset_id, Dataset.tenant_id == tenant_id)
+        )
         dataset = result.scalar_one_or_none()
         if not dataset:
             raise NotFoundException("Dataset", dataset_id)
         return dataset
 
     @staticmethod
-    async def get_preview(db: AsyncSession, dataset_id: str, limit: int = 10, offset: int = 0) -> Dict[str, Any]:
-        dataset = await DatasetService.get_dataset(db, dataset_id)
-        df = storage_manager.read_dataframe(dataset.storage_path)
+    async def get_preview(db: AsyncSession, dataset_id: str, tenant_id: int, limit: int = 10, offset: int = 0) -> Dict[str, Any]:
+        dataset = await DatasetService.get_dataset(db, dataset_id, tenant_id)
+        df = storage_manager.read_dataframe(dataset.storage_path, tenant_id)
 
         total_rows = int(len(df))
         start_idx = max(0, offset)
@@ -187,9 +211,9 @@ class DatasetService:
         }
 
     @staticmethod
-    async def delete_dataset(db: AsyncSession, dataset_id: str) -> bool:
-        dataset = await DatasetService.get_dataset(db, dataset_id)
-        storage_manager.delete_file(dataset.storage_path)
+    async def delete_dataset(db: AsyncSession, dataset_id: str, tenant_id: int) -> bool:
+        dataset = await DatasetService.get_dataset(db, dataset_id, tenant_id)
+        storage_manager.delete_file(dataset.storage_path, tenant_id)
         await db.delete(dataset)
         await db.commit()
         logger.info(f"Deleted dataset {dataset_id}")

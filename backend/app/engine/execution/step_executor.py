@@ -41,7 +41,9 @@ class NodeStepExecutor:
         clean_sid = "".join(c for c in session_id if c.isalnum() or c in ("-", "_")).strip()
         if not clean_sid:
             clean_sid = "default_session"
-        p = storage_manager.get_absolute_path(f"test_sessions/{clean_sid}")
+        # Per-tenant folder: the same session_id in another tenant is a different session.
+        from backend.app.core.tenant_context import tenant_cache_dir
+        p = storage_manager.get_absolute_path(f"{tenant_cache_dir()}/test_sessions/{clean_sid}")
         p.mkdir(parents=True, exist_ok=True)
         return p
 
@@ -258,12 +260,16 @@ class NodeStepExecutor:
         sample_size: Optional[int] = None,
         auto_run_ancestors: bool = True,
         dry_run: bool = False,
-        db: Optional[AsyncSession] = None
+        db: Optional[AsyncSession] = None,
+        tenant_id: Optional[int] = None
     ) -> NodeTestStepResponse:
         """
         Executes a single visual canvas node in isolation or auto-resolves unexecuted ancestors.
         Returns immediate schema, preview rows, metrics, and execution diagnostics.
         """
+        from backend.app.core.tenant_context import get_current_tenant_id, with_tenant_config
+        if tenant_id is None:
+            tenant_id = get_current_tenant_id()
         session_id = session_id or "default_session"
         node_configs = node_configs or {}
         node_map: Dict[str, Dict[str, Any]] = {str(n.get("id")): n for n in nodes if n.get("id")}
@@ -393,20 +399,22 @@ class NodeStepExecutor:
                         dataset_id = merged_config["dataset"]
                     if dataset_id and db and "dataframe" not in node_inputs:
                         try:
-                            res = await db.execute(select(Dataset).where(Dataset.id == str(dataset_id)))
+                            ds_query = select(Dataset).where(Dataset.id == str(dataset_id))
+                            if tenant_id is not None:
+                                # Only the caller's own tenant's datasets can be loaded.
+                                ds_query = ds_query.where(Dataset.tenant_id == tenant_id)
+                            res = await db.execute(ds_query)
                             ds_obj = res.scalar_one_or_none()
                             if ds_obj and ds_obj.storage_path:
-                                abs_p = storage_manager.get_absolute_path(ds_obj.storage_path)
-                                if abs_p.exists():
-                                    if str(abs_p).endswith(".csv"):
-                                        load_df = pd.read_csv(abs_p, nrows=sample_size if sample_size else None)
-                                    elif str(abs_p).endswith(".parquet"):
-                                        load_df = pd.read_parquet(abs_p)
-                                        if sample_size:
-                                            load_df = load_df.head(sample_size)
-                                    else:
-                                        load_df = pd.DataFrame()
-                                    node_inputs["dataframe"] = load_df
+                                # Datasets live in Ozone (s3://bucket/ml-workflow/t<id>/...);
+                                # read_dataframe also enforces the tenant-folder check.
+                                load_df = storage_manager.read_dataframe(
+                                    ds_obj.storage_path,
+                                    tenant_id if tenant_id is not None else ds_obj.tenant_id
+                                )
+                                if sample_size:
+                                    load_df = load_df.head(sample_size)
+                                node_inputs["dataframe"] = load_df
                         except Exception as ex:
                             logger.warning(f"Could not preload dataset '{dataset_id}': {ex}")
             else:
@@ -509,7 +517,7 @@ class NodeStepExecutor:
             try:
                 # Session Context for model/scaler propagation
                 session_context = dict(node_inputs)
-                outputs = recipe.execute(inputs=node_inputs, config=merged_config, context=session_context)
+                outputs = recipe.execute(inputs=node_inputs, config=with_tenant_config(merged_config), context=session_context)
                 duration_ms = round((time.time() - n_start) * 1000.0, 2)
 
                 # Save output to session cache

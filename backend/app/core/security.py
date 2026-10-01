@@ -17,6 +17,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import ExpiredSignatureError, JWTError, jwt
 
 from backend.app.core.config import settings
+from backend.app.core.tenant_context import set_current_tenant_id
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -86,11 +87,17 @@ def _decode_token(token: str) -> TokenData:
         raise credentials_error
 
     sub = payload.get("sub") or payload.get("user_id") or payload.get("id") or payload.get("email") or payload.get("username")
-    tenant_id = payload.get("tenant_id") or payload.get("tenantId") or payload.get("tenant") or 1
+    # No fallback tenant: a token without a tenant claim is rejected, otherwise
+    # every such token would silently land in (and see the data of) tenant 1.
+    tenant_id = payload.get("tenant_id") or payload.get("tenantId") or payload.get("tenant")
     roles = payload.get("roles", []) or payload.get("role", [])
     perms = payload.get("permissions", []) or payload.get("perms", [])
 
-    if sub is None:
+    if sub is None or tenant_id is None:
+        raise credentials_error
+    try:
+        tenant_id = int(tenant_id)
+    except (TypeError, ValueError):
         raise credentials_error
 
     # Reject refresh tokens used as access tokens.
@@ -103,13 +110,13 @@ def _decode_token(token: str) -> TokenData:
 
     return TokenData(
         sub=str(sub),
-        tenant_id=int(tenant_id),
+        tenant_id=tenant_id,
         roles=roles if isinstance(roles, list) else [roles],
         permissions=perms if isinstance(perms, list) else [],
     )
 
 
-def get_current_user(
+async def get_current_user(
     credentials: Annotated[Optional[HTTPAuthorizationCredentials], Depends(_bearer)],
 ) -> TokenData:
     """FastAPI dependency: validates the Bearer token, returns the caller.
@@ -128,7 +135,12 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    return _decode_token(credentials.credentials)
+    user = _decode_token(credentials.credentials)
+    # Make the caller's tenant available to the DB tenant guard, job manager and
+    # executors for the rest of this request. (async on purpose: a sync
+    # dependency runs in a worker thread and the value would not reach the endpoint.)
+    set_current_tenant_id(user.tenant_id)
+    return user
 
 
 def require_role(*allowed_roles: str):

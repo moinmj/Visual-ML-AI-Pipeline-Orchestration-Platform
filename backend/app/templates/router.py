@@ -1,8 +1,10 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
+from backend.app.core.security import get_current_user
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
 
-router = APIRouter(prefix="/templates", tags=["Pipeline Templates & Blueprints"])
+# Requires a valid Bearer token (no tenant data here, but no anonymous access either).
+router = APIRouter(prefix="/templates", tags=["Pipeline Templates & Blueprints"], dependencies=[Depends(get_current_user)])
 
 
 TEMPLATES_CATALOG = {

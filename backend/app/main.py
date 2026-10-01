@@ -21,6 +21,8 @@ from backend.app.infrastructure.database.tenant_session import init_tenant_db
 import backend.app.datasets.models
 import backend.app.workflows.models
 import backend.app.tenant_data.models
+# Tenant isolation for workflows / executions / datasets (registers SQLAlchemy hooks).
+import backend.app.infrastructure.database.tenant_guard  # noqa: F401
 
 # Import routers
 from backend.app.datasets.router import router as datasets_router

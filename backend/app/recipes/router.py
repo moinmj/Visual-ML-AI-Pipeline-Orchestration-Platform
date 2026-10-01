@@ -1,10 +1,12 @@
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
+from backend.app.core.security import get_current_user
 from typing import List, Optional, Dict, Any
 from backend.app.recipes.base.recipe import RecipeMetadata
 from backend.app.recipes.base.registry import recipe_registry
 import backend.app.recipes  # Trigger registration
 
-router = APIRouter(prefix="/recipes", tags=["Recipes & Components"])
+# Requires a valid Bearer token (no tenant data here, but no anonymous access either).
+router = APIRouter(prefix="/recipes", tags=["Recipes & Components"], dependencies=[Depends(get_current_user)])
 
 
 @router.get("/", response_model=List[RecipeMetadata])
