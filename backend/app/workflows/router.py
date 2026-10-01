@@ -48,10 +48,36 @@ from backend.app.engine.inference import (
     CombinedDatasetResponse
 )
 from backend.app.core.security import get_current_user, require_role, require_permission
+from backend.app.core.tenant_context import get_current_tenant_id, tenant_cache_dir
 
 from backend.app.datasets.models import Dataset
 
-router = APIRouter(prefix="/workflows", tags=["Workflows & DAG Execution"])
+# Tenant isolation: every route needs a valid Bearer token (router-level dependency),
+# and the caller's tenant (from the token) is applied automatically to every
+# Workflow / WorkflowExecution / Dataset query by the DB tenant guard
+# (infrastructure/database/tenant_guard.py). Another tenant's workflow therefore
+# behaves exactly like a non-existent one (404). Jobs, live models and temp
+# caches are separated per tenant as well.
+router = APIRouter(
+    prefix="/workflows",
+    tags=["Workflows & DAG Execution"],
+    dependencies=[Depends(get_current_user)],
+)
+
+
+async def _unused_id(db: AsyncSession, model, wanted_id: Optional[str]) -> str:
+    """
+    Returns wanted_id if no row of `model` (in ANY tenant) uses it, otherwise a
+    fresh UUID. IDs can come from the client, so a new workflow/execution must
+    never collide with - or reveal - another tenant's record.
+    """
+    if wanted_id:
+        taken = await db.execute(
+            select(model.id).where(model.id == str(wanted_id)).execution_options(skip_tenant_filter=True)
+        )
+        if taken.first() is None:
+            return str(wanted_id)
+    return str(uuid.uuid4())
 
 
 async def resolve_workflow_dataset(
@@ -556,6 +582,8 @@ async def record_workflow_execution_history(
     ex_row = existing.scalar_one_or_none()
     if ex_row:
         return ex_row
+    # Not ours: if another tenant already uses this ID, record under a fresh one.
+    execution_id = await _unused_id(db, WorkflowExecution, execution_id)
 
     # Determine next auto-incrementing version number for this workflow
     max_ver_stmt = select(func.max(WorkflowExecution.version_number)).where(WorkflowExecution.workflow_id == workflow_id)
@@ -575,7 +603,7 @@ async def record_workflow_execution_history(
         ):
             prior_ex = existing_wf_rec.last_execution
             prior_rec = WorkflowExecution(
-                id=prior_ex.get("execution_id"),
+                id=await _unused_id(db, WorkflowExecution, prior_ex.get("execution_id")),
                 workflow_id=workflow_id,
                 version_number=1,
                 run_label="Run #1",
@@ -741,7 +769,8 @@ async def save_workflow(
         wf.deleted_at = None
         wf.updated_at = datetime.now(timezone.utc)
     else:
-        # Create new
+        # Create new (never reuse an ID that exists in another tenant)
+        target_id = await _unused_id(db, Workflow, target_id)
         wf = Workflow(
             id=target_id,
             name=payload.name,
@@ -1068,7 +1097,8 @@ async def upsert_workflow(
         wf.deleted_at = None
         wf.updated_at = datetime.now(timezone.utc)
     else:
-        # Create new
+        # Create new (never reuse an ID that exists in another tenant)
+        target_id = await _unused_id(db, Workflow, target_id)
         wf = Workflow(
             id=target_id,
             name=payload.name or "Untitled Pipeline",
@@ -1420,6 +1450,8 @@ async def execute_workflow(
             wf.deleted_at = None
             wf.updated_at = datetime.now(timezone.utc)
         else:
+            # never reuse an ID that exists in another tenant
+            target_id = await _unused_id(db, Workflow, target_id)
             wf = Workflow(
                 id=target_id,
                 name=workflow.name or workflow_name or "Auto-Saved Pipeline",
@@ -1677,7 +1709,8 @@ async def _get_execution_node_dataframe(
 ) -> Optional[pd.DataFrame]:
     """Helper to locate, load, or reconstruct any node's full DataFrame for an execution run."""
     from backend.app.infrastructure.storage.storage_manager import storage_manager
-    p_rel = f"executions/{execution_id}/{node_id}.parquet"
+    # Cache lives in the caller's tenant folder, so another tenant's execution_id finds nothing here.
+    p_rel = f"{tenant_cache_dir()}/executions/{execution_id}/{node_id}.parquet"
     p_abs = storage_manager.get_absolute_path(p_rel)
     if p_abs.exists():
         try:
@@ -1825,13 +1858,16 @@ async def export_workflow_node_dataset(
 
     rel_storage_path = f"datasets/{new_ds_id}_{file_name}"
     csv_bytes = df_clean.to_csv(index=False).encode("utf-8")
-    storage_path = await storage_manager.save_file(csv_bytes, rel_storage_path)
+    # Stored in Ozone under ml-workflow/t<caller's tenant>/datasets/...
+    tenant_id = get_current_tenant_id()
+    storage_path = await storage_manager.save_file(csv_bytes, rel_storage_path, tenant_id)
     file_size_bytes = len(csv_bytes)
 
     profile_data = DataProfiler.profile_dataframe(df_clean)
 
     new_dataset = Dataset(
         id=new_ds_id,
+        tenant_id=tenant_id,
         name=ds_name,
         description=description or f"Exported from workflow node '{target_node_id}'",
         file_name=file_name,
@@ -2317,7 +2353,7 @@ async def list_workflow_history(
             last_ex = wf.last_execution
             norm_status = normalize_history_status(last_ex.get("status"))
             synth_rec = WorkflowExecution(
-                id=last_ex.get("execution_id") or str(uuid.uuid4()),
+                id=await _unused_id(db, WorkflowExecution, last_ex.get("execution_id")),
                 workflow_id=workflow_id,
                 version_number=1,
                 run_label="Run #1",

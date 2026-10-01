@@ -65,6 +65,41 @@ async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
+    # create_all never alters an existing table, so add datasets.tenant_id to databases
+    # created before tenant scoping. Idempotent; existing rows keep NULL (visible to no tenant).
+    try:
+        async with engine.begin() as conn:
+            if _IS_SQLITE:
+                await conn.execute(text("ALTER TABLE datasets ADD COLUMN tenant_id INTEGER"))
+            else:
+                await conn.execute(text("ALTER TABLE datasets ADD COLUMN IF NOT EXISTS tenant_id INTEGER"))
+    except Exception:
+        pass  # column already exists (SQLite has no IF NOT EXISTS)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_datasets_tenant_id ON datasets (tenant_id)"))
+    except Exception:
+        pass
+
+    # Same for workflows / workflow_executions (tenant-scoped workbooks). Existing rows
+    # keep NULL and are visible to no tenant until assigned, e.g.:
+    #   UPDATE workflows SET tenant_id = 1 WHERE tenant_id IS NULL;
+    #   UPDATE workflow_executions SET tenant_id = 1 WHERE tenant_id IS NULL;
+    for table in ("workflows", "workflow_executions"):
+        try:
+            async with engine.begin() as conn:
+                if _IS_SQLITE:
+                    await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN tenant_id INTEGER"))
+                else:
+                    await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS tenant_id INTEGER"))
+        except Exception:
+            pass  # column already exists
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text(f"CREATE INDEX IF NOT EXISTS ix_{table}_tenant_id ON {table} (tenant_id)"))
+        except Exception:
+            pass
+
     # Legacy SQLite-only column back-fill (databases created before soft-delete support).
     # Not needed on PostgreSQL: create_all builds the full schema on a fresh database.
     if _IS_SQLITE:

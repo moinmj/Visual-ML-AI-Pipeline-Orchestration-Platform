@@ -368,8 +368,16 @@ class DatasetJoinRecipe(BaseRecipe):
         save_as_dataset = (raw_save.strip().lower() in ("true", "1", "yes")) if isinstance(raw_save, str) else bool(raw_save)
         saved_dataset_info = None
 
-        if save_as_dataset and len(final_df) > 0:
+        # The tenant comes from the workflow run (injected by the executor), never
+        # from a default: without it the joined dataset can't be placed in the
+        # right ml-workflow/t<tenant_id>/ folder, so saving is skipped.
+        join_tenant_id = config.get("tenant_id")
+        if save_as_dataset and len(final_df) > 0 and join_tenant_id is None:
+            logger.error("save_as_dataset requested but no tenant_id in node config; joined dataset was NOT saved.")
+
+        if save_as_dataset and len(final_df) > 0 and join_tenant_id is not None:
             try:
+                join_tenant_id = int(join_tenant_id)
                 import uuid
                 import time
                 import asyncio
@@ -393,7 +401,7 @@ class DatasetJoinRecipe(BaseRecipe):
                 file_size_bytes = len(csv_bytes)
 
                 async def _upload():
-                    return await storage_manager.save_file(csv_bytes, rel_storage_path)
+                    return await storage_manager.save_file(csv_bytes, rel_storage_path, join_tenant_id)
 
                 try:
                     loop = asyncio.get_event_loop()
@@ -411,6 +419,7 @@ class DatasetJoinRecipe(BaseRecipe):
                     async with AsyncSessionLocal() as session:
                         ds_rec = Dataset(
                             id=new_ds_id,
+                            tenant_id=join_tenant_id,
                             name=new_ds_name,
                             description=config.get("output_dataset_description") or f"Automatically generated via dataset join on {key_repr}",
                             file_name=file_name,

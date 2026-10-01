@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite+aiosqlite:///./data/platform.db"
 
     # Storage Settings
-    STORAGE_BACKEND: str = "local"  # "local", "s3", or "ozone"
+    STORAGE_BACKEND: str = "ozone"  # datasets are always stored in Ozone (OZONE_PREFIX folder)
     LOCAL_STORAGE_DIR: str = "./data/storage"
 
     # S3 / MinIO Settings
@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     OZONE_SECRET_KEY: Optional[str] = None
     OZONE_BUCKET: Optional[str] = None
     OZONE_REGION: str = "us-east-1"
+    # Folder (key prefix) inside the bucket that this platform reads/writes. "" = whole bucket.
+    OZONE_PREFIX: str = "ml-workflow"
 
     # MLflow Settings
     MLFLOW_TRACKING_URI: str = "sqlite:///./data/mlflow.db"
@@ -82,8 +84,12 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-# Ensure local data directories exist
+# Datasets are stored only in Ozone (s3://<OZONE_BUCKET>/<OZONE_PREFIX>/t<tenant_id>/...).
+# The local dirs below are only for the SQLite/MLflow defaults and temporary
+# execution / test-session caches - no datasets are written here anymore.
 Path("./data").mkdir(parents=True, exist_ok=True)
 Path(settings.LOCAL_STORAGE_DIR).mkdir(parents=True, exist_ok=True)
-Path(f"{settings.LOCAL_STORAGE_DIR}/datasets").mkdir(parents=True, exist_ok=True)
-Path(f"{settings.LOCAL_STORAGE_DIR}/artifacts").mkdir(parents=True, exist_ok=True)
+
+_missing_ozone = [k for k in ("OZONE_ENDPOINT", "OZONE_ACCESS_KEY", "OZONE_SECRET_KEY", "OZONE_BUCKET") if not getattr(settings, k)]
+if _missing_ozone:
+    raise RuntimeError(f"Ozone storage is required but these settings are missing: {', '.join(_missing_ozone)}")

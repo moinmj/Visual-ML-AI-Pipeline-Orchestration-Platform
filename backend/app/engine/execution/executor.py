@@ -355,7 +355,9 @@ class DAGExecutor:
 
             # Execution
             try:
-                outputs = recipe.execute(inputs=node_inputs, config=node.config, context=pipeline_context)
+                # tenant_id comes from the request's token, never from the client's node config
+                from backend.app.core.tenant_context import with_tenant_config
+                outputs = recipe.execute(inputs=node_inputs, config=with_tenant_config(node.config), context=pipeline_context)
                 node_outputs[node.id] = outputs
 
                 # Propagate standard artifacts to shared context (never overwrite existing valid object with None)
@@ -373,7 +375,8 @@ class DAGExecutor:
                 if isinstance(df_out, pd.DataFrame) and len(df_out) > 0:
                     try:
                         from backend.app.infrastructure.storage.storage_manager import storage_manager
-                        p_rel = f"executions/{execution_id}/{node.id}.parquet"
+                        from backend.app.core.tenant_context import tenant_cache_dir
+                        p_rel = f"{tenant_cache_dir()}/executions/{execution_id}/{node.id}.parquet"
                         p_abs = storage_manager.get_absolute_path(p_rel)
                         p_abs.parent.mkdir(parents=True, exist_ok=True)
                         df_out.to_parquet(p_abs, index=False)
