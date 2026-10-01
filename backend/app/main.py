@@ -78,6 +78,8 @@ async def platform_exception_handler(request: Request, exc: PlatformException):
         status_code = status.HTTP_404_NOT_FOUND
     elif exc.code == "VALIDATION_ERROR":
         status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+    elif exc.code == "STORAGE_ERROR":
+        status_code = status.HTTP_502_BAD_GATEWAY
 
     return JSONResponse(
         status_code=status_code,
