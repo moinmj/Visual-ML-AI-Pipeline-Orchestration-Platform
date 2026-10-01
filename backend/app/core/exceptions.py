@@ -28,6 +28,12 @@ class ValidationException(PlatformException):
         )
 
 
+class StorageException(PlatformException):
+    """The datalake (Ozone) could not be reached or rejected the request."""
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+        super().__init__(message=message, code="STORAGE_ERROR", details=details or {})
+
+
 class ExecutionException(PlatformException):
     def __init__(self, message: str, node_id: Optional[str] = None, details: Optional[Dict[str, Any]] = None):
         super().__init__(

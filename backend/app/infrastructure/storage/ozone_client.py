@@ -2,6 +2,7 @@ from typing import Optional
 
 import boto3
 from botocore.client import Config
+from botocore.exceptions import BotoCoreError, ClientError
 from backend.app.core.config import settings
 from backend.app.core.logging import logger
 
@@ -51,6 +52,31 @@ def is_in_tenant_prefix(key: str, tenant_id: int) -> bool:
     return key.startswith(tenant_prefix(tenant_id)) and ".." not in key.split("/")
 
 
+def _client_config() -> Config:
+    """
+    boto3/botocore >= 1.36 adds CRC32 integrity checksums (aws-chunked uploads)
+    to every PutObject by default. The Apache Ozone S3 gateway does not support
+    that and answers 500 Internal Server Error, so checksums are only sent when
+    an operation strictly requires them (the pre-1.36 behaviour).
+    """
+    base = dict(
+        signature_version="s3v4",
+        s3={"addressing_style": "path"},
+        connect_timeout=5,
+        read_timeout=30,
+        retries={"max_attempts": 2},
+    )
+    try:
+        return Config(
+            **base,
+            request_checksum_calculation="when_required",
+            response_checksum_validation="when_required",
+        )
+    except TypeError:
+        # Older botocore (< 1.36) doesn't know these options and doesn't send the checksums anyway.
+        return Config(**base)
+
+
 def get_s3_client():
     """
     Returns boto3 S3 client configured for the Apache Ozone S3 gateway.
@@ -60,13 +86,7 @@ def get_s3_client():
         endpoint_url=settings.OZONE_ENDPOINT,
         aws_access_key_id=settings.OZONE_ACCESS_KEY,
         aws_secret_access_key=settings.OZONE_SECRET_KEY,
-        config=Config(
-            signature_version="s3v4",
-            s3={"addressing_style": "path"},
-            connect_timeout=5,
-            read_timeout=30,
-            retries={"max_attempts": 2},
-        ),
+        config=_client_config(),
         region_name=settings.OZONE_REGION,
     )
 
@@ -81,7 +101,16 @@ def upload_file_to_ozone(file_bytes: bytes, ozone_key: str, tenant_id: int, cont
     bucket = settings.OZONE_BUCKET
     full_key = with_prefix(ozone_key, tenant_id)
     s3 = get_s3_client()
-    s3.put_object(Bucket=bucket, Key=full_key, Body=file_bytes, ContentType=content_type)
+    try:
+        s3.put_object(Bucket=bucket, Key=full_key, Body=file_bytes, ContentType=content_type)
+    except (ClientError, BotoCoreError) as e:
+        # Returned to the caller as a clear 502 instead of a bare 500.
+        from backend.app.core.exceptions import StorageException
+        logger.error(f"[Ozone] Upload of '{full_key}' to bucket '{bucket}' failed: {e}")
+        raise StorageException(
+            f"Could not store the file in the datalake (Ozone): {e}",
+            details={"bucket": bucket, "key": full_key},
+        )
     ozone_path = f"s3://{bucket}/{full_key}"
     logger.info(f"[Ozone] Uploaded object to '{ozone_path}'")
     return ozone_path
