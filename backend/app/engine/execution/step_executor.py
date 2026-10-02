@@ -367,7 +367,8 @@ class NodeStepExecutor:
             try:
                 recipe = recipe_registry.get(r_id)
             except Exception as e:
-                err_msg = f"Recipe '{r_id}' not found in registry: {str(e)}"
+                from backend.app.core.exceptions import ValidationException
+                err_msg = e.message if isinstance(e, ValidationException) else f"Recipe '{r_id}' not found in registry: {str(e)}"
                 return None, NodeTestStepResponse(
                     success=False,
                     session_id=session_id,

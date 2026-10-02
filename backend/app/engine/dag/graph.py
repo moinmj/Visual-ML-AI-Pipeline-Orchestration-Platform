@@ -119,7 +119,11 @@ class WorkflowGraph(BaseModel):
         for node in ordered_nodes:
             try:
                 recipe = recipe_registry.get(node.recipe_id)
-            except Exception:
+            except Exception as e:
+                # Planned ("coming soon") recipes are listed in the catalog but can't run yet.
+                from backend.app.core.exceptions import ValidationException
+                if isinstance(e, ValidationException):
+                    add_error(f"❌ Node '{node.id}': {e.message}")
                 continue
 
             parents = parent_map[node.id]
