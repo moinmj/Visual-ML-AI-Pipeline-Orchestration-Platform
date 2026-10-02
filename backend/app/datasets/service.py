@@ -1,8 +1,8 @@
 import uuid
 import pandas as pd
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, func, or_
 from fastapi import UploadFile
 
 from backend.app.datasets.models import Dataset
@@ -77,19 +77,63 @@ class DatasetService:
         return dataset
 
     @staticmethod
-    async def list_datasets(db: AsyncSession, tenant_id: int) -> List[Dataset]:
-        # Only this tenant's datasets, and only those stored inside the tenant's
-        # folder in Ozone (e.g. s3://bucket/ml-workflow/t1/...).
+    async def list_datasets(
+        db: AsyncSession,
+        tenant_id: int,
+        search: Optional[str] = None,
+        file_format: Optional[str] = None,
+        sort: str = "newest",
+        limit: Optional[int] = None,
+        offset: int = 0,
+    ) -> Tuple[List[Dataset], int]:
+        """
+        The tenant's datasets (only those stored in its Ozone folder), optionally
+        searched, filtered, sorted and paged. Returns (page_of_datasets, total_matches).
+
+        search: case-insensitive "contains" match on dataset ID, name, file name and
+        description; several words must ALL match (e.g. "sales 2024").
+        """
         from backend.app.core.config import settings
         from backend.app.infrastructure.storage.ozone_client import tenant_prefix
         folder_path = f"s3://{settings.OZONE_BUCKET}/{tenant_prefix(tenant_id)}"
-        result = await db.execute(
+
+        query = (
             select(Dataset)
             .where(Dataset.tenant_id == tenant_id)
             .where(Dataset.storage_path.startswith(folder_path, autoescape=True))
-            .order_by(Dataset.created_at.desc())
         )
-        return list(result.scalars().all())
+
+        for term in (search or "").split():
+            term = term.lower()
+            query = query.where(or_(
+                func.lower(Dataset.id).contains(term, autoescape=True),
+                func.lower(Dataset.name).contains(term, autoescape=True),
+                func.lower(Dataset.file_name).contains(term, autoescape=True),
+                func.lower(func.coalesce(Dataset.description, "")).contains(term, autoescape=True),
+            ))
+
+        if file_format:
+            query = query.where(func.lower(Dataset.file_format) == file_format.lower().lstrip("."))
+
+        total = (await db.execute(select(func.count()).select_from(query.subquery()))).scalar() or 0
+
+        order = {
+            "newest": Dataset.created_at.desc(),
+            "oldest": Dataset.created_at.asc(),
+            "name": func.lower(Dataset.name).asc(),
+            "name_desc": func.lower(Dataset.name).desc(),
+            "largest": Dataset.file_size_bytes.desc(),
+            "rows": Dataset.row_count.desc(),
+        }.get(sort, Dataset.created_at.desc())
+        query = query.order_by(order, Dataset.id)
+
+        if offset:
+            query = query.offset(offset)
+        if limit:
+            query = query.limit(limit)
+
+        result = await db.execute(query)
+        return list(result.scalars().all()), total
 
     @staticmethod
     def browse_ozone(tenant_id: int, prefix: str = "") -> List[Dict[str, Any]]:
