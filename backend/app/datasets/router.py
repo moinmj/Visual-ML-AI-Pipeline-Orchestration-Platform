@@ -1,6 +1,6 @@
 from typing import Annotated, List, Optional
 
-from fastapi import APIRouter, Depends, UploadFile, File, Form, Query, status
+from fastapi import APIRouter, Depends, UploadFile, File, Form, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.security import TokenData, get_current_user
@@ -64,11 +64,33 @@ async def register_ozone_dataset(
 
 
 @router.get("/", response_model=List[DatasetResponse])
-async def list_datasets(user: CurrentUser, db: AsyncSession = Depends(get_db)):
+async def list_datasets(
+    user: CurrentUser,
+    response: Response,
+    search: Optional[str] = Query(
+        None, max_length=200,
+        description="Find datasets by ID, name, file name or description (case-insensitive, partial match). "
+                    "Several words must all match, e.g. 'walmart 2024'.",
+    ),
+    file_format: Optional[str] = Query(None, description="Only this format: csv, xlsx, json or parquet"),
+    sort: str = Query("newest", pattern="^(newest|oldest|name|name_desc|largest|rows)$",
+                      description="newest (default), oldest, name, name_desc, largest, rows"),
+    limit: Optional[int] = Query(None, ge=1, le=500, description="Max results to return (omit for all)"),
+    offset: int = Query(0, ge=0, description="Skip this many results (for paging)"),
+    db: AsyncSession = Depends(get_db),
+):
     """
-    List the caller's tenant's datasets (only those stored in its Ozone folder).
+    List / search the caller's tenant's datasets (only those stored in its Ozone folder).
+
+    Without parameters this returns every dataset, newest first (unchanged behaviour).
+    The total number of matches (before limit/offset) is in the X-Total-Count header.
     """
-    return await dataset_service.list_datasets(db, tenant_id=user.tenant_id)
+    datasets, total = await dataset_service.list_datasets(
+        db, tenant_id=user.tenant_id, search=search, file_format=file_format,
+        sort=sort, limit=limit, offset=offset,
+    )
+    response.headers["X-Total-Count"] = str(total)
+    return datasets
 
 
 @router.get("/{dataset_id}", response_model=DatasetResponse)
