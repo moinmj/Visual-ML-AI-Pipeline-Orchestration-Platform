@@ -25,6 +25,9 @@ class RecipeMetadata(BaseModel):
     inputs: List[RecipePort] = []
     outputs: List[RecipePort] = []
     parameters_schema: Dict[str, Any]
+    # True = implemented and usable. False = planned / "coming soon": listed so the
+    # frontend can show it, but it cannot be run, tested or validated yet.
+    enabled: bool = True
 
 class BaseRecipe(ABC):
     """
