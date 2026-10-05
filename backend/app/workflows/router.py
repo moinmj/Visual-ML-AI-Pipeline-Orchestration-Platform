@@ -1780,14 +1780,30 @@ async def _get_execution_node_dataframe(
         except Exception:
             pass
 
+    def _extract_df(node_output_map: Dict[str, Any]) -> Optional[pd.DataFrame]:
+        if node_id not in node_output_map:
+            return None
+        target_out = node_output_map[node_id]
+        if not isinstance(target_out, dict):
+            return None
+        d = target_out.get("dataframe")
+        if isinstance(d, pd.DataFrame):
+            return d
+        for fk in ["dataframe_train", "dataframe_test", "matched_dataframe", "forecast_df"]:
+            if isinstance(target_out.get(fk), pd.DataFrame):
+                return target_out[fk]
+        for v in target_out.values():
+            if isinstance(v, pd.DataFrame):
+                return v
+        return None
+
     job = job_manager.get_job(execution_id)
     if job:
         res = job.get("results") or job.get("result")
         node_outs = getattr(res, "node_outputs", {}) if not isinstance(res, dict) else res.get("node_outputs", {})
-        if node_id in node_outs:
-            df = node_outs[node_id].get("dataframe")
-            if isinstance(df, pd.DataFrame):
-                return df
+        df = _extract_df(node_outs)
+        if df is not None:
+            return df
 
     ex_res = await db.execute(select(WorkflowExecution).where(WorkflowExecution.id == execution_id))
     ex_row = ex_res.scalar_one_or_none()
@@ -1813,8 +1829,8 @@ async def _get_execution_node_dataframe(
             include_node_outputs=True
         )
         node_outs = exec_res.node_outputs or {}
-        if node_id in node_outs and isinstance(node_outs[node_id].get("dataframe"), pd.DataFrame):
-            df = node_outs[node_id]["dataframe"]
+        df = _extract_df(node_outs)
+        if df is not None:
             try:
                 p_abs.parent.mkdir(parents=True, exist_ok=True)
                 df.to_parquet(p_abs, index=False)
