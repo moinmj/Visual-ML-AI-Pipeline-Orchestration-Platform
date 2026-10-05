@@ -328,7 +328,9 @@ class DAGExecutor:
                         if p_df is None:
                             p_df = p_out.get("dataframe")
                     elif sh in ["joined", "matched", "matched_dataframe"]:
-                        p_df = p_out.get("matched_dataframe") or p_out.get("dataframe")
+                        p_df = p_out.get("matched_dataframe")
+                        if p_df is None:
+                            p_df = p_out.get("dataframe")
                     elif sh in ["output_2", "test_data", "test", "te"] and "dataframe_test" in p_out:
                         p_df = p_out["dataframe_test"]
                     elif sh in ["output_1", "train_data", "train", "tr"] and "dataframe_train" in p_out:

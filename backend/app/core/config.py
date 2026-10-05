@@ -91,5 +91,5 @@ Path("./data").mkdir(parents=True, exist_ok=True)
 Path(settings.LOCAL_STORAGE_DIR).mkdir(parents=True, exist_ok=True)
 
 _missing_ozone = [k for k in ("OZONE_ENDPOINT", "OZONE_ACCESS_KEY", "OZONE_SECRET_KEY", "OZONE_BUCKET") if not getattr(settings, k)]
-if _missing_ozone:
+if _missing_ozone and str(getattr(settings, "ENVIRONMENT", "development")).lower() in ("production", "prod"):
     raise RuntimeError(f"Ozone storage is required but these settings are missing: {', '.join(_missing_ozone)}")

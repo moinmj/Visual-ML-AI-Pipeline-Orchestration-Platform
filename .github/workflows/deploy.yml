@@ -61,7 +61,7 @@ jobs:
             echo 'Restarting ML-Pipeline-Platform...'
 
             if pm2 describe ML-Pipeline-Platform >/dev/null 2>&1; then
-              pm2 reload ML-Pipeline-Platform
+              pm2 restart ML-Pipeline-Platform --update-env
             else
               pm2 start /home/serverguy/apps/Datalect_POC/AI_POC/venv/bin/python \
                 --name ML-Pipeline-Platform \
