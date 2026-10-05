@@ -1837,6 +1837,17 @@ async def _get_execution_node_dataframe(
             except Exception:
                 pass
             return df
+
+    # Check if execution_id is a test session_id from NodeStepExecutor
+    try:
+        from backend.app.engine.execution.step_executor import NodeStepExecutor
+        sess_outs = NodeStepExecutor.load_node_output(session_id=execution_id, node_id=node_id)
+        df_sess = _extract_df(sess_outs) or sess_outs.get("dataframe")
+        if isinstance(df_sess, pd.DataFrame):
+            return df_sess
+    except Exception:
+        pass
+
     return None
 
 
@@ -2100,6 +2111,7 @@ async def get_test_step_table_preview(
     clean_page = clean_page.where(pd.notnull(clean_page), None)
 
     return {
+        "execution_id": session_id,
         "session_id": session_id,
         "node_id": node_id,
         "total_rows": total_rows,
@@ -2154,11 +2166,16 @@ async def get_node_table_data(
     total_cols = len(df.columns)
     total_pages = math.ceil(total_rows / limit) if (limit > 0 and total_rows > 0) else 1
     skip = (page - 1) * limit
-    page_df = df.iloc[skip:skip + limit]
+    page_df = df.iloc[skip:skip + limit].copy()
+    for c in page_df.select_dtypes(include=["datetime", "datetimetz"]).columns:
+        page_df[c] = page_df[c].dt.strftime("%Y-%m-%d %H:%M:%S")
     clean_page = page_df.replace({float("nan"): None, float("inf"): None, float("-inf"): None})
+    clean_page = clean_page.where(pd.notnull(clean_page), None)
 
+    from backend.app.engine.execution.executor import make_json_safe
     return {
         "execution_id": execution_id,
+        "session_id": execution_id,
         "node_id": node_id,
         "total_rows": total_rows,
         "total_columns": total_cols,
@@ -2166,7 +2183,7 @@ async def get_node_table_data(
         "limit": limit,
         "total_pages": total_pages,
         "columns": list(df.columns),
-        "data": clean_page.to_dict(orient="records")
+        "data": [make_json_safe(r) for r in clean_page.to_dict(orient="records")]
     }
 
 
