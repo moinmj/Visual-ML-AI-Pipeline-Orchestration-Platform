@@ -47,13 +47,24 @@ def _add_tenant_filter(state):
 @event.listens_for(Session, "before_flush")
 def _stamp_and_check_tenant(session, flush_context, instances):
     tid = get_current_tenant_id()
+    if tid is not None:
+        try:
+            tid = int(tid)
+        except (ValueError, TypeError):
+            pass
     for obj in list(session.new) + list(session.dirty) + list(session.deleted):
         if not isinstance(obj, TENANT_SCOPED_MODELS):
             continue
-        if obj.tenant_id is None and tid is not None and obj in session.new:
+        if obj.tenant_id is None and tid is not None:
             obj.tenant_id = tid
-        if tid is not None and obj.tenant_id != tid:
-            raise PermissionError(
-                f"Refusing to write {type(obj).__name__} '{getattr(obj, 'id', '?')}' "
-                f"of tenant {obj.tenant_id} from tenant {tid}'s request"
-            )
+        if tid is not None and obj.tenant_id is not None:
+            obj_tid = obj.tenant_id
+            try:
+                obj_tid = int(obj_tid)
+            except (ValueError, TypeError):
+                pass
+            if obj_tid != tid:
+                raise PermissionError(
+                    f"Refusing to write {type(obj).__name__} '{getattr(obj, 'id', '?')}' "
+                    f"of tenant {obj.tenant_id} from tenant {tid}'s request"
+                )
