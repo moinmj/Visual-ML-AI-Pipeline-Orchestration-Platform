@@ -850,11 +850,24 @@ class DAGExecutor:
         safe_step_snapshots = make_json_safe(step_snapshots)
         safe_inference_schema = make_json_safe(inference_schema)
 
+        safe_node_results = []
+        for nr in node_results:
+            if hasattr(nr, "model_copy"):
+                nr_c = nr.model_copy()
+                nr_c.output_summary = make_json_safe(nr_c.output_summary)
+                safe_node_results.append(nr_c)
+            elif hasattr(nr, "copy"):
+                nr_c = nr.copy()
+                nr_c.output_summary = make_json_safe(nr_c.output_summary)
+                safe_node_results.append(nr_c)
+            else:
+                safe_node_results.append(nr)
+
         return WorkflowExecutionResult(
             execution_id=execution_id,
             status=overall_status,
             total_duration_ms=total_duration,
-            node_results=node_results,
+            node_results=safe_node_results,
             final_metrics=safe_final_metrics,
             anomaly_summary=safe_anomaly_summary,
             forecasting_summary=safe_forecasting_summary,

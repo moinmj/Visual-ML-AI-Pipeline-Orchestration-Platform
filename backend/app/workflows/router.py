@@ -1339,10 +1339,52 @@ def db_workflow_to_graph(wf: Workflow) -> WorkflowGraph:
         label = nd.get("label") or nd.get("content") or n_cfg.get("label", nid)
         nodes.append(WorkflowNode(id=nid, recipe_id=recipe_id, config=config, label=label))
     edges = [
-        WorkflowEdge(source=ed["source"], target=ed["target"])
+        WorkflowEdge(
+            source=ed["source"],
+            target=ed["target"],
+            source_handle=ed.get("source_handle") or ed.get("sourceHandle") or ed.get("source_port"),
+            target_handle=ed.get("target_handle") or ed.get("targetHandle") or ed.get("target_port")
+        )
         for ed in wf.edges or []
     ]
     return WorkflowGraph(nodes=nodes, edges=edges)
+
+
+async def preload_workflow_datasets(
+    workflow: WorkflowGraph,
+    db: AsyncSession,
+    tenant_id: Optional[int] = None
+) -> None:
+    """
+    Preloads datasets for root loader nodes (e.g. csv_loader) in a workflow graph,
+    injecting the loaded DataFrame directly into the node's config so DAGExecutor
+    does not need to create external sync DB connections or fail on drivers.
+    """
+    from backend.app.infrastructure.storage.storage_manager import storage_manager
+    for node in workflow.nodes:
+        if node.recipe_id in ("csv_loader", "dataset_loader", "file_ingestion"):
+            cfg = dict(node.config or {})
+            if "dataframe" in cfg and cfg["dataframe"] is not None:
+                continue
+            dataset_id = cfg.get("dataset_id") or getattr(node, "dataset_id", None)
+            if not dataset_id and "dataset" in cfg:
+                dataset_id = cfg["dataset"]
+            if dataset_id and db:
+                try:
+                    ds_query = select(Dataset).where(Dataset.id == str(dataset_id))
+                    if tenant_id is not None:
+                        ds_query = ds_query.where(Dataset.tenant_id == tenant_id)
+                    res = await db.execute(ds_query)
+                    ds_obj = res.scalar_one_or_none()
+                    if ds_obj and ds_obj.storage_path:
+                        df_loaded = storage_manager.read_dataframe(
+                            ds_obj.storage_path,
+                            tenant_id if tenant_id is not None else ds_obj.tenant_id
+                        )
+                        cfg["dataframe"] = df_loaded
+                        node.config = cfg
+                except Exception as ex:
+                    logger.warning(f"Could not preload dataset '{dataset_id}' for node '{node.id}': {ex}")
 
 
 @router.post(
@@ -1467,6 +1509,9 @@ async def execute_workflow(
         await db.commit()
 
     execution_id = str(uuid.uuid4())
+    tid = get_current_tenant_id()
+    await preload_workflow_datasets(workflow=workflow, db=db, tenant_id=tid)
+
     result = DAGExecutor.execute_workflow(
         execution_id=execution_id,
         workflow=workflow,
@@ -1483,52 +1528,59 @@ async def execute_workflow(
 
     # When workflow exists in DB, always persist execution run to history and update wf.last_execution
     if target_id:
-        res_wf = await db.execute(select(Workflow).where(Workflow.id == target_id))
-        wf_rec = res_wf.scalar_one_or_none()
-        if wf_rec:
-            exec_nodes_payload, exec_edges_payload, exec_node_configs = (
-                workflow_graph_to_db_payload(workflow)
-            )
-            wf_rec.last_execution = jsonable_encoder({
-                "execution_id": result.execution_id,
-                "status": result.status,
-                "total_duration_ms": result.total_duration_ms,
-                "final_metrics": result.final_metrics,
-                "anomaly_summary": result.anomaly_summary,
-                "forecasting_summary": result.forecasting_summary,
-                "governance_summary": result.governance_summary,
-                "node_results": result.node_results,
-                "execution_logs": result.logs,
-                "step_snapshots": result.step_snapshots,
-                "inference_schema": getattr(result, "inference_schema", None),
-            })
-            await db.commit()
-
-            # Record immutable history snapshot
-            try:
-                await record_workflow_execution_history(
-                    db=db,
-                    workflow_id=target_id,
-                    execution_id=result.execution_id,
-                    status_str=result.status,
-                    total_duration_ms=result.total_duration_ms or 0.0,
-                    nodes=exec_nodes_payload,
-                    edges=exec_edges_payload,
-                    node_configs=exec_node_configs,
-                    metrics=result.final_metrics,
-                    reports={
-                        "anomaly_summary": result.anomaly_summary,
-                        "forecasting_summary": result.forecasting_summary,
-                        "governance_summary": result.governance_summary,
-                        "node_results": result.node_results,
-                        "inference_schema": getattr(result, "inference_schema", None),
-                    },
-                    step_snapshots=result.step_snapshots,
-                    logs=result.logs,
-                    run_label=None
+        try:
+            res_wf = await db.execute(select(Workflow).where(Workflow.id == target_id))
+            wf_rec = res_wf.scalar_one_or_none()
+            if wf_rec:
+                exec_nodes_payload, exec_edges_payload, exec_node_configs = (
+                    workflow_graph_to_db_payload(workflow)
                 )
-            except Exception as e:
-                logger.exception(f"Failed to record execution history for workflow {target_id}: {e}")
+                safe_node_results = [
+                    nr.model_dump() if hasattr(nr, "model_dump") else (nr.dict() if hasattr(nr, "dict") else nr)
+                    for nr in (result.node_results or [])
+                ]
+                wf_rec.last_execution = jsonable_encoder({
+                    "execution_id": result.execution_id,
+                    "status": result.status,
+                    "total_duration_ms": result.total_duration_ms,
+                    "final_metrics": result.final_metrics,
+                    "anomaly_summary": result.anomaly_summary,
+                    "forecasting_summary": result.forecasting_summary,
+                    "governance_summary": result.governance_summary,
+                    "node_results": safe_node_results,
+                    "execution_logs": result.logs,
+                    "step_snapshots": result.step_snapshots,
+                    "inference_schema": getattr(result, "inference_schema", None),
+                })
+                await db.commit()
+
+                # Record immutable history snapshot
+                try:
+                    await record_workflow_execution_history(
+                        db=db,
+                        workflow_id=target_id,
+                        execution_id=result.execution_id,
+                        status_str=result.status,
+                        total_duration_ms=result.total_duration_ms or 0.0,
+                        nodes=exec_nodes_payload,
+                        edges=exec_edges_payload,
+                        node_configs=exec_node_configs,
+                        metrics=result.final_metrics,
+                        reports={
+                            "anomaly_summary": result.anomaly_summary,
+                            "forecasting_summary": result.forecasting_summary,
+                            "governance_summary": result.governance_summary,
+                            "node_results": safe_node_results,
+                            "inference_schema": getattr(result, "inference_schema", None),
+                        },
+                        step_snapshots=result.step_snapshots,
+                        logs=result.logs,
+                        run_label=None
+                    )
+                except Exception as e:
+                    logger.exception(f"Failed to record execution history for workflow {target_id}: {e}")
+        except Exception as e:
+            logger.warning(f"Could not persist workflow execution state to DB for {target_id}: {e}")
     return result
 
 
@@ -1583,6 +1635,9 @@ async def execute_workflow_by_id(
         graph_to_execute = db_workflow_to_graph(wf)
 
     execution_id = str(uuid.uuid4())
+    tid = get_current_tenant_id()
+    await preload_workflow_datasets(workflow=graph_to_execute, db=db, tenant_id=tid)
+
     exec_result = DAGExecutor.execute_workflow(
         execution_id=execution_id,
         workflow=graph_to_execute,
@@ -1596,49 +1651,56 @@ async def execute_workflow_by_id(
         pass
 
     # Always persist execution run to history and update wf.last_execution
-    exec_nodes_payload, exec_edges_payload, exec_node_configs = (
-        workflow_graph_to_db_payload(graph_to_execute)
-    )
-    wf.last_execution = jsonable_encoder({
-        "execution_id": exec_result.execution_id,
-        "status": exec_result.status,
-        "total_duration_ms": exec_result.total_duration_ms,
-        "final_metrics": exec_result.final_metrics,
-        "anomaly_summary": exec_result.anomaly_summary,
-        "forecasting_summary": exec_result.forecasting_summary,
-        "governance_summary": exec_result.governance_summary,
-        "node_results": exec_result.node_results,
-        "execution_logs": exec_result.logs,
-        "step_snapshots": exec_result.step_snapshots,
-        "inference_schema": getattr(exec_result, "inference_schema", None),
-    })
-    await db.commit()
-
-    # Record immutable history snapshot
     try:
-        await record_workflow_execution_history(
-            db=db,
-            workflow_id=workflow_id,
-            execution_id=exec_result.execution_id,
-            status_str=exec_result.status,
-            total_duration_ms=exec_result.total_duration_ms or 0.0,
-            nodes=exec_nodes_payload,
-            edges=exec_edges_payload,
-            node_configs=exec_node_configs,
-            metrics=exec_result.final_metrics,
-            reports={
-                "anomaly_summary": exec_result.anomaly_summary,
-                "forecasting_summary": exec_result.forecasting_summary,
-                "governance_summary": exec_result.governance_summary,
-                "node_results": exec_result.node_results,
-                "inference_schema": getattr(exec_result, "inference_schema", None),
-            },
-            step_snapshots=exec_result.step_snapshots,
-            logs=exec_result.logs,
-            run_label=None
+        exec_nodes_payload, exec_edges_payload, exec_node_configs = (
+            workflow_graph_to_db_payload(graph_to_execute)
         )
+        safe_node_results = [
+            nr.model_dump() if hasattr(nr, "model_dump") else (nr.dict() if hasattr(nr, "dict") else nr)
+            for nr in (exec_result.node_results or [])
+        ]
+        wf.last_execution = jsonable_encoder({
+            "execution_id": exec_result.execution_id,
+            "status": exec_result.status,
+            "total_duration_ms": exec_result.total_duration_ms,
+            "final_metrics": exec_result.final_metrics,
+            "anomaly_summary": exec_result.anomaly_summary,
+            "forecasting_summary": exec_result.forecasting_summary,
+            "governance_summary": exec_result.governance_summary,
+            "node_results": safe_node_results,
+            "execution_logs": exec_result.logs,
+            "step_snapshots": exec_result.step_snapshots,
+            "inference_schema": getattr(exec_result, "inference_schema", None),
+        })
+        await db.commit()
+
+        # Record immutable history snapshot
+        try:
+            await record_workflow_execution_history(
+                db=db,
+                workflow_id=workflow_id,
+                execution_id=exec_result.execution_id,
+                status_str=exec_result.status,
+                total_duration_ms=exec_result.total_duration_ms or 0.0,
+                nodes=exec_nodes_payload,
+                edges=exec_edges_payload,
+                node_configs=exec_node_configs,
+                metrics=exec_result.final_metrics,
+                reports={
+                    "anomaly_summary": exec_result.anomaly_summary,
+                    "forecasting_summary": exec_result.forecasting_summary,
+                    "governance_summary": exec_result.governance_summary,
+                    "node_results": safe_node_results,
+                    "inference_schema": getattr(exec_result, "inference_schema", None),
+                },
+                step_snapshots=exec_result.step_snapshots,
+                logs=exec_result.logs,
+                run_label=None
+            )
+        except Exception as e:
+            logger.exception(f"Failed to record execution history for workflow {workflow_id}: {e}")
     except Exception as e:
-        logger.exception(f"Failed to record execution history for workflow {workflow_id}: {e}")
+        logger.warning(f"Could not persist workflow execution state to DB for {workflow_id}: {e}")
 
     return exec_result
 
