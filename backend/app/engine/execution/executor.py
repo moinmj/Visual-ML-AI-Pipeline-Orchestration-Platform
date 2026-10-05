@@ -396,6 +396,16 @@ class DAGExecutor:
 
                 # Cache dataframe output to disk for instant pagination and CSV download
                 df_out = outputs.get("dataframe")
+                if df_out is None or not isinstance(df_out, pd.DataFrame):
+                    for fallback_k in ["dataframe_train", "dataframe_test", "matched_dataframe", "forecast_df"]:
+                        if isinstance(outputs.get(fallback_k), pd.DataFrame):
+                            df_out = outputs[fallback_k]
+                            break
+                    if df_out is None:
+                        for v in outputs.values():
+                            if isinstance(v, pd.DataFrame):
+                                df_out = v
+                                break
                 if isinstance(df_out, pd.DataFrame) and len(df_out) > 0:
                     try:
                         from backend.app.infrastructure.storage.storage_manager import storage_manager
