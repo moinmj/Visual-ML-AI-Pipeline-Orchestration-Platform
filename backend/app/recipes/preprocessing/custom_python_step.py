@@ -49,8 +49,11 @@ class CustomPythonStepRecipe(BaseRecipe):
                         "Incoming data is available as 'df' (pandas DataFrame) or 'items' / 'records' (list of dicts). "
                         "You can return a DataFrame, modify 'df' in-place, or assign to 'result' / 'output_df'."
                     ),
+                    "input_type": "code",
+                    "widget": "code_editor",
                     "ui:widget": "code_editor",
-                    "ui:language": "python"
+                    "ui:language": "python",
+                    "language": "python"
                 },
                 "code_templates": {
                     "type": "array",
