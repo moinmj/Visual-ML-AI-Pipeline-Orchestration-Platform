@@ -1,5 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Body, Query, Response, Request
 from fastapi.encoders import jsonable_encoder
+from fastapi.responses import StreamingResponse
+import asyncio
+import json as _json
 from typing import Dict, Any, List, Optional, Union
 import math
 import uuid
@@ -62,6 +65,28 @@ router = APIRouter(
     prefix="/workflows",
     tags=["Workflows & DAG Execution"],
     dependencies=[Depends(get_current_user)],
+)
+
+
+def _require_resumable(resume_from: Optional[str]) -> None:
+    """404 unless the caller's tenant has saved state for that earlier execution."""
+    if not resume_from:
+        return
+    from backend.app.engine.execution.run_state import resume_info
+    if resume_info(resume_from) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"Nothing to resume for execution '{resume_from}': it succeeded, its saved state "
+                "expired (72h), or it doesn't exist. Run the workflow normally instead."
+            ),
+        )
+
+
+_RESUME_QUERY_DESC = (
+    "ID of an earlier FAILED execution (or async job). Nodes that succeeded there and were not "
+    "changed are not run again - their saved results are reused - and execution continues from "
+    "the failed node. Changing a node re-runs it and everything after it."
 )
 
 
@@ -993,6 +1018,76 @@ async def get_job_status(job_id: str):
     return job
 
 
+@router.get("/jobs/{job_id}/logs")
+async def get_job_live_logs(
+    job_id: str,
+    since: int = Query(0, ge=0, description="Return only log lines from this index on (use next_since from the previous call)"),
+):
+    """
+    Live progress of a running (or finished) async job, for polling every ~1s:
+    status, NEW log lines since `since`, per-node status (PENDING / RUNNING /
+    SUCCESS / REUSED / FAILED), the node running now and completed/total.
+    Stop polling when "done" is true.
+    """
+    progress = job_manager.get_job_progress(job_id, since=since)
+    if progress is None:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+    return progress
+
+
+@router.get("/jobs/{job_id}/stream")
+async def stream_job_live_logs(job_id: str, request: Request):
+    """
+    Same live progress as /logs, pushed as Server-Sent Events (text/event-stream).
+    Each 'progress' event carries only the new log lines; a final 'done' event is
+    sent when the job finishes. Needs the Authorization header, so use a fetch-based
+    SSE client (e.g. @microsoft/fetch-event-source), not the browser's EventSource.
+    """
+    if job_manager.get_job_progress(job_id) is None:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+
+    async def events():
+        since = 0
+        last_state = None
+        while True:
+            if await request.is_disconnected():
+                break
+            progress = job_manager.get_job_progress(job_id, since=since)
+            if progress is None:
+                break
+            state_key = (progress["status"], progress["current_node"], _json.dumps(progress["node_status"], sort_keys=True))
+            if progress["logs"] or state_key != last_state:
+                yield f"event: progress\ndata: {_json.dumps(progress, default=str)}\n\n"
+                last_state = state_key
+            since = progress["next_since"]
+            if progress["done"]:
+                yield f"event: done\ndata: {_json.dumps({'job_id': job_id, 'status': progress['status']})}\n\n"
+                break
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.get("/executions/{execution_id}/resume-info")
+async def get_resume_info(execution_id: str):
+    """
+    Whether an execution can be resumed, and which nodes would be reused
+    (succeeded), which failed and which never ran. 404 if there is nothing to resume.
+    """
+    from backend.app.engine.execution.run_state import resume_info
+    info = resume_info(execution_id)
+    if info is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Nothing to resume for execution '{execution_id}' (succeeded, expired or not found).",
+        )
+    return info
+
+
 @router.get("/{workflow_id}", response_model=WorkflowResponse)
 async def get_workflow(
     workflow_id: str,
@@ -1302,25 +1397,47 @@ async def restore_workflow(
 # DAG VALIDATION & EXECUTION ENDPOINTS
 # -------------------------------------------------------------
 
+def _storable_config(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Node config as it should be saved in the DB: runtime-only values such as the
+    DataFrame injected by preload_workflow_datasets are left out (they are not
+    JSON and would make saving the workflow / execution history fail).
+    """
+    out = {}
+    for k, v in (config or {}).items():
+        if isinstance(v, (pd.DataFrame, pd.Series)):
+            continue
+        out[k] = v
+    return out
+
+
 def workflow_graph_to_db_payload(workflow: WorkflowGraph) -> tuple:
     """Helper to convert WorkflowGraph instance to DB nodes, edges, and node_configs."""
     nodes_payload = []
     node_configs = {}
     for n in workflow.nodes:
+        cfg = _storable_config(n.config)
         nodes_payload.append({
             "id": n.id,
             "recipe_id": n.recipe_id,
             "label": n.label or n.id,
             "content": n.label or n.id,
-            "config": n.config
+            "config": cfg
         })
         node_configs[n.id] = {
             "recipe_id": n.recipe_id,
             "label": n.label or n.id,
-            "config": n.config
+            "config": cfg
         }
+    # Keep the port handles (e.g. join 'left'/'right') so a saved workflow re-runs identically
     edges_payload = [
-        {"id": f"e_{e.source}_{e.target}", "source": e.source, "target": e.target}
+        {
+            "id": f"e_{e.source}_{e.target}",
+            "source": e.source,
+            "target": e.target,
+            "source_handle": getattr(e, "source_handle", None),
+            "target_handle": getattr(e, "target_handle", None),
+        }
         for e in workflow.edges
     ]
     return nodes_payload, edges_payload, node_configs
@@ -1448,6 +1565,7 @@ async def execute_workflow(
     auto_save: bool = Query(False, description="Automatically upsert/save current workflow to DB before executing"),
     workflow_id: Optional[str] = Query(None, description="Optional workflow ID to link in execution result"),
     workflow_name: Optional[str] = Query(None, description="Optional workflow title if auto-saving to DB"),
+    resume_from: Optional[str] = Query(None, description=_RESUME_QUERY_DESC),
     request: Request = None,
     db: AsyncSession = Depends(get_db)
 ):
@@ -1508,6 +1626,7 @@ async def execute_workflow(
             db.add(wf)
         await db.commit()
 
+    _require_resumable(resume_from)
     execution_id = str(uuid.uuid4())
     tid = get_current_tenant_id()
     await preload_workflow_datasets(workflow=workflow, db=db, tenant_id=tid)
@@ -1515,7 +1634,8 @@ async def execute_workflow(
     result = DAGExecutor.execute_workflow(
         execution_id=execution_id,
         workflow=workflow,
-        include_node_outputs=include_node_outputs
+        include_node_outputs=include_node_outputs,
+        resume_from=resume_from
     )
     if target_id:
         result.workflow_id = target_id
@@ -1594,6 +1714,7 @@ async def execute_workflow_by_id(
     workflow: Optional[WorkflowGraph] = None,
     include_node_outputs: bool = Query(False, description="Opt-in to include full raw data of every node"),
     auto_save: bool = Query(False, description="Automatically save updated graph and execution to DB"),
+    resume_from: Optional[str] = Query(None, description=_RESUME_QUERY_DESC),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -1634,6 +1755,7 @@ async def execute_workflow_by_id(
     else:
         graph_to_execute = db_workflow_to_graph(wf)
 
+    _require_resumable(resume_from)
     execution_id = str(uuid.uuid4())
     tid = get_current_tenant_id()
     await preload_workflow_datasets(workflow=graph_to_execute, db=db, tenant_id=tid)
@@ -1641,7 +1763,8 @@ async def execute_workflow_by_id(
     exec_result = DAGExecutor.execute_workflow(
         execution_id=execution_id,
         workflow=graph_to_execute,
-        include_node_outputs=include_node_outputs
+        include_node_outputs=include_node_outputs,
+        resume_from=resume_from
     )
     exec_result.workflow_id = workflow_id
 
@@ -1711,20 +1834,30 @@ async def execute_workflow_by_id(
 )
 async def submit_async_workflow(
     workflow: WorkflowGraph,
-    include_node_outputs: bool = Query(False, description="Opt-in to include full raw data of every node")
+    include_node_outputs: bool = Query(False, description="Opt-in to include full raw data of every node"),
+    resume_from: Optional[str] = Query(None, description=_RESUME_QUERY_DESC),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Submit a workflow for asynchronous background execution (n8n/Boomi worker pool pattern).
-    Returns immediately with a job_id for status polling.
+    Returns immediately with a job_id. Follow it live with GET /jobs/{job_id}/logs
+    (polling) or GET /jobs/{job_id}/stream (Server-Sent Events).
     """
+    _require_resumable(resume_from)
+    # Same dataset preloading as the synchronous /execute (loads the caller's own datasets)
+    await preload_workflow_datasets(workflow=workflow, db=db, tenant_id=get_current_tenant_id())
     job_id = job_manager.submit_job(
         workflow=workflow,
         trigger_type="api_async",
-        include_node_outputs=include_node_outputs
+        include_node_outputs=include_node_outputs,
+        resume_from=resume_from
     )
     return {
         "job_id": job_id,
         "status": "PENDING",
+        "resumed_from": resume_from,
+        "logs_url": f"/api/v1/workflows/jobs/{job_id}/logs",
+        "stream_url": f"/api/v1/workflows/jobs/{job_id}/stream",
         "message": "Workflow execution dispatched to background worker pool."
     }
 

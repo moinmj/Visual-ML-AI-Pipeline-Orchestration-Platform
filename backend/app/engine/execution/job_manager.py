@@ -56,7 +56,8 @@ class PipelineJobManager:
         context: Optional[Dict[str, Any]] = None,
         trigger_type: str = "manual",
         trigger_id: Optional[str] = None,
-        include_node_outputs: bool = False
+        include_node_outputs: bool = False,
+        resume_from: Optional[str] = None
     ) -> str:
         """Submits a DAG execution job to the background worker pool."""
         job_id = f"job_{uuid.uuid4().hex[:8]}"
@@ -74,6 +75,12 @@ class PipelineJobManager:
                 "trigger_type": trigger_type,
                 "trigger_id": trigger_id,
                 "node_count": len(workflow.nodes),
+                "resumed_from": resume_from,
+                # Live progress, filled while the job runs (GET /workflows/jobs/{id}/logs)
+                "logs": [],
+                "node_status": {n.id: "PENDING" for n in workflow.nodes},
+                "current_node": None,
+                "progress": {"completed": 0, "total": len(workflow.nodes)},
                 "result": None,
                 "error": None
             }
@@ -88,10 +95,64 @@ class PipelineJobManager:
             workflow=workflow,
             initial_df=initial_df,
             context=context,
-            include_node_outputs=include_node_outputs
+            include_node_outputs=include_node_outputs,
+            resume_from=resume_from
         )
         self.job_futures[job_id] = future
         return job_id
+
+    def _on_progress(self, job_id: str, event: Dict[str, Any]) -> None:
+        """Applies a live executor event to the job, so pollers see it immediately."""
+        with self.lock:
+            job = self.jobs.get(job_id)
+            if not job:
+                return
+            etype = event.get("type")
+            if etype == "log":
+                job["logs"].append(event.get("message"))
+            elif etype == "started":
+                job["progress"]["total"] = event.get("total_nodes", job["progress"]["total"])
+                for nid in event.get("node_ids", []):
+                    job["node_status"].setdefault(nid, "PENDING")
+            elif etype == "node_started":
+                job["current_node"] = event.get("node_id")
+                job["node_status"][event.get("node_id")] = "RUNNING"
+            elif etype == "node_finished":
+                status = event.get("status")
+                job["node_status"][event.get("node_id")] = "REUSED" if event.get("reused") else status
+                if status == "SUCCESS":
+                    job["progress"]["completed"] += 1
+                if job.get("current_node") == event.get("node_id"):
+                    job["current_node"] = None
+
+    def get_job_progress(self, job_id: str, since: int = 0) -> Optional[Dict[str, Any]]:
+        """
+        Live view of a job for the current tenant: status, the log lines added since
+        index `since`, per-node status and progress. None if not found / not yours.
+        """
+        with self.lock:
+            job = self.jobs.get(job_id)
+            if not job or not self._visible(job.get("tenant_id")):
+                return None
+            logs = job.get("logs") or []
+            since = max(0, min(int(since or 0), len(logs)))
+            result = job.get("result")
+            return {
+                "job_id": job_id,
+                "status": job.get("status"),
+                "started_at": job.get("started_at"),
+                "completed_at": job.get("completed_at"),
+                "duration_ms": job.get("duration_ms"),
+                "resumed_from": job.get("resumed_from"),
+                "current_node": job.get("current_node"),
+                "node_status": dict(job.get("node_status") or {}),
+                "progress": dict(job.get("progress") or {}),
+                "logs": list(logs[since:]),
+                "next_since": len(logs),
+                "done": job.get("status") in ("SUCCESS", "FAILED"),
+                "error": job.get("error"),
+                "execution_id": getattr(result, "execution_id", None) if result is not None else None,
+            }
 
     def _run_job_worker(
         self,
@@ -99,7 +160,8 @@ class PipelineJobManager:
         workflow: WorkflowGraph,
         initial_df: Optional[pd.DataFrame],
         context: Optional[Dict[str, Any]],
-        include_node_outputs: bool = False
+        include_node_outputs: bool = False,
+        resume_from: Optional[str] = None
     ):
         with self.lock:
             if job_id in self.jobs:
@@ -113,7 +175,9 @@ class PipelineJobManager:
                 workflow=workflow,
                 initial_df=initial_df,
                 context=context,
-                include_node_outputs=include_node_outputs
+                include_node_outputs=include_node_outputs,
+                on_event=lambda ev: self._on_progress(job_id, ev),
+                resume_from=resume_from
             )
             duration_ms = round((time.time() - start_t) * 1000.0, 2)
             with self.lock:
@@ -122,6 +186,8 @@ class PipelineJobManager:
                     self.jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
                     self.jobs[job_id]["duration_ms"] = duration_ms
                     self.jobs[job_id]["result"] = result
+                    self.jobs[job_id]["logs"] = list(result.logs)
+                    self.jobs[job_id]["current_node"] = None
         except Exception as e:
             duration_ms = round((time.time() - start_t) * 1000.0, 2)
             logger.error(f"Job {job_id} failed: {str(e)}")
@@ -131,6 +197,8 @@ class PipelineJobManager:
                     self.jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
                     self.jobs[job_id]["duration_ms"] = duration_ms
                     self.jobs[job_id]["error"] = str(e)
+                    self.jobs[job_id]["logs"].append(f"❌ Job failed: {e}")
+                    self.jobs[job_id]["current_node"] = None
 
     def list_jobs(self, limit: int = 50) -> List[Dict[str, Any]]:
         """Lists the current tenant's recent execution jobs, newest first."""
