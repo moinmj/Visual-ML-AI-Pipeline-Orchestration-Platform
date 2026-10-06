@@ -72,12 +72,18 @@ class ExportWriterRecipe(BaseRecipe):
                     "title": "File Format",
                     "enum": ["csv", "parquet", "excel", "json", "tsv"],
                     "default": "csv",
+                    "input_type": "dropdown",
+                    "ui:widget": "select",
+                    "widget": "dropdown",
                     "description": "Format of the exported file (CSV, Parquet, Excel .xlsx, JSON, or TSV)."
                 },
                 "file_name": {
                     "type": "string",
                     "title": "File Name",
                     "default": "exported_dataset",
+                    "input_type": "text",
+                    "ui:widget": "text",
+                    "widget": "text",
                     "description": "Name of the exported file (extension is automatically appended if omitted)."
                 },
                 "destination": {
@@ -85,18 +91,27 @@ class ExportWriterRecipe(BaseRecipe):
                     "title": "Destination",
                     "enum": ["export_store", "custom_path"],
                     "default": "export_store",
+                    "input_type": "dropdown",
+                    "ui:widget": "select",
+                    "widget": "dropdown",
                     "description": "Save in platform's standard export store, or specify a custom relative path."
                 },
                 "custom_file_path": {
                     "type": "string",
                     "title": "Custom File Path",
                     "default": "",
+                    "input_type": "text",
+                    "ui:widget": "text",
+                    "widget": "text",
                     "description": "Relative file path when using 'custom_path' (e.g. 'exports/my_export.parquet')."
                 },
                 "include_index": {
                     "type": "boolean",
                     "title": "Include DataFrame Index",
                     "default": False,
+                    "input_type": "boolean",
+                    "ui:widget": "switch",
+                    "widget": "switch",
                     "description": "Whether to write the DataFrame row index as a column in the output file."
                 },
                 "delimiter": {
@@ -104,6 +119,9 @@ class ExportWriterRecipe(BaseRecipe):
                     "title": "Delimiter (CSV / TSV)",
                     "enum": [",", ";", "\t", "|"],
                     "default": ",",
+                    "input_type": "dropdown",
+                    "ui:widget": "select",
+                    "widget": "dropdown",
                     "description": "Field separator for delimited text exports."
                 },
                 "compression": {
@@ -111,12 +129,18 @@ class ExportWriterRecipe(BaseRecipe):
                     "title": "Compression",
                     "enum": ["none", "gzip", "snappy"],
                     "default": "none",
+                    "input_type": "dropdown",
+                    "ui:widget": "select",
+                    "widget": "dropdown",
                     "description": "Compression algorithm (supported for CSV and Parquet)."
                 },
                 "excel_sheet_name": {
                     "type": "string",
                     "title": "Excel Sheet Name",
                     "default": "Sheet1",
+                    "input_type": "text",
+                    "ui:widget": "text",
+                    "widget": "text",
                     "description": "Name of the worksheet for Excel (.xlsx) exports."
                 },
                 "json_orient": {
@@ -124,12 +148,18 @@ class ExportWriterRecipe(BaseRecipe):
                     "title": "JSON Orientation",
                     "enum": ["records", "split", "index", "columns"],
                     "default": "records",
+                    "input_type": "dropdown",
+                    "ui:widget": "select",
+                    "widget": "dropdown",
                     "description": "Layout format for JSON export ('records' is standard list-of-dicts n8n shape)."
                 },
                 "overwrite": {
                     "type": "boolean",
                     "title": "Overwrite Existing File",
                     "default": True,
+                    "input_type": "boolean",
+                    "ui:widget": "switch",
+                    "widget": "switch",
                     "description": "Whether to overwrite the file if a file with the same name already exists."
                 }
             },

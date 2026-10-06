@@ -198,3 +198,32 @@ def test_export_writer_json(tmp_path):
         data = json.load(f)
     assert len(data) == 2
     assert data[0]["user"] == "U1"
+
+
+@pytest.mark.asyncio
+async def test_autowire_data_ingestion_custom_python_and_export_writer():
+    """Verify that autowire correctly wires Data Ingestion -> Custom Python Step -> Export / Write Operator."""
+    from backend.app.recommendation.router import autowire_nodes, AutoWireRequest
+
+    # Deliberately place them in reverse/random order on canvas
+    nodes = [
+        {"id": "processor_export_writer_1", "recipe_id": "export_writer", "label": "Export / Write Operator"},
+        {"id": "processor_csv_loader_1", "recipe_id": "csv_loader", "label": "Data Ingestion"},
+        {"id": "processor_custom_python_step_1", "recipe_id": "custom_python_step", "label": "Custom Python Step"}
+    ]
+
+    res = await autowire_nodes(AutoWireRequest(nodes=nodes))
+    assert res["status"] == "AUTOWIRED"
+    edges = res["edges"]
+    assert len(edges) == 2
+
+    # Edge 1: csv_loader -> custom_python_step
+    e1 = edges[0]
+    assert e1["source"] == "processor_csv_loader_1"
+    assert e1["target"] == "processor_custom_python_step_1"
+
+    # Edge 2: custom_python_step -> export_writer
+    e2 = edges[1]
+    assert e2["source"] == "processor_custom_python_step_1"
+    assert e2["target"] == "processor_export_writer_1"
+
