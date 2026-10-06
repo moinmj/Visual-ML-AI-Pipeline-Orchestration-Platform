@@ -37,83 +37,48 @@ class CustomPythonStepRecipe(BaseRecipe):
             "type": "object",
             "properties": {
                 "code": {
-                    "type": "string",
+                    "type": "textarea",
                     "title": "Python Code",
                     "default": (
                         "# Access data as 'df' (pandas DataFrame) or 'items' (list of dicts, n8n style)\n"
-                        "# Example: Add a new calculated column\n"
+                        "# Example:\n"
+                        "# df['family_size'] = df['SibSp'] + df['Parch'] + 1\n"
                         "df['processed'] = True\n"
                     ),
                     "description": (
                         "Write Python code to transform your data. "
                         "Incoming data is available as 'df' (pandas DataFrame) or 'items' / 'records' (list of dicts). "
-                        "You can return a DataFrame, modify 'df' in-place, or assign to 'result' / 'output_df'."
-                    ),
-                    "input_type": "code",
-                    "widget": "code_editor",
-                    "ui:widget": "code_editor",
-                    "ui:language": "python",
-                    "language": "python"
-                },
-                "code_templates": {
-                    "type": "array",
-                    "title": "Quick Templates",
-                    "items": {"type": "object"},
-                    "default": [
-                        {
-                            "label": "Add Calculated Column",
-                            "code": (
-                                "# Add a calculated column\n"
-                                "df['calculated_metric'] = df.iloc[:, 0] * 1.1\n"
-                            )
-                        },
-                        {
-                            "label": "Filter Rows",
-                            "code": (
-                                "# Filter rows based on conditions\n"
-                                "# df = df[df['status'] == 'completed']\n"
-                                "df = df.dropna().head(100)\n"
-                            )
-                        },
-                        {
-                            "label": "Group By & Aggregate",
-                            "code": (
-                                "# Group and aggregate values\n"
-                                "# df = df.groupby('category').agg({'amount': 'sum'}).reset_index()\n"
-                                "df = df.describe().reset_index()\n"
-                            )
-                        },
-                        {
-                            "label": "String Clean & Standardize",
-                            "code": (
-                                "# Clean and standardize string columns\n"
-                                "for col in df.select_dtypes(include='object').columns:\n"
-                                "    df[col] = df[col].astype(str).str.strip().str.upper()\n"
-                            )
-                        },
-                        {
-                            "label": "n8n Items / Record Loop",
-                            "code": (
-                                "# Loop over items (n8n dict style)\n"
-                                "for item in items:\n"
-                                "    item['is_valid'] = True\n"
-                                "return items\n"
-                            )
-                        },
-                        {
-                            "label": "Create New Output DataFrame",
-                            "code": (
-                                "# Return a completely custom dataset\n"
-                                "output_df = pd.DataFrame({\n"
-                                "    'metric': ['A', 'B', 'C'],\n"
-                                "    'value': [100, 250, 400]\n"
-                                "})\n"
-                            )
-                        }
-                    ]
+                        "You can modify 'df' in-place, return a DataFrame, or assign to 'output_df' / 'result'."
+                    )
                 }
             },
-            "required": ["code"]
+            "required": ["code"],
+            "templates": [
+                {
+                    "label": "Add Calculated Column",
+                    "code": "df['calculated_metric'] = df.iloc[:, 0] * 1.1\n"
+                },
+                {
+                    "label": "Filter Rows",
+                    "code": "df = df.dropna().head(100)\n"
+                },
+                {
+                    "label": "Group By & Aggregate",
+                    "code": "df = df.describe().reset_index()\n"
+                },
+                {
+                    "label": "String Clean & Standardize",
+                    "code": "for col in df.select_dtypes(include='object').columns:\n    df[col] = df[col].astype(str).str.strip().str.upper()\n"
+                },
+                {
+                    "label": "n8n Items / Record Loop",
+                    "code": "for item in items:\n    item['is_valid'] = True\nreturn items\n"
+                },
+                {
+                    "label": "Create New Output DataFrame",
+                    "code": "output_df = pd.DataFrame({'metric': ['A', 'B', 'C'], 'value': [100, 250, 400]})\n"
+                }
+            ]
         }
 
     def validate_config(self, config: Dict[str, Any]) -> List[str]:
