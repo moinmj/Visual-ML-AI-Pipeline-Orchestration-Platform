@@ -108,9 +108,22 @@ class PivotRecipe(BaseRecipe):
             return []
         if isinstance(val, str):
             clean = val.strip()
-            return [clean] if clean else []
+            if not clean:
+                return []
+            # Support comma-separated strings typed in input boxes (e.g. 'A, B, C')
+            if "," in clean:
+                return [p.strip() for p in clean.split(",") if p.strip()]
+            return [clean]
         if isinstance(val, (list, tuple)):
-            return [str(c).strip() for c in val if c is not None and str(c).strip()]
+            res = []
+            for c in val:
+                if c is not None and str(c).strip():
+                    item = str(c).strip()
+                    if "," in item:
+                        res.extend([p.strip() for p in item.split(",") if p.strip()])
+                    else:
+                        res.append(item)
+            return res
         return []
 
     def _match_column(self, col_name: str, available_cols: List[str]) -> Optional[str]:
@@ -138,6 +151,15 @@ class PivotRecipe(BaseRecipe):
             if clean_c.replace("y", "u") == clean_target.replace("y", "u"):
                 return c
             
+        # 4. Unambiguous substring/suffix match (e.g. "air" or "nair" matching "Priya Nair")
+        if len(clean_target) >= 3:
+            sub_matches = [
+                c for c in available_cols
+                if clean_target in c.lower().replace("-", "").replace("_", "").replace(" ", "")
+            ]
+            if len(sub_matches) == 1:
+                return sub_matches[0]
+
         return None
 
     def validate_config(self, config: Dict[str, Any]) -> List[str]:
@@ -232,7 +254,17 @@ class PivotRecipe(BaseRecipe):
 
         else:  # unpivot (melt)
             valid_id_vars = [c for c in index_cols if c in df.columns] if index_cols else None
-            valid_value_vars = [c for c in value_cols if c in df.columns] if value_cols else None
+            
+            # If value columns specified, filter to existing columns
+            matched_value_vars = [c for c in value_cols if c in df.columns] if value_cols else None
+            
+            # If value_cols was not specified OR none of the specified columns existed,
+            # default to all columns not in id_vars so we unpivot all wide columns
+            if not matched_value_vars:
+                valid_value_vars = [c for c in df.columns if c not in (valid_id_vars or [])]
+            else:
+                valid_value_vars = matched_value_vars
+
             var_name = str(config.get("var_name", "variable")).strip() or "variable"
             value_name = str(config.get("value_name", "value")).strip() or "value"
 
@@ -270,5 +302,6 @@ class PivotRecipe(BaseRecipe):
         else:
             id_vars = self._normalize_col_list(config.get("index"))
             val_vars = self._normalize_col_list(config.get("values"))
-            return f"df = df.melt(id_vars={repr(id_vars)}, value_vars={repr(val_vars)}, " \
+            val_arg = repr(val_vars) if val_vars else "None"
+            return f"df = df.melt(id_vars={repr(id_vars)}, value_vars={val_arg}, " \
                    f"var_name='{config.get('var_name', 'variable')}', value_name='{config.get('value_name', 'value')}')"
