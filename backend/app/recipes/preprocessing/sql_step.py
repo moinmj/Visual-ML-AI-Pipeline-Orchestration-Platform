@@ -22,23 +22,23 @@ class SQLStepRecipe(BaseRecipe):
                     "type": "string",
                     "title": "SQL Query",
                     "default": "SELECT * FROM df",
-                    "description": "Standard SQL. Reference the incoming data as table 'df' (or 'data' / 'input_df')."
-                },
-                "query_templates": {
-                    "type": "array",
-                    "title": "Quick Templates",
-                    "items": {"type": "object"},
-                    "default": [
-                        {"label": "Aggregate", "query": "SELECT category, SUM(amount) AS total FROM df GROUP BY category"},
-                        {"label": "Sort", "query": "SELECT * FROM df ORDER BY column_name DESC"},
-                        {"label": "Pivot", "query": "PIVOT df ON category USING SUM(amount)"},
-                        {"label": "Unpivot", "query": "UNPIVOT df ON col1, col2 INTO NAME metric VALUE value"},
-                        {"label": "Union", "query": "SELECT * FROM df WHERE year = 2023\nUNION\nSELECT * FROM df WHERE year = 2024"},
-                        {"label": "CTE (WITH)", "query": "WITH filtered AS (\n    SELECT * FROM df WHERE amount > 0\n)\nSELECT category, AVG(amount) AS avg_amt FROM filtered GROUP BY category"}
-                    ]
+                    "description": "Standard SQL. Reference the incoming data as table 'df' (or 'data' / 'input_df').",
+                    "format": "textarea",
+                    "input_type": "textarea",
+                    "ui:widget": "textarea",
+                    "widget": "textarea",
+                    "rows": 8
                 }
             },
-            "required": ["query"]
+            "required": ["query"],
+            "templates": [
+                {"label": "Aggregate", "query": "SELECT category, SUM(amount) AS total FROM df GROUP BY category"},
+                {"label": "Sort", "query": "SELECT * FROM df ORDER BY column_name DESC"},
+                {"label": "Pivot", "query": "PIVOT df ON category USING SUM(amount)"},
+                {"label": "Unpivot", "query": "UNPIVOT df ON col1, col2 INTO NAME metric VALUE value"},
+                {"label": "Union", "query": "SELECT * FROM df WHERE year = 2023\nUNION\nSELECT * FROM df WHERE year = 2024"},
+                {"label": "CTE (WITH)", "query": "WITH filtered AS (\n    SELECT * FROM df WHERE amount > 0\n)\nSELECT category, AVG(amount) AS avg_amt FROM filtered GROUP BY category"}
+            ]
         }
 
     def _extract_first_token(self, query: str) -> str:
