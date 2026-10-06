@@ -39,27 +39,36 @@ class PivotRecipe(BaseRecipe):
                     "description": "pivot (long-to-wide by grouping index and pivoting column headers) or unpivot (wide-to-long/melt)."
                 },
                 "index": {
-                    "title": "Row Identifiers (Index / ID Vars)",
-                    "description": "Columns to retain as row identifier keys.",
+                    "type": "string",
+                    "title": "Row Identifiers Column(s)",
+                    "format": "column",
+                    "ui:widget": "column_select",
+                    "description": "Column(s) to retain as row identifier keys.",
                     "oneOf": [
-                        {"type": "string"},
-                        {"type": "array", "items": {"type": "string"}}
+                        {"type": "string", "title": "Single Column", "format": "column"},
+                        {"type": "array", "title": "Multiple Columns", "items": {"type": "string", "format": "column"}}
                     ]
                 },
                 "columns": {
-                    "title": "Pivot Column(s) (pivot mode only)",
-                    "description": "Column whose unique values become the new wide column headers.",
+                    "type": "string",
+                    "title": "Pivot Column(s)",
+                    "format": "column",
+                    "ui:widget": "column_select",
+                    "description": "Column whose unique values become the new wide column headers (pivot mode only).",
                     "oneOf": [
-                        {"type": "string"},
-                        {"type": "array", "items": {"type": "string"}}
+                        {"type": "string", "title": "Single Column", "format": "column"},
+                        {"type": "array", "title": "Multiple Columns", "items": {"type": "string", "format": "column"}}
                     ]
                 },
                 "values": {
+                    "type": "string",
                     "title": "Value Column(s)",
+                    "format": "column",
+                    "ui:widget": "column_select",
                     "description": "Column(s) containing values to aggregate in cells (pivot) or unpivot into values (unpivot).",
                     "oneOf": [
-                        {"type": "string"},
-                        {"type": "array", "items": {"type": "string"}}
+                        {"type": "string", "title": "Single Column", "format": "column"},
+                        {"type": "array", "title": "Multiple Columns", "items": {"type": "string", "format": "column"}}
                     ]
                 },
                 "agg_func": {
@@ -104,6 +113,33 @@ class PivotRecipe(BaseRecipe):
             return [str(c).strip() for c in val if c is not None and str(c).strip()]
         return []
 
+    def _match_column(self, col_name: str, available_cols: List[str]) -> Optional[str]:
+        """Case-insensitive and symbol-flexible match (e.g. CUSTOMER-ID vs customer_id vs CYSTOMER-ID)."""
+        if not col_name:
+            return None
+        if col_name in available_cols:
+            return col_name
+        
+        # 1. Exact case-insensitive match
+        for c in available_cols:
+            if c.lower() == col_name.lower():
+                return c
+        
+        # 2. Normalized match (remove spaces, underscores, dashes)
+        clean_target = col_name.lower().replace("-", "").replace("_", "").replace(" ", "")
+        for c in available_cols:
+            clean_c = c.lower().replace("-", "").replace("_", "").replace(" ", "")
+            if clean_c == clean_target:
+                return c
+        
+        # 3. Typo/fuzzy fallback (e.g. CYSTOMER vs CUSTOMER)
+        for c in available_cols:
+            clean_c = c.lower().replace("-", "").replace("_", "").replace(" ", "")
+            if clean_c.replace("y", "u") == clean_target.replace("y", "u"):
+                return c
+            
+        return None
+
     def validate_config(self, config: Dict[str, Any]) -> List[str]:
         errors = []
         mode = str(config.get("mode", "pivot")).lower().strip()
@@ -128,10 +164,16 @@ class PivotRecipe(BaseRecipe):
         if df is None:
             raise ValueError("PivotRecipe expects 'dataframe' in inputs.")
 
+        all_cols = list(df.columns)
         mode = str(config.get("mode", "pivot")).lower().strip()
-        index_cols = self._normalize_col_list(config.get("index"))
-        pivot_cols = self._normalize_col_list(config.get("columns"))
-        value_cols = self._normalize_col_list(config.get("values"))
+        raw_index_cols = self._normalize_col_list(config.get("index"))
+        raw_pivot_cols = self._normalize_col_list(config.get("columns"))
+        raw_value_cols = self._normalize_col_list(config.get("values"))
+
+        # Resolve columns with flexible matching
+        index_cols = [self._match_column(c, all_cols) or c for c in raw_index_cols]
+        pivot_cols = [self._match_column(c, all_cols) or c for c in raw_pivot_cols]
+        value_cols = [self._match_column(c, all_cols) or c for c in raw_value_cols]
 
         if mode == "pivot":
             if not pivot_cols:
