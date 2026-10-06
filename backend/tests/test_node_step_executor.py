@@ -537,5 +537,39 @@ async def test_join_datetime_with_object_string_date():
     assert not any(c.startswith("__temp_join_") for c in resp.columns)
 
 
+@pytest.mark.asyncio
+async def test_mlflow_tracker_preview():
+    """Verify that MLflow Tracker produces a tabular preview row and does not 404."""
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=auth_headers()) as client:
+        session_id = f"test_mlflow_{uuid.uuid4().hex[:8]}"
+        payload = {
+            "session_id": session_id,
+            "nodes": [
+                {"id": "node_mlflow", "recipe_id": "mlflow_tracker", "config": {"registered_model_name": "TestModel"}}
+            ],
+            "edges": [],
+            "node_configs": {
+                "node_mlflow": {"registered_model_name": "TestModel"}
+            }
+        }
+        resp = await client.post(
+            "/api/v1/workflows/nodes/node_mlflow/test-step",
+            json=payload
+        )
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+
+        preview_resp = await client.get(
+            f"/api/v1/workflows/sessions/{session_id}/nodes/node_mlflow/preview?page=1&limit=10"
+        )
+        assert preview_resp.status_code == 200
+        preview_data = preview_resp.json()
+        assert preview_data["total_rows"] == 1
+        assert "mlflow_run_id" in preview_data["columns"]
+        assert len(preview_data["data"]) == 1
+        assert preview_data["data"][0]["registered_model_name"] == "TestModel"
+
+
+
 
 

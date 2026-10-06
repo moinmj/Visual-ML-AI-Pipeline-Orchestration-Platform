@@ -2227,6 +2227,32 @@ async def get_test_step_table_preview(
     outputs = NodeStepExecutor.load_node_output(session_id=session_id, node_id=node_id)
     df = outputs.get("dataframe")
     if df is None or not isinstance(df, pd.DataFrame):
+        for v in outputs.values():
+            if isinstance(v, pd.DataFrame):
+                df = v
+                break
+
+    # Graceful fallback for governance, tracker, and evaluator nodes
+    if df is None or not isinstance(df, pd.DataFrame):
+        if outputs.get("governance_record") and isinstance(outputs["governance_record"], dict):
+            df = pd.DataFrame([outputs["governance_record"]])
+        elif outputs.get("metrics") and isinstance(outputs["metrics"], dict) and len(outputs["metrics"]) > 0:
+            scalar_m = {k: v for k, v in outputs["metrics"].items() if isinstance(v, (int, float, str, bool))}
+            if scalar_m:
+                df = pd.DataFrame([scalar_m])
+        else:
+            meta = NodeStepExecutor.load_node_meta(session_id=session_id, node_id=node_id)
+            if meta:
+                if meta.get("preview_rows"):
+                    df = pd.DataFrame(meta["preview_rows"])
+                elif meta.get("output_summary") and isinstance(meta["output_summary"], dict) and meta["output_summary"].get("governance_record"):
+                    df = pd.DataFrame([meta["output_summary"]["governance_record"]])
+                elif meta.get("metrics") and isinstance(meta["metrics"], dict) and len(meta["metrics"]) > 0:
+                    scalar_m = {k: v for k, v in meta["metrics"].items() if isinstance(v, (int, float, str, bool))}
+                    if scalar_m:
+                        df = pd.DataFrame([scalar_m])
+
+    if df is None or not isinstance(df, pd.DataFrame):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"No tabular test output found for node '{node_id}' in session '{session_id}'."
