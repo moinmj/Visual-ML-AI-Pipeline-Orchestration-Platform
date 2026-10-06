@@ -207,12 +207,20 @@ async def autowire_nodes(payload: AutoWireRequest):
         "lag_features": 2.4,
 
         # Flow Control: Routing, Branching & Delays
+        # Flow Control & Custom Logic
         "if_condition": 2.45,
         "if_else": 2.45,
+        "sql_step": 2.46,
+        "custom_python_step": 2.47,
         "switch": 2.48,
+        "limit": 2.482,
+        "sort": 2.485,
+        "aggregate": 2.49,
         "delay": 2.49,
         "wait": 2.49,
+        "combine": 2.495,
         "loop": 2.495,
+        "pivot": 2.498,
 
         # Feature Selection
         "correlation_filter": 2.5,
@@ -244,6 +252,9 @@ async def autowire_nodes(payload: AutoWireRequest):
         # Governance
         "mlflow_tracker": 6.0,
 
+        # Output / Export Sink Operators
+        "export_writer": 6.4,
+
         # Alerts & Notifications (End of Pipeline)
         "slack": 6.5,
         "discord": 6.5,
@@ -254,16 +265,38 @@ async def autowire_nodes(payload: AutoWireRequest):
 
     def get_node_weight(node: Dict[str, Any]) -> float:
         r_id = node.get("recipe_id") or node.get("data", {}).get("recipe_id")
+        if not r_id and isinstance(node.get("data"), dict):
+            r_id = node["data"].get("recipe")
+        if not r_id:
+            # Fallback to inspecting node id or label
+            nid = str(node.get("id") or "").lower()
+            for known_id in recipe_weights:
+                if known_id in nid:
+                    r_id = known_id
+                    break
+
         if r_id and r_id in recipe_weights:
             return recipe_weights[r_id]
 
+        # Prevent export_writer from inheriting ingestion weight 1.0
+        if r_id == "export_writer" or (r_id and "export" in str(r_id).lower()):
+            return 6.4
+
         recipe = recipe_registry.get(r_id) if r_id else None
+        if recipe and recipe.recipe_id == "export_writer":
+            return 6.4
         if recipe and recipe.category in category_weights:
             return category_weights[recipe.category]
 
         # Inferred from id/label fallback
         label = str(node.get("label") or node.get("id") or "").lower()
-        if any(k in label for k in ["csv", "loader", "trigger", "ingest"]):
+        if any(k in label for k in ["export", "writer", "export_writer", "write_operator"]):
+            return 6.4
+        elif any(k in label for k in ["python", "custom_python", "code"]):
+            return 2.47
+        elif any(k in label for k in ["sql_step", "sql"]):
+            return 2.46
+        elif any(k in label for k in ["csv", "loader", "trigger", "ingest"]):
             return 1.1
         elif any(k in label for k in ["column_select", "col_select", "dup", "dedup"]):
             return 1.2
@@ -358,6 +391,8 @@ async def autowire_nodes(payload: AutoWireRequest):
                     "id": f"e_{prev_node_id}_{n_id}",
                     "source": prev_node_id,
                     "target": n_id,
+                    "source_handle": "output",
+                    "target_handle": "input",
                     "animated": True
                 })
             prev_node_id = n_id
