@@ -43,20 +43,19 @@ class CategoricalEncoderRecipe(BaseRecipe):
             "type": "object",
             "properties": {
                 "method": {
-                    "type": "string",
+                    "type": "select",
                     "title": "Encoding Method",
                     "enum": ["one_hot", "label", "ordinal", "target", "frequency", "binary", "woe"],
                     "default": "one_hot",
                     "description": "Select from 7 encoding techniques."
                 },
                 "columns": {
-                    "type": "array",
-                    "items": {"type": "string"},
+                    "type": "column",
                     "title": "Columns to Encode",
                     "description": "Specific categorical columns to encode. If empty, all string/categorical features are processed."
                 },
                 "target_column": {
-                    "type": "string",
+                    "type": "column",
                     "title": "Target Column",
                     "description": "Required for Target and WoE encodings. If blank, auto-detected from context."
                 },

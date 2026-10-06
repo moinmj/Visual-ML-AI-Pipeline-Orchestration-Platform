@@ -19,15 +19,10 @@ class SQLStepRecipe(BaseRecipe):
             "type": "object",
             "properties": {
                 "query": {
-                    "type": "string",
+                    "type": "textarea",
                     "title": "SQL Query",
                     "default": "SELECT * FROM df",
-                    "description": "Standard SQL. Reference the incoming data as table 'df' (or 'data' / 'input_df').",
-                    "format": "textarea",
-                    "input_type": "textarea",
-                    "ui:widget": "textarea",
-                    "widget": "textarea",
-                    "rows": 8
+                    "description": "Standard SQL. Reference the incoming data as table 'df' (or 'data' / 'input_df')."
                 }
             },
             "required": ["query"],

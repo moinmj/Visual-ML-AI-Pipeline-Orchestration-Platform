@@ -37,7 +37,7 @@ class CustomPythonStepRecipe(BaseRecipe):
             "type": "object",
             "properties": {
                 "code": {
-                    "type": "string",
+                    "type": "textarea",
                     "title": "Python Code",
                     "default": (
                         "# Access data as 'df' (pandas DataFrame) or 'items' (list of dicts, n8n style)\n"
@@ -49,12 +49,7 @@ class CustomPythonStepRecipe(BaseRecipe):
                         "Write Python code to transform your data. "
                         "Incoming data is available as 'df' (pandas DataFrame) or 'items' / 'records' (list of dicts). "
                         "You can modify 'df' in-place, return a DataFrame, or assign to 'output_df' / 'result'."
-                    ),
-                    "format": "textarea",
-                    "input_type": "textarea",
-                    "ui:widget": "textarea",
-                    "widget": "textarea",
-                    "rows": 10
+                    )
                 }
             },
             "required": ["code"],

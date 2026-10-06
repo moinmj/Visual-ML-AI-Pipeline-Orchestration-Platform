@@ -32,69 +32,47 @@ class PivotRecipe(BaseRecipe):
             "type": "object",
             "properties": {
                 "mode": {
-                    "type": "string",
+                    "type": "radio",
                     "title": "Operation Mode",
                     "enum": ["pivot", "unpivot"],
                     "default": "pivot",
-                    "description": "pivot (long-to-wide by grouping index and pivoting column headers) or unpivot (wide-to-long/melt)."
+                    "description": "pivot (long-to-wide) or unpivot (wide-to-long/melt)."
                 },
                 "index": {
-                    "type": "string",
+                    "type": "column",
                     "title": "Row Identifiers Column(s)",
-                    "format": "column",
-                    "ui:widget": "column_select",
-                    "description": "Column(s) to retain as row identifier keys.",
-                    "oneOf": [
-                        {"type": "string", "title": "Single Column", "format": "column"},
-                        {"type": "array", "title": "Multiple Columns", "items": {"type": "string", "format": "column"}}
-                    ]
+                    "description": "Column(s) to retain as row identifier keys."
                 },
                 "columns": {
-                    "type": "string",
+                    "type": "column",
                     "title": "Pivot Column(s)",
-                    "format": "column",
-                    "ui:widget": "column_select",
-                    "description": "Column whose unique values become the new wide column headers (pivot mode only).",
-                    "oneOf": [
-                        {"type": "string", "title": "Single Column", "format": "column"},
-                        {"type": "array", "title": "Multiple Columns", "items": {"type": "string", "format": "column"}}
-                    ]
+                    "description": "Column whose unique values become the new wide column headers (pivot mode only)."
                 },
                 "values": {
-                    "type": "string",
+                    "type": "column",
                     "title": "Value Column(s)",
-                    "format": "column",
-                    "ui:widget": "column_select",
-                    "description": "Column(s) containing values to aggregate in cells (pivot) or unpivot into values (unpivot).",
-                    "oneOf": [
-                        {"type": "string", "title": "Single Column", "format": "column"},
-                        {"type": "array", "title": "Multiple Columns", "items": {"type": "string", "format": "column"}}
-                    ]
+                    "description": "Column(s) containing values to aggregate in cells (pivot) or unpivot into values (unpivot)."
                 },
                 "agg_func": {
-                    "type": "string",
+                    "type": "select",
                     "title": "Aggregation Function (pivot only)",
                     "enum": ["sum", "mean", "count", "first", "last", "min", "max", "median"],
                     "default": "sum"
                 },
                 "fill_value": {
+                    "type": "text",
                     "title": "Fill Value (pivot only)",
-                    "description": "Value to replace missing/null cells in the pivoted table (e.g. 0).",
-                    "oneOf": [
-                        {"type": "number"},
-                        {"type": "string"},
-                        {"type": "null"}
-                    ],
-                    "default": 0
+                    "default": 0,
+                    "description": "Value to replace missing/null cells in the pivoted table (e.g. 0)."
                 },
                 "var_name": {
-                    "type": "string",
+                    "type": "text",
                     "title": "Variable Column Name (unpivot only)",
                     "default": "variable",
                     "description": "Name of the column for unpivoted headers."
                 },
                 "value_name": {
-                    "type": "string",
+                    "type": "text",
                     "title": "Value Column Name (unpivot only)",
                     "default": "value",
                     "description": "Name of the column for unpivoted values."
