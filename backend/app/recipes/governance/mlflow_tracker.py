@@ -2,6 +2,7 @@ import os
 import tempfile
 import joblib
 from typing import Dict, Any, Optional
+import pandas as pd
 from backend.app.recipes.base.recipe import BaseRecipe
 
 try:
@@ -115,10 +116,21 @@ class MLflowTrackerRecipe(BaseRecipe):
             "metrics_logged": len(metrics)
         }
 
+        # Provide a clean tabular DataFrame for visual canvas preview
+        gov_df = pd.DataFrame([governance_record])
+
         ret = {
             "governance_record": governance_record,
-            "metrics": metrics
+            "metrics": metrics,
+            "dataframe": gov_df
         }
+        # Also preserve incoming dataframe for downstream node consumption if connected
+        incoming_df = inputs.get("dataframe")
+        if incoming_df is None and isinstance(inputs.get("forecast_df"), pd.DataFrame):
+            incoming_df = inputs["forecast_df"]
+        if isinstance(incoming_df, pd.DataFrame):
+            ret["input_dataframe"] = incoming_df
+
         if model is not None:
             ret["model"] = model
         return ret

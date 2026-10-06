@@ -105,6 +105,15 @@ class NodeStepExecutor:
                     primary_df = v
                     break
 
+        # Fallback: synthesize tabular view for governance/tracking/evaluator nodes
+        if primary_df is None or not isinstance(primary_df, pd.DataFrame):
+            if outputs.get("governance_record") and isinstance(outputs["governance_record"], dict):
+                primary_df = pd.DataFrame([outputs["governance_record"]])
+            elif outputs.get("metrics") and isinstance(outputs["metrics"], dict) and len(outputs["metrics"]) > 0:
+                scalar_m = {k: v for k, v in outputs["metrics"].items() if isinstance(v, (int, float, str, bool))}
+                if scalar_m:
+                    primary_df = pd.DataFrame([scalar_m])
+
         if isinstance(primary_df, pd.DataFrame):
             df_file = sdir / f"node_{node_id}_df.parquet"
             primary_df.to_parquet(df_file, index=False)
