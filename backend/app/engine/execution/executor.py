@@ -1,7 +1,7 @@
 import time
 import re
 import traceback
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Callable
 from datetime import datetime, timezone, date
 import pandas as pd
 import numpy as np
@@ -169,12 +169,77 @@ def make_json_safe(obj: Any) -> Any:
         return obj
 
 
+def _emit(on_event: Optional[Callable[[Dict[str, Any]], None]], event: Dict[str, Any]) -> None:
+    """Sends a live progress event (log line / node started / node finished). Never breaks a run."""
+    if on_event is None:
+        return
+    try:
+        on_event(event)
+    except Exception as e:  # a broken listener must not fail the workflow
+        logger.debug(f"progress listener error: {e}")
+
+
+class _LiveLog(list):
+    """A normal list of log lines that also publishes every new line as it is added."""
+
+    def __init__(self, on_event: Optional[Callable[[Dict[str, Any]], None]] = None):
+        super().__init__()
+        self._on_event = on_event
+
+    def append(self, message: Any) -> None:
+        super().append(message)
+        _emit(self._on_event, {"type": "log", "index": len(self) - 1, "message": message})
+
+
+# Artifacts that flow from a node into the shared pipeline context.
+_CONTEXT_KEYS = [
+    "X_test", "y_test", "X_train", "y_train", "dataframe", "forecast_df",
+    "model", "scaler", "encoder", "task_type", "feature_names", "feature_importances",
+    "target_classes", "target_encoder", "target_column", "imputer_stats",
+    "vectorizer", "text_column", "split_mode", "categorical_maps"
+]
+
+
 class DAGExecutor:
     """
     Unified In-Memory DAG Execution Engine.
     Executes nodes in topological order, manages context passing,
     and captures metrics, summaries, diagnostic artifacts, and step snapshots.
     """
+
+    @staticmethod
+    def _propagate_context(outputs: Dict[str, Any], node: Any, pipeline_context: Dict[str, Any]) -> None:
+        """Copies a node's standard artifacts into the shared context (never overwrites with None)."""
+        for key in _CONTEXT_KEYS:
+            if key in outputs and outputs[key] is not None:
+                pipeline_context[key] = outputs[key]
+        if "target_column" in (node.config or {}) and node.config["target_column"]:
+            pipeline_context["target_column"] = node.config["target_column"]
+
+    @staticmethod
+    def _cache_dataframe(execution_id: str, node_id: str, outputs: Dict[str, Any]) -> None:
+        """Caches a node's dataframe on disk for instant pagination and CSV download."""
+        df_out = outputs.get("dataframe")
+        if df_out is None or not isinstance(df_out, pd.DataFrame):
+            for fallback_k in ["dataframe_train", "dataframe_test", "matched_dataframe", "forecast_df"]:
+                if isinstance(outputs.get(fallback_k), pd.DataFrame):
+                    df_out = outputs[fallback_k]
+                    break
+            if df_out is None:
+                for v in outputs.values():
+                    if isinstance(v, pd.DataFrame):
+                        df_out = v
+                        break
+        if isinstance(df_out, pd.DataFrame) and len(df_out) > 0:
+            try:
+                from backend.app.infrastructure.storage.storage_manager import storage_manager
+                from backend.app.core.tenant_context import tenant_cache_dir
+                p_rel = f"{tenant_cache_dir()}/executions/{execution_id}/{node_id}.parquet"
+                p_abs = storage_manager.get_absolute_path(p_rel)
+                p_abs.parent.mkdir(parents=True, exist_ok=True)
+                df_out.to_parquet(p_abs, index=False)
+            except Exception:
+                pass
 
     @classmethod
     def execute_workflow(
@@ -183,11 +248,37 @@ class DAGExecutor:
         workflow: WorkflowGraph,
         initial_df: Optional[pd.DataFrame] = None,
         context: Optional[Dict[str, Any]] = None,
-        include_node_outputs: bool = False
+        include_node_outputs: bool = False,
+        on_event: Optional[Callable[[Dict[str, Any]], None]] = None,
+        resume_from: Optional[str] = None,
     ) -> WorkflowExecutionResult:
+        """
+        on_event:    optional callback receiving live progress events while the run is
+                     going (used by the job manager for live logs / node status).
+        resume_from: ID of an earlier FAILED execution. Nodes that succeeded there and
+                     haven't changed (same recipe, config, connections and upstream) are
+                     not executed again; their saved outputs are reused.
+        """
+        from backend.app.engine.execution import run_state as _rs
+
         start_time = time.time()
-        logs: List[str] = []
+        logs: List[str] = _LiveLog(on_event)
         node_results: List[NodeExecutionResult] = []
+        state: Optional[Any] = None
+
+        def _add_result(res: NodeExecutionResult) -> None:
+            node_results.append(res)
+            if res.status == "FAILED" and state is not None:
+                state.node_failed(res.node_id)
+            _emit(on_event, {
+                "type": "node_finished",
+                "node_id": res.node_id,
+                "recipe_id": res.recipe_id,
+                "status": res.status,
+                "duration_ms": res.duration_ms,
+                "error_message": res.error_message,
+                "reused": bool((res.output_summary or {}).get("reused_from")),
+            })
         node_outputs: Dict[str, Dict[str, Any]] = {}
         step_snapshots: Dict[str, Dict[str, Any]] = {}
         
@@ -228,10 +319,50 @@ class DAGExecutor:
 
         overall_status = "SUCCESS"
 
+        def _capture_summaries(outputs: Dict[str, Any]) -> None:
+            nonlocal final_metrics, anomaly_summary, forecasting_summary, governance_summary
+            if "metrics" in outputs:
+                final_metrics = outputs["metrics"]
+            if "anomaly_summary" in outputs:
+                anomaly_summary = outputs["anomaly_summary"]
+            if "forecasting_summary" in outputs:
+                forecasting_summary = outputs["forecasting_summary"]
+            if "governance_record" in outputs:
+                governance_summary = outputs["governance_record"]
+
+        # Resume support: fingerprint every node (recipe + config + connections + upstream)
+        fingerprints: Dict[str, str] = {}
+        for n in ordered_nodes:
+            fingerprints[n.id] = _rs.node_fingerprint(
+                n, in_edges_map.get(n.id, []), [fingerprints.get(p, "") for p in parent_map.get(n.id, [])]
+            )
+        prev_nodes: Dict[str, Any] = {}
+        if resume_from:
+            if initial_df is not None:
+                logs.append("⚠️ Resume ignored: this run was started with an inline input table; running all nodes.")
+            else:
+                prev_manifest = _rs.load_manifest(resume_from)
+                if prev_manifest:
+                    prev_nodes = prev_manifest.get("nodes", {})
+                    logs.append(f"🔁 Resuming from execution '{resume_from}': unchanged nodes that succeeded there are reused.")
+                else:
+                    logs.append(f"⚠️ No saved state found for execution '{resume_from}' (expired, succeeded or not yours); running all nodes.")
+        _rs.purge_expired_states()
+        state = _rs.RunState(execution_id, resumed_from=resume_from if prev_nodes else None)
+        state.register_nodes(fingerprints)
+        _emit(on_event, {
+            "type": "started",
+            "execution_id": execution_id,
+            "total_nodes": len(ordered_nodes),
+            "node_ids": [n.id for n in ordered_nodes],
+            "resumed_from": resume_from if prev_nodes else None,
+        })
+
         # 3. Step-by-Step Node Execution
         for node in ordered_nodes:
             node_start = time.time()
             parents = parent_map[node.id]
+            _emit(on_event, {"type": "node_started", "node_id": node.id, "recipe_id": node.recipe_id})
 
             try:
                 recipe = recipe_registry.get(node.recipe_id)
@@ -239,7 +370,7 @@ class DAGExecutor:
                 err_msg = f"Recipe '{node.recipe_id}' not found in registry: {str(e)}"
                 logs.append(f"❌ Node '{node.id}' failed: {err_msg}")
                 overall_status = "FAILED"
-                node_results.append(NodeExecutionResult(
+                _add_result(NodeExecutionResult(
                     node_id=node.id,
                     recipe_id=node.recipe_id,
                     status="FAILED",
@@ -247,6 +378,38 @@ class DAGExecutor:
                     error_message=err_msg
                 ))
                 break
+
+            # Resume: reuse this node's saved result if it succeeded before and nothing changed
+            prev = prev_nodes.get(node.id)
+            if (
+                prev and prev.get("status") == "SUCCESS" and prev.get("saved")
+                and prev.get("fingerprint") == fingerprints.get(node.id)
+            ):
+                try:
+                    reused_outputs = _rs.load_node_outputs(resume_from, node.id)
+                except Exception as e:
+                    logs.append(f"⚠️ Saved result of node `{node.id}` is unavailable ({e}); running it again.")
+                    reused_outputs = None
+                if reused_outputs is not None:
+                    node_outputs[node.id] = reused_outputs
+                    cls._propagate_context(reused_outputs, node, pipeline_context)
+                    cls._cache_dataframe(execution_id, node.id, reused_outputs)
+                    _capture_summaries(reused_outputs)
+                    snapshot = dict(prev.get("snapshot") or {})
+                    summary = dict(prev.get("summary") or {})
+                    summary["reused_from"] = resume_from
+                    if snapshot:
+                        step_snapshots[node.id] = snapshot
+                    state.node_reused(node.id, resume_from, snapshot, summary)
+                    logs.append(f"⏭️ Node `{node.id}` [{recipe.name}] ➔ Reused result from execution '{resume_from}' (not re-run)")
+                    _add_result(NodeExecutionResult(
+                        node_id=node.id,
+                        recipe_id=node.recipe_id,
+                        status="SUCCESS",
+                        duration_ms=0.0,
+                        output_summary=summary
+                    ))
+                    continue
 
             # Collect inputs from parents
             node_inputs: Dict[str, Any] = {}
@@ -263,7 +426,7 @@ class DAGExecutor:
                     )
                     duration_ms = round((time.time() - node_start) * 1000.0, 2)
                     logs.append(f"❌ Node '{node.id}' failed: {err_msg}")
-                    node_results.append(NodeExecutionResult(
+                    _add_result(NodeExecutionResult(
                         node_id=node.id,
                         recipe_id=node.recipe_id,
                         status="FAILED",
@@ -385,50 +548,13 @@ class DAGExecutor:
                 node_outputs[node.id] = outputs
 
                 # Propagate standard artifacts to shared context (never overwrite existing valid object with None)
-                for key in [
-                    "X_test", "y_test", "X_train", "y_train", "dataframe", "forecast_df",
-                    "model", "scaler", "encoder", "task_type", "feature_names", "feature_importances",
-                    "target_classes", "target_encoder", "target_column", "imputer_stats",
-                    "vectorizer", "text_column", "split_mode", "categorical_maps"
-                ]:
-                    if key in outputs and outputs[key] is not None:
-                        pipeline_context[key] = outputs[key]
+                cls._propagate_context(outputs, node, pipeline_context)
 
                 # Cache dataframe output to disk for instant pagination and CSV download
-                df_out = outputs.get("dataframe")
-                if df_out is None or not isinstance(df_out, pd.DataFrame):
-                    for fallback_k in ["dataframe_train", "dataframe_test", "matched_dataframe", "forecast_df"]:
-                        if isinstance(outputs.get(fallback_k), pd.DataFrame):
-                            df_out = outputs[fallback_k]
-                            break
-                    if df_out is None:
-                        for v in outputs.values():
-                            if isinstance(v, pd.DataFrame):
-                                df_out = v
-                                break
-                if isinstance(df_out, pd.DataFrame) and len(df_out) > 0:
-                    try:
-                        from backend.app.infrastructure.storage.storage_manager import storage_manager
-                        from backend.app.core.tenant_context import tenant_cache_dir
-                        p_rel = f"{tenant_cache_dir()}/executions/{execution_id}/{node.id}.parquet"
-                        p_abs = storage_manager.get_absolute_path(p_rel)
-                        p_abs.parent.mkdir(parents=True, exist_ok=True)
-                        df_out.to_parquet(p_abs, index=False)
-                    except Exception:
-                        pass
-
-                if "target_column" in node.config and node.config["target_column"]:
-                    pipeline_context["target_column"] = node.config["target_column"]
+                cls._cache_dataframe(execution_id, node.id, outputs)
 
                 # Capture summaries & KPIs
-                if "metrics" in outputs:
-                    final_metrics = outputs["metrics"]
-                if "anomaly_summary" in outputs:
-                    anomaly_summary = outputs["anomaly_summary"]
-                if "forecasting_summary" in outputs:
-                    forecasting_summary = outputs["forecasting_summary"]
-                if "governance_record" in outputs:
-                    governance_summary = outputs["governance_record"]
+                _capture_summaries(outputs)
 
                 duration_ms = round((time.time() - node_start) * 1000.0, 2)
                 logs.append(f"✅ Node `{node.id}` [{recipe.name}] ➔ Finished in {duration_ms}ms (SUCCESS)")
@@ -478,8 +604,10 @@ class DAGExecutor:
                     snapshot_info["output_summary"] = make_json_safe(outputs["output_summary"])
 
                 step_snapshots[node.id] = snapshot_info
+                # Save this node's result so a later run can resume after it
+                state.node_succeeded(node.id, outputs, make_json_safe(snapshot_info), make_json_safe(summary))
 
-                node_results.append(NodeExecutionResult(
+                _add_result(NodeExecutionResult(
                     node_id=node.id,
                     recipe_id=node.recipe_id,
                     status="SUCCESS",
@@ -498,7 +626,7 @@ class DAGExecutor:
                 logs.append(f"💡 Suggestion: {err_sugg}")
                 logger.error(f"Execution failed on node {node.id} ({err_title}): {traceback.format_exc()}")
 
-                node_results.append(NodeExecutionResult(
+                _add_result(NodeExecutionResult(
                     node_id=node.id,
                     recipe_id=node.recipe_id,
                     status="FAILED",
@@ -512,6 +640,7 @@ class DAGExecutor:
 
         total_duration = round((time.time() - start_time) * 1000.0, 2)
         logs.append(f"🏁 Execution finished with status '{overall_status}' in {total_duration}ms")
+        state.finish(overall_status)
 
         # 4. Construct Inference Bundle & Dynamic Schema
         features_schema = []
