@@ -1,5 +1,7 @@
 from backend.app.recipes.base.registry import recipe_registry
 from backend.app.recipes.ingestion.csv_loader import CSVLoaderRecipe
+from backend.app.recipes.ingestion.export_writer import ExportWriterRecipe
+from backend.app.recipes.preprocessing.custom_python_step import CustomPythonStepRecipe
 from backend.app.recipes.preprocessing.missing_values import MissingValueImputerRecipe
 from backend.app.recipes.preprocessing.scaling import FeatureScalerRecipe
 from backend.app.recipes.preprocessing.encoding import CategoricalEncoderRecipe
@@ -62,6 +64,7 @@ from backend.app.recipes.integrations.openweathermap import OpenWeatherMapRecipe
 
 def register_all_recipes():
     recipe_registry.register(CSVLoaderRecipe())
+    recipe_registry.register(ExportWriterRecipe())
     recipe_registry.register(DatasetJoinRecipe())
     recipe_registry.register(WebhookTriggerRecipe())
     recipe_registry.register(CronScheduleTriggerRecipe())
@@ -104,6 +107,7 @@ def register_all_recipes():
     recipe_registry.register(LoopBatchRecipe())
     recipe_registry.register(DelayRecipe())
     recipe_registry.register(SQLStepRecipe())
+    recipe_registry.register(CustomPythonStepRecipe())
     recipe_registry.register(LimitRecipe())
     recipe_registry.register(SortRecipe())
     recipe_registry.register(AggregateRecipe())

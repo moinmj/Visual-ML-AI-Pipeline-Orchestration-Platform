@@ -90,7 +90,6 @@ _PLANNED: List[Tuple[str, str, str, List[Tuple[str, str, str, str]]]] = [
         ("manual_data_entry", "Manual Data Entry", "source", "Type or paste rows directly into a small editable table and use it as pipeline input."),
     ]),
     ("Ingestion & Orchestration", "Output", "ingestion", [
-        ("export_writer", "Export / Write Operator", "sink", "Writes pipeline results to a table, file (CSV/Parquet/Excel) or data warehouse."),
         ("notifications", "Notifications", "sink", "Sends a generic pipeline notification to a configured channel (email, chat or webhook)."),
     ]),
     ("Ingestion & Orchestration", "Database & Warehouse Connectors", "ingestion", [
@@ -140,7 +139,6 @@ _PLANNED: List[Tuple[str, str, str, List[Tuple[str, str, str, str]]]] = [
         ("schema_validation", "Schema / Contract Validation", "transform", "Checks the dataset against an expected schema or data contract and flags violations."),
     ]),
     ("Data Preparation & Transformation", "Custom Logic", "preprocessing", [
-        ("custom_python_step", "Custom Python Step", "transform", "Runs user-written Python code on the incoming dataframe."),
         ("guardrails_validation", "Guardrails (validation checks)", "transform", "Applies rule-based data checks (ranges, nulls, uniqueness) and stops or flags on failure."),
         ("formula_calculator", "Formula Calculator", "transform", "Creates or updates columns using spreadsheet-style formulas."),
         ("replace_value", "Replace Value", "transform", "Replaces specific values in selected columns."),
