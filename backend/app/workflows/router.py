@@ -1055,7 +1055,7 @@ async def stream_job_live_logs(job_id: str, request: Request):
             progress = job_manager.get_job_progress(job_id, since=since)
             if progress is None:
                 break
-            state_key = (progress["status"], progress["current_node"], _json.dumps(progress["node_status"], sort_keys=True))
+            state_key = (progress["status"], progress["done"], progress["current_node"], _json.dumps(progress["node_status"], sort_keys=True))
             if progress["logs"] or state_key != last_state:
                 yield f"event: progress\ndata: {_json.dumps(progress, default=str)}\n\n"
                 last_state = state_key
@@ -1554,6 +1554,162 @@ async def validate_workflow_by_id(
     }
 
 
+async def _autosave_workflow(
+    db: AsyncSession,
+    workflow: WorkflowGraph,
+    target_id: Optional[str],
+    workflow_name: Optional[str],
+) -> str:
+    """Saves (creates or updates) the workflow before a run; returns its ID. Shared by /execute and /async-execute."""
+    target_id = target_id or str(uuid.uuid4())
+    nodes_payload, edges_payload, node_configs = workflow_graph_to_db_payload(workflow)
+    
+    ds_id, ds_name = await resolve_workflow_dataset(
+        db=db,
+        dataset_id=workflow.dataset_id,
+        dataset_name=workflow.dataset_name,
+        nodes=nodes_payload,
+        node_configs=node_configs
+    )
+
+    result = await db.execute(select(Workflow).where(Workflow.id == target_id))
+    wf = result.scalar_one_or_none()
+    if wf:
+        incoming_name = workflow_name or workflow.name
+        if incoming_name and not (is_generic_workbook_name(incoming_name) and not is_generic_workbook_name(wf.name)):
+            wf.name = incoming_name
+        if ds_id is not None:
+            wf.dataset_id = ds_id
+        if ds_name is not None:
+            wf.dataset_name = ds_name
+        wf.nodes = nodes_payload
+        wf.edges = edges_payload
+        wf.node_configs = node_configs
+        wf.is_active = True
+        wf.deleted_at = None
+        wf.updated_at = datetime.now(timezone.utc)
+    else:
+        # never reuse an ID that exists in another tenant
+        target_id = await _unused_id(db, Workflow, target_id)
+        wf = Workflow(
+            id=target_id,
+            name=workflow.name or workflow_name or "Auto-Saved Pipeline",
+            description="Auto-saved during execution run",
+            dataset_id=ds_id,
+            dataset_name=ds_name,
+            nodes=nodes_payload,
+            edges=edges_payload,
+            node_configs=node_configs,
+            is_active=True
+        )
+        db.add(wf)
+    await db.commit()
+
+    return target_id
+
+
+async def _persist_execution(
+    db: AsyncSession,
+    workflow: WorkflowGraph,
+    result: Any,
+    target_id: Optional[str],
+) -> bool:
+    """
+    After a run of a saved workflow: stores it as the workflow's last execution and records
+    an immutable history entry. Shared by /execute and /async-execute. Returns True if saved.
+    """
+    if not target_id:
+        return False
+    try:
+        res_wf = await db.execute(select(Workflow).where(Workflow.id == target_id))
+        wf_rec = res_wf.scalar_one_or_none()
+        if wf_rec:
+            exec_nodes_payload, exec_edges_payload, exec_node_configs = (
+                workflow_graph_to_db_payload(workflow)
+            )
+            safe_node_results = [
+                nr.model_dump() if hasattr(nr, "model_dump") else (nr.dict() if hasattr(nr, "dict") else nr)
+                for nr in (result.node_results or [])
+            ]
+            wf_rec.last_execution = jsonable_encoder({
+                "execution_id": result.execution_id,
+                "status": result.status,
+                "total_duration_ms": result.total_duration_ms,
+                "final_metrics": result.final_metrics,
+                "anomaly_summary": result.anomaly_summary,
+                "forecasting_summary": result.forecasting_summary,
+                "governance_summary": result.governance_summary,
+                "node_results": safe_node_results,
+                "execution_logs": result.logs,
+                "step_snapshots": result.step_snapshots,
+                "inference_schema": getattr(result, "inference_schema", None),
+            })
+            await db.commit()
+
+            # Record immutable history snapshot
+            try:
+                await record_workflow_execution_history(
+                    db=db,
+                    workflow_id=target_id,
+                    execution_id=result.execution_id,
+                    status_str=result.status,
+                    total_duration_ms=result.total_duration_ms or 0.0,
+                    nodes=exec_nodes_payload,
+                    edges=exec_edges_payload,
+                    node_configs=exec_node_configs,
+                    metrics=result.final_metrics,
+                    reports={
+                        "anomaly_summary": result.anomaly_summary,
+                        "forecasting_summary": result.forecasting_summary,
+                        "governance_summary": result.governance_summary,
+                        "node_results": safe_node_results,
+                        "inference_schema": getattr(result, "inference_schema", None),
+                    },
+                    step_snapshots=result.step_snapshots,
+                    logs=result.logs,
+                    run_label=None
+                )
+            except Exception as e:
+                logger.exception(f"Failed to record execution history for workflow {target_id}: {e}")
+    except Exception as e:
+        logger.warning(f"Could not persist workflow execution state to DB for {target_id}: {e}")
+        return False
+    return True
+
+
+# Background tasks that save async runs to the DB when they finish (kept referenced until done)
+_PERSIST_TASKS: set = set()
+
+
+def _persist_when_finished(job_id: str, workflow: WorkflowGraph, target_id: str) -> None:
+    """
+    Runs on the server's event loop (inside the caller's tenant context): waits for the
+    background job to finish, then saves it exactly like /execute does (last execution
+    + history). The job only reports done=true to the frontend after this has run.
+    """
+    from backend.app.infrastructure.database.session import AsyncSessionLocal
+    future = job_manager.job_futures.get(job_id)
+
+    async def _finalize():
+        saved = False
+        try:
+            if future is not None:
+                await asyncio.wrap_future(future)
+            job = job_manager.get_job(job_id)
+            result = job.get("result") if job else None
+            if result is not None:
+                async with AsyncSessionLocal() as session:
+                    saved = await _persist_execution(session, workflow, result, target_id)
+        except Exception as e:
+            logger.warning(f"Could not save async run {job_id} of workflow {target_id}: {e}")
+        finally:
+            job_manager.mark_persisted(job_id, saved)
+
+    task = asyncio.create_task(_finalize())
+    _PERSIST_TASKS.add(task)
+    task.add_done_callback(_PERSIST_TASKS.discard)
+
+
 @router.post(
     "/execute",
     response_model=WorkflowExecutionResult,
@@ -1582,49 +1738,7 @@ async def execute_workflow(
     if not target_id:
         target_id = extract_workflow_id_from_context(request)
     if auto_save:
-        target_id = target_id or str(uuid.uuid4())
-        nodes_payload, edges_payload, node_configs = workflow_graph_to_db_payload(workflow)
-        
-        ds_id, ds_name = await resolve_workflow_dataset(
-            db=db,
-            dataset_id=workflow.dataset_id,
-            dataset_name=workflow.dataset_name,
-            nodes=nodes_payload,
-            node_configs=node_configs
-        )
-
-        result = await db.execute(select(Workflow).where(Workflow.id == target_id))
-        wf = result.scalar_one_or_none()
-        if wf:
-            incoming_name = workflow_name or workflow.name
-            if incoming_name and not (is_generic_workbook_name(incoming_name) and not is_generic_workbook_name(wf.name)):
-                wf.name = incoming_name
-            if ds_id is not None:
-                wf.dataset_id = ds_id
-            if ds_name is not None:
-                wf.dataset_name = ds_name
-            wf.nodes = nodes_payload
-            wf.edges = edges_payload
-            wf.node_configs = node_configs
-            wf.is_active = True
-            wf.deleted_at = None
-            wf.updated_at = datetime.now(timezone.utc)
-        else:
-            # never reuse an ID that exists in another tenant
-            target_id = await _unused_id(db, Workflow, target_id)
-            wf = Workflow(
-                id=target_id,
-                name=workflow.name or workflow_name or "Auto-Saved Pipeline",
-                description="Auto-saved during execution run",
-                dataset_id=ds_id,
-                dataset_name=ds_name,
-                nodes=nodes_payload,
-                edges=edges_payload,
-                node_configs=node_configs,
-                is_active=True
-            )
-            db.add(wf)
-        await db.commit()
+        target_id = await _autosave_workflow(db, workflow, target_id, workflow_name)
 
     _require_resumable(resume_from)
     execution_id = str(uuid.uuid4())
@@ -1646,61 +1760,7 @@ async def execute_workflow(
     except Exception:
         pass
 
-    # When workflow exists in DB, always persist execution run to history and update wf.last_execution
-    if target_id:
-        try:
-            res_wf = await db.execute(select(Workflow).where(Workflow.id == target_id))
-            wf_rec = res_wf.scalar_one_or_none()
-            if wf_rec:
-                exec_nodes_payload, exec_edges_payload, exec_node_configs = (
-                    workflow_graph_to_db_payload(workflow)
-                )
-                safe_node_results = [
-                    nr.model_dump() if hasattr(nr, "model_dump") else (nr.dict() if hasattr(nr, "dict") else nr)
-                    for nr in (result.node_results or [])
-                ]
-                wf_rec.last_execution = jsonable_encoder({
-                    "execution_id": result.execution_id,
-                    "status": result.status,
-                    "total_duration_ms": result.total_duration_ms,
-                    "final_metrics": result.final_metrics,
-                    "anomaly_summary": result.anomaly_summary,
-                    "forecasting_summary": result.forecasting_summary,
-                    "governance_summary": result.governance_summary,
-                    "node_results": safe_node_results,
-                    "execution_logs": result.logs,
-                    "step_snapshots": result.step_snapshots,
-                    "inference_schema": getattr(result, "inference_schema", None),
-                })
-                await db.commit()
-
-                # Record immutable history snapshot
-                try:
-                    await record_workflow_execution_history(
-                        db=db,
-                        workflow_id=target_id,
-                        execution_id=result.execution_id,
-                        status_str=result.status,
-                        total_duration_ms=result.total_duration_ms or 0.0,
-                        nodes=exec_nodes_payload,
-                        edges=exec_edges_payload,
-                        node_configs=exec_node_configs,
-                        metrics=result.final_metrics,
-                        reports={
-                            "anomaly_summary": result.anomaly_summary,
-                            "forecasting_summary": result.forecasting_summary,
-                            "governance_summary": result.governance_summary,
-                            "node_results": safe_node_results,
-                            "inference_schema": getattr(result, "inference_schema", None),
-                        },
-                        step_snapshots=result.step_snapshots,
-                        logs=result.logs,
-                        run_label=None
-                    )
-                except Exception as e:
-                    logger.exception(f"Failed to record execution history for workflow {target_id}: {e}")
-        except Exception as e:
-            logger.warning(f"Could not persist workflow execution state to DB for {target_id}: {e}")
+    await _persist_execution(db, workflow, result, target_id)
     return result
 
 
@@ -1835,14 +1895,33 @@ async def execute_workflow_by_id(
 async def submit_async_workflow(
     workflow: WorkflowGraph,
     include_node_outputs: bool = Query(False, description="Opt-in to include full raw data of every node"),
+    auto_save: bool = Query(False, description="Save/update the workflow before running (same as /execute)"),
+    workflow_id: Optional[str] = Query(None, description="Workflow ID to link the run to (same as /execute)"),
+    workflow_name: Optional[str] = Query(None, description="Workflow title when auto-saving"),
     resume_from: Optional[str] = Query(None, description=_RESUME_QUERY_DESC),
+    request: Request = None,
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Submit a workflow for asynchronous background execution (n8n/Boomi worker pool pattern).
-    Returns immediately with a job_id. Follow it live with GET /jobs/{job_id}/logs
-    (polling) or GET /jobs/{job_id}/stream (Server-Sent Events).
+    Starts a workflow run in the background and returns immediately with a job_id.
+    Takes the same options as /execute (auto_save, workflow_id, workflow_name, resume_from).
+
+    Follow the job with GET /jobs/{job_id}/logs (polling) or /jobs/{job_id}/stream (SSE):
+    live logs and node status while it runs; when "done" is true the same response also
+    contains "result" (exactly what /execute returns) and, if it failed, "resume_info".
+    A run linked to a workflow is saved to its last execution and history like /execute.
     """
+    target_id = (
+        workflow_id
+        or getattr(workflow, "workflow_id", None)
+        or getattr(workflow, "id", None)
+        or getattr(workflow, "pipeline_id", None)
+    )
+    if not target_id:
+        target_id = extract_workflow_id_from_context(request)
+    if auto_save:
+        target_id = await _autosave_workflow(db, workflow, target_id, workflow_name)
+
     _require_resumable(resume_from)
     # Same dataset preloading as the synchronous /execute (loads the caller's own datasets)
     await preload_workflow_datasets(workflow=workflow, db=db, tenant_id=get_current_tenant_id())
@@ -1850,10 +1929,15 @@ async def submit_async_workflow(
         workflow=workflow,
         trigger_type="api_async",
         include_node_outputs=include_node_outputs,
-        resume_from=resume_from
+        resume_from=resume_from,
+        workflow_id=target_id,
     )
+    if target_id:
+        _persist_when_finished(job_id, workflow, target_id)
     return {
         "job_id": job_id,
+        "execution_id": job_id,
+        "workflow_id": target_id,
         "status": "PENDING",
         "resumed_from": resume_from,
         "logs_url": f"/api/v1/workflows/jobs/{job_id}/logs",

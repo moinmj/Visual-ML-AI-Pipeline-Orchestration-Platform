@@ -57,7 +57,8 @@ class PipelineJobManager:
         trigger_type: str = "manual",
         trigger_id: Optional[str] = None,
         include_node_outputs: bool = False,
-        resume_from: Optional[str] = None
+        resume_from: Optional[str] = None,
+        workflow_id: Optional[str] = None
     ) -> str:
         """Submits a DAG execution job to the background worker pool."""
         job_id = f"job_{uuid.uuid4().hex[:8]}"
@@ -76,6 +77,10 @@ class PipelineJobManager:
                 "trigger_id": trigger_id,
                 "node_count": len(workflow.nodes),
                 "resumed_from": resume_from,
+                "workflow_id": workflow_id,
+                # True while a run of a saved workflow still has to be written to its history
+                "needs_persist": bool(workflow_id),
+                "persisted": None,
                 # Live progress, filled while the job runs (GET /workflows/jobs/{id}/logs)
                 "logs": [],
                 "node_status": {n.id: "PENDING" for n in workflow.nodes},
@@ -125,6 +130,13 @@ class PipelineJobManager:
                 if job.get("current_node") == event.get("node_id"):
                     job["current_node"] = None
 
+    def mark_persisted(self, job_id: str, saved: bool) -> None:
+        """Called once a finished async run of a saved workflow was written to the DB."""
+        with self.lock:
+            job = self.jobs.get(job_id)
+            if job is not None:
+                job["persisted"] = bool(saved)
+
     def get_job_progress(self, job_id: str, since: int = 0) -> Optional[Dict[str, Any]]:
         """
         Live view of a job for the current tenant: status, the log lines added since
@@ -137,7 +149,10 @@ class PipelineJobManager:
             logs = job.get("logs") or []
             since = max(0, min(int(since or 0), len(logs)))
             result = job.get("result")
-            return {
+            finished = job.get("status") in ("SUCCESS", "FAILED")
+            # A run of a saved workflow is only "done" once it is also saved to its history
+            done = finished and not (job.get("needs_persist") and job.get("persisted") is None)
+            progress = {
                 "job_id": job_id,
                 "status": job.get("status"),
                 "started_at": job.get("started_at"),
@@ -149,10 +164,20 @@ class PipelineJobManager:
                 "progress": dict(job.get("progress") or {}),
                 "logs": list(logs[since:]),
                 "next_since": len(logs),
-                "done": job.get("status") in ("SUCCESS", "FAILED"),
+                "done": done,
                 "error": job.get("error"),
-                "execution_id": getattr(result, "execution_id", None) if result is not None else None,
+                "execution_id": getattr(result, "execution_id", None) if result is not None else job_id,
+                "workflow_id": job.get("workflow_id"),
+                "saved_to_history": job.get("persisted"),
             }
+        if done:
+            # The full run result - exactly what /execute returns - so the frontend needs no extra call
+            from fastapi.encoders import jsonable_encoder
+            progress["result"] = jsonable_encoder(result) if result is not None else None
+            if progress["status"] == "FAILED":
+                from backend.app.engine.execution.run_state import resume_info
+                progress["resume_info"] = resume_info(job_id)
+        return progress
 
     def _run_job_worker(
         self,
@@ -185,6 +210,14 @@ class PipelineJobManager:
                     self.jobs[job_id]["status"] = result.status
                     self.jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
                     self.jobs[job_id]["duration_ms"] = duration_ms
+                    wf_id = self.jobs[job_id].get("workflow_id")
+                    if wf_id:
+                        try:
+                            result.workflow_id = wf_id
+                        except Exception:
+                            pass
+                        # same "latest run of this workflow" link that /execute creates
+                        self.workflow_latest_executions[(get_current_tenant_id(), str(wf_id))] = job_id
                     self.jobs[job_id]["result"] = result
                     self.jobs[job_id]["logs"] = list(result.logs)
                     self.jobs[job_id]["current_node"] = None
