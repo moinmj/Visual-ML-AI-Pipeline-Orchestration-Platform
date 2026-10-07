@@ -58,13 +58,18 @@ class PipelineJobManager:
         trigger_id: Optional[str] = None,
         include_node_outputs: bool = False,
         resume_from: Optional[str] = None,
-        workflow_id: Optional[str] = None
+        workflow_id: Optional[str] = None,
+        job_id: Optional[str] = None
     ) -> str:
-        """Submits a DAG execution job to the background worker pool."""
-        job_id = f"job_{uuid.uuid4().hex[:8]}"
+        """Submits a DAG execution job to the background worker pool.
+        job_id may be supplied by the caller (so the frontend can follow /jobs/{id}/logs
+        while the call is still running); an id that is already used is rejected."""
+        job_id = job_id or str(uuid.uuid4())
         created_at = datetime.now(timezone.utc).isoformat()
 
         with self.lock:
+            if job_id in self.jobs:
+                raise ValueError(f"Execution id '{job_id}' is already in use.")
             self.jobs[job_id] = {
                 "job_id": job_id,
                 "status": "PENDING",  # PENDING, RUNNING, SUCCESS, FAILED

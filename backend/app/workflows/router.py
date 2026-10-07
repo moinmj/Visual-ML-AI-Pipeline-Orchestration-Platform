@@ -1899,11 +1899,21 @@ async def submit_async_workflow(
     workflow_id: Optional[str] = Query(None, description="Workflow ID to link the run to (same as /execute)"),
     workflow_name: Optional[str] = Query(None, description="Workflow title when auto-saving"),
     resume_from: Optional[str] = Query(None, description=_RESUME_QUERY_DESC),
+    execution_id: Optional[str] = Query(None, description="Optional id chosen by the frontend (e.g. a UUID). Lets it call GET /jobs/{execution_id}/logs for live logs while this call is still running. Must be unused."),
+    wait: bool = Query(True, description="True (default): run in the background worker pool and return the SAME response as /execute once finished (single call). False: return a job_id immediately and follow it via /jobs/{job_id}/logs or /stream."),
     request: Request = None,
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Starts a workflow run in the background and returns immediately with a job_id.
+    Runs the workflow in the background worker pool (same engine as /execute).
+
+    Live logs: pass your own execution_id and poll GET /jobs/{execution_id}/logs while this call runs.
+
+    wait=true (default): the call returns when the run is finished, with exactly the
+    same response body as /execute (final_metrics, forecasting_summary, node_results,
+    step_snapshots, logs, ...). The run is saved to last execution / history like /execute.
+
+    wait=false: starts the run in the background and returns immediately with a job_id.
     Takes the same options as /execute (auto_save, workflow_id, workflow_name, resume_from).
 
     Follow the job with GET /jobs/{job_id}/logs (polling) or /jobs/{job_id}/stream (SSE):
@@ -1923,17 +1933,44 @@ async def submit_async_workflow(
         target_id = await _autosave_workflow(db, workflow, target_id, workflow_name)
 
     _require_resumable(resume_from)
+    if execution_id is not None and not re.fullmatch(r"[A-Za-z0-9_-]{8,64}", execution_id):
+        raise HTTPException(status_code=400, detail="execution_id must be 8-64 characters: letters, digits, '-' or '_'.")
     # Same dataset preloading as the synchronous /execute (loads the caller's own datasets)
     await preload_workflow_datasets(workflow=workflow, db=db, tenant_id=get_current_tenant_id())
-    job_id = job_manager.submit_job(
-        workflow=workflow,
-        trigger_type="api_async",
-        include_node_outputs=include_node_outputs,
-        resume_from=resume_from,
-        workflow_id=target_id,
-    )
+    try:
+        job_id = job_manager.submit_job(
+            workflow=workflow,
+            trigger_type="api_async",
+            include_node_outputs=include_node_outputs,
+            resume_from=resume_from,
+            workflow_id=target_id,
+            job_id=execution_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     if target_id:
         _persist_when_finished(job_id, workflow, target_id)
+
+    if wait:
+        # Wait for the worker thread without blocking the server's event loop
+        future = job_manager.job_futures.get(job_id)
+        if future is not None:
+            await asyncio.wrap_future(future)
+        # A run of a saved workflow is only complete once it has been written to the DB
+        for _ in range(1200):  # up to ~60s
+            job = job_manager.get_job(job_id) or {}
+            if not (job.get("needs_persist") and job.get("persisted") is None):
+                break
+            await asyncio.sleep(0.05)
+        job = job_manager.get_job(job_id) or {}
+        result = job.get("result")
+        if result is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=job.get("error") or "Workflow execution failed before producing a result.",
+            )
+        return result
+
     return {
         "job_id": job_id,
         "execution_id": job_id,
