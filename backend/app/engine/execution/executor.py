@@ -218,7 +218,14 @@ class DAGExecutor:
 
     @staticmethod
     def _cache_dataframe(execution_id: str, node_id: str, outputs: Dict[str, Any]) -> None:
-        """Caches a node's dataframe on disk for instant pagination and CSV download."""
+        """Caches a node's dataframe on disk for instant pagination and CSV download.
+        Also saves everything else the node produced (train/test sets, metrics, model) as
+        downloadable artifacts."""
+        try:
+            from backend.app.engine.execution.node_artifacts import save_node_artifacts
+            save_node_artifacts(execution_id, node_id, outputs)
+        except Exception:
+            pass
         df_out = outputs.get("dataframe")
         if df_out is None or not isinstance(df_out, pd.DataFrame):
             for fallback_k in ["dataframe_train", "dataframe_test", "matched_dataframe", "forecast_df"]:
@@ -348,6 +355,11 @@ class DAGExecutor:
                 else:
                     logs.append(f"⚠️ No saved state found for execution '{resume_from}' (expired, succeeded or not yours); running all nodes.")
         _rs.purge_expired_states()
+        try:
+            from backend.app.engine.execution.node_artifacts import purge_expired_artifacts
+            purge_expired_artifacts()
+        except Exception:
+            pass
         state = _rs.RunState(execution_id, resumed_from=resume_from if prev_nodes else None)
         state.register_nodes(fingerprints)
         _emit(on_event, {
