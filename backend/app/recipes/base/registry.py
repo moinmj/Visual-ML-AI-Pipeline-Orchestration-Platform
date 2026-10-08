@@ -7,6 +7,7 @@ from backend.app.core.logging import logger
 _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "webhook_trigger": ("Ingestion & Orchestration", "Triggers"),
     "cron_trigger": ("Ingestion & Orchestration", "Triggers"),
+    "email_trigger_imap": ("Ingestion & Orchestration", "Triggers"),
     "csv_loader": ("Ingestion & Orchestration", "Load"),
     "export_writer": ("Ingestion & Orchestration", "Output"),
     "dataset_join": ("Data Preparation & Transformation", "Combine/Structure"),
@@ -81,6 +82,9 @@ class RecipeRegistry:
             "email": "gmail",
             "weather": "openweathermap",
             "union": "merge",
+            "imap": "email_trigger_imap",
+            "imap_trigger": "email_trigger_imap",
+            "email_trigger": "email_trigger_imap",
         }
 
     def register(self, recipe: BaseRecipe):

@@ -170,6 +170,7 @@ async def autowire_nodes(payload: AutoWireRequest):
         # Triggers / Ingestion
         "webhook_trigger": 1.0,
         "cron_trigger": 1.0,
+        "email_trigger_imap": 1.0,
         "csv_loader": 1.1,
         "openweathermap": 1.15,
         "google_sheets": 1.25,

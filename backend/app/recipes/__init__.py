@@ -37,6 +37,7 @@ from backend.app.recipes.preprocessing.dataset_join import DatasetJoinRecipe
 from backend.app.recipes.governance.mlflow_tracker import MLflowTrackerRecipe
 from backend.app.recipes.triggers.webhook_trigger import WebhookTriggerRecipe
 from backend.app.recipes.triggers.cron_trigger import CronScheduleTriggerRecipe
+from backend.app.recipes.triggers.email_trigger_imap import EmailTriggerIMAPRecipe
 
 # Flow Control Recipes
 from backend.app.recipes.flow_control.if_condition import IfConditionRecipe
@@ -68,6 +69,7 @@ def register_all_recipes():
     recipe_registry.register(DatasetJoinRecipe())
     recipe_registry.register(WebhookTriggerRecipe())
     recipe_registry.register(CronScheduleTriggerRecipe())
+    recipe_registry.register(EmailTriggerIMAPRecipe())
     recipe_registry.register(ColumnSelectorRecipe())
     recipe_registry.register(DataTypeConverterRecipe())
     recipe_registry.register(DuplicateRemoverRecipe())
