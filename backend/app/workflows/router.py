@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Body, Query, Response, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Body, Query, Response, Request, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 import asyncio
+import time
 import json as _json
 from typing import Dict, Any, List, Optional, Union
 import math
@@ -17,7 +18,7 @@ from sqlalchemy.future import select
 
 logger = logging.getLogger(__name__)
 
-from backend.app.infrastructure.database.session import get_db
+from backend.app.infrastructure.database.session import get_db, AsyncSessionLocal
 from backend.app.engine.dag.graph import WorkflowGraph
 from backend.app.engine.execution.executor import DAGExecutor, WorkflowExecutionResult
 from backend.app.engine.execution.job_manager import job_manager
@@ -50,8 +51,8 @@ from backend.app.engine.inference import (
     CombinedDatasetRequest,
     CombinedDatasetResponse
 )
-from backend.app.core.security import get_current_user, require_role, require_permission
-from backend.app.core.tenant_context import get_current_tenant_id, tenant_cache_dir
+from backend.app.core.security import get_current_user, require_role, require_permission, require_export_access, _decode_token, TokenData
+from backend.app.core.tenant_context import get_current_tenant_id, tenant_cache_dir, set_current_tenant_id
 
 from backend.app.datasets.models import Dataset
 
@@ -66,6 +67,10 @@ router = APIRouter(
     tags=["Workflows & DAG Execution"],
     dependencies=[Depends(get_current_user)],
 )
+
+# WebSocket routes live on their own router: the HTTP login dependency above (HTTPBearer) cannot run
+# on a WebSocket, so the socket endpoint authenticates itself from its first message instead.
+ws_router = APIRouter(prefix="/workflows", tags=["Workflows & DAG Execution"])
 
 
 def _require_resumable(resume_from: Optional[str]) -> None:
@@ -1985,6 +1990,120 @@ async def submit_async_workflow(
 
 
 
+_WS_ALLOWED_ROLES = ("Tenant Admin", "Data Scientist", "ML Engineer")
+
+
+@ws_router.websocket("/ws/execute")
+async def execute_workflow_ws(websocket: WebSocket):
+    """
+    ONE WebSocket connection per run: live logs while it runs, then the full result.
+
+    Client -> server, first message (JSON), within 30s:
+        {"type": "start",
+         "token": "<access token>",            # browsers cannot set headers on a WebSocket
+         "workflow": { ...same body as /execute... },
+         "options": {"execution_id": "<uuid>", "auto_save": false, "workflow_id": null,
+                     "workflow_name": null, "include_node_outputs": false, "resume_from": null}}
+    Server -> client, in order:
+        {"type": "started",     "job_id": ..., "execution_id": ..., ...}
+        {"type": "progress",    ...}   (repeats: new log lines, node_status, current_node, progress)
+        {"type": "resume_info", ...}   (only when the run failed)
+        {"type": "result",      "data": <exactly what /execute returns>}
+        {"type": "done",        "job_id": ..., "status": ...}
+    On a problem: {"type": "error", "status": <http-like code>, "detail": "..."} then the socket closes.
+    If the client disconnects the run keeps going; it can still be followed with GET /jobs/{id}/logs.
+    """
+    await websocket.accept()
+
+    async def _send(payload: Dict[str, Any]) -> None:
+        await websocket.send_json(jsonable_encoder(payload))
+
+    async def _fail(code: int, detail: str, close_code: int) -> None:
+        try:
+            await _send({"type": "error", "status": code, "detail": detail})
+            await websocket.close(code=close_code)
+        except Exception:
+            pass
+
+    try:
+        # 1) first message = start frame (auth + workflow + options)
+        try:
+            msg = await asyncio.wait_for(websocket.receive_json(), timeout=30)
+        except asyncio.TimeoutError:
+            return await _fail(408, "No start message received within 30 seconds.", 4408)
+        except ValueError:
+            return await _fail(400, "The first message must be JSON.", 4400)
+        if not isinstance(msg, dict) or msg.get("type") != "start":
+            return await _fail(400, "The first message must be {\"type\": \"start\", ...}.", 4400)
+
+        # 2) same checks as the HTTP endpoint: valid token, allowed role, caller's tenant
+        try:
+            user = _decode_token(str(msg.get("token") or "").removeprefix("Bearer ").strip())
+        except HTTPException as e:
+            return await _fail(e.status_code, str(e.detail), 4401)
+        if not user.has_role(*_WS_ALLOWED_ROLES):
+            return await _fail(403, "Your role is not allowed to execute workflows.", 4403)
+        set_current_tenant_id(user.tenant_id)
+
+        try:
+            workflow = WorkflowGraph.model_validate(msg.get("workflow") or {})
+        except Exception as e:
+            return await _fail(422, f"Invalid workflow: {e}", 4422)
+
+        # 3) start the run in the background worker pool (same path as /async-execute)
+        opts = msg.get("options") or {}
+        try:
+            async with AsyncSessionLocal() as db:
+                submitted = await submit_async_workflow(
+                    workflow=workflow,
+                    include_node_outputs=bool(opts.get("include_node_outputs", False)),
+                    auto_save=bool(opts.get("auto_save", False)),
+                    workflow_id=opts.get("workflow_id"),
+                    workflow_name=opts.get("workflow_name"),
+                    resume_from=opts.get("resume_from"),
+                    execution_id=opts.get("execution_id"),
+                    wait=False,
+                    request=None,
+                    db=db,
+                )
+        except HTTPException as e:
+            return await _fail(e.status_code, str(e.detail), 4000 + e.status_code % 1000)
+
+        job_id = submitted["job_id"]
+        await _send({"type": "started", **submitted})
+
+        # 4) stream progress until the run is finished (and saved), then the result
+        since, last_state, last_sent = 0, None, time.monotonic()
+        while True:
+            progress = job_manager.get_job_progress(job_id, since=since)
+            if progress is None:
+                return await _fail(404, f"Job '{job_id}' not found.", 4404)
+            since = progress["next_since"]
+
+            if progress["done"]:
+                result = progress.pop("result", None)
+                resume = progress.pop("resume_info", None)
+                await _send({"type": "progress", **progress})
+                if resume is not None:
+                    await _send({"type": "resume_info", "data": resume})
+                await _send({"type": "result", "data": result})
+                await _send({"type": "done", "job_id": job_id, "status": progress["status"]})
+                await websocket.close()
+                return
+
+            state = (progress["status"], progress["current_node"], _json.dumps(progress["node_status"], sort_keys=True))
+            if progress["logs"] or state != last_state:
+                await _send({"type": "progress", **progress})
+                last_state, last_sent = state, time.monotonic()
+            elif time.monotonic() - last_sent > 15:
+                await _send({"type": "ping"})  # keeps proxies from closing an idle connection
+                last_sent = time.monotonic()
+            await asyncio.sleep(0.5)
+    except (WebSocketDisconnect, RuntimeError):
+        # client went away; the run itself keeps going in the worker pool
+        return
+
+
 @router.post("/trigger/{webhook_path}")
 async def trigger_webhook(
     webhook_path: str,
@@ -2108,7 +2227,7 @@ async def _get_execution_node_dataframe(
 @router.post(
     "/export-dataset",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_role("Tenant Admin", "Data Scientist", "ML Engineer"))]
+    dependencies=[Depends(require_export_access)]
 )
 async def export_workflow_node_dataset(
     payload: Dict[str, Any] = Body(..., description="Export intermediate or joined node output as a permanent dataset in the library"),
@@ -2441,9 +2560,99 @@ async def get_node_table_data(
     }
 
 
+def _artifact_json_to_df(data: Any) -> pd.DataFrame:
+    """Flattens a JSON artifact (metrics, feature importances, ...) into a table for CSV download."""
+    if isinstance(data, list) and data and all(isinstance(r, dict) for r in data):
+        return pd.json_normalize(data)
+    if isinstance(data, dict):
+        flat = pd.json_normalize(data, sep=".").iloc[0].to_dict() if data else {}
+        return pd.DataFrame({"field": list(flat.keys()), "value": [str(v) if isinstance(v, (list, dict)) else v for v in flat.values()]})
+    return pd.DataFrame({"value": data if isinstance(data, list) else [data]})
+
+
+@router.get(
+    "/{execution_id}/nodes/{node_id}/artifacts",
+    dependencies=[Depends(get_current_user)]
+)
+async def list_node_artifacts(execution_id: str, node_id: str):
+    """
+    Lists everything downloadable for one node of a run: tables (e.g. dataframe, dataframe_train,
+    dataframe_test, forecast_df), results (metrics, feature_importances, forecasting_summary, ...)
+    and the fitted model file, with the formats each one can be downloaded in.
+    """
+    from backend.app.engine.execution import node_artifacts
+    items = node_artifacts.list_artifacts(execution_id, node_id)
+    if not items:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No downloadable output found for this node (the run may have expired, or the node produced no output).",
+        )
+    return {"execution_id": execution_id, "node_id": node_id, "artifacts": items}
+
+
+@router.get("/{execution_id}/nodes/{node_id}/artifacts/{artifact_name}/download")
+async def download_node_artifact(
+    execution_id: str,
+    node_id: str,
+    artifact_name: str,
+    format: Optional[str] = Query(None, description="table: csv (default) | json | parquet; result: json (default) | csv; model: joblib"),
+    limit: Optional[int] = Query(None, ge=1, description="Optional max rows (tables only)"),
+    user: TokenData = Depends(require_export_access),
+):
+    """Downloads one artifact of a node (see the list endpoint). Needs export permission."""
+    from backend.app.engine.execution import node_artifacts
+    path = node_artifacts.find_artifact(execution_id, node_id, artifact_name)
+    if path is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Artifact '{artifact_name}' not found for node '{node_id}'.")
+
+    base = f"{node_id}_{artifact_name}"
+    fmt = (format or "").lower().strip()
+
+    def _send(content: bytes, media_type: str, ext: str):
+        return Response(
+            content=content,
+            media_type=media_type,
+            headers={"Content-Disposition": f'attachment; filename="{base}.{ext}"'},
+        )
+
+    if path.suffix == ".parquet":
+        fmt = fmt or "csv"
+        if fmt == "parquet" and not limit:
+            return _send(path.read_bytes(), "application/octet-stream", "parquet")
+        df = pd.read_parquet(path)
+        if limit:
+            df = df.head(limit)
+        if fmt == "csv":
+            return _send(df.to_csv(index=False).encode("utf-8"), "text/csv", "csv")
+        if fmt == "json":
+            return _send(df.to_json(orient="records", date_format="iso").encode("utf-8"), "application/json", "json")
+        if fmt == "parquet":
+            import io
+            buf = io.BytesIO()
+            df.to_parquet(buf, index=False)
+            return _send(buf.getvalue(), "application/octet-stream", "parquet")
+        raise HTTPException(status_code=400, detail="format must be csv, json or parquet for a table.")
+
+    if path.suffix == ".json":
+        fmt = fmt or "json"
+        if fmt == "json":
+            return _send(path.read_bytes(), "application/json", "json")
+        if fmt == "csv":
+            df = _artifact_json_to_df(_json.loads(path.read_text(encoding="utf-8")))
+            return _send(df.to_csv(index=False).encode("utf-8"), "text/csv", "csv")
+        raise HTTPException(status_code=400, detail="format must be json or csv for a result.")
+
+    if path.suffix == ".joblib":
+        if fmt not in ("", "joblib"):
+            raise HTTPException(status_code=400, detail="A model can only be downloaded as joblib.")
+        return _send(path.read_bytes(), "application/octet-stream", "joblib")
+
+    raise HTTPException(status_code=400, detail="Unsupported artifact type.")
+
+
 @router.get(
     "/{execution_id}/nodes/{node_id}/export-csv",
-    dependencies=[Depends(get_current_user)]
+    dependencies=[Depends(require_export_access)]
 )
 async def export_node_data_to_csv(
     execution_id: str,
@@ -2953,7 +3162,7 @@ def _convert_prediction_to_csv(response: PredictionResponse) -> str:
         return df_csv.to_csv(index=False)
 
 
-@router.post("/{execution_id}/predict/export-csv")
+@router.post("/{execution_id}/predict/export-csv", dependencies=[Depends(require_export_access)])
 async def export_prediction_csv(
     execution_id: str,
     payload: PredictionRequest = Body(...)
@@ -3024,7 +3233,7 @@ async def generate_combined_dataset(
     return PipelineInferencer.generate_combined_dataset(bundle=bundle, request=payload)
 
 
-@router.post("/{execution_id}/generate-future-dataset/export-combined-csv")
+@router.post("/{execution_id}/generate-future-dataset/export-combined-csv", dependencies=[Depends(require_export_access)])
 async def export_combined_dataset_csv(
     execution_id: str,
     payload: CombinedDatasetRequest = Body(...)

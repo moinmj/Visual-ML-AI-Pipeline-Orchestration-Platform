@@ -50,6 +50,17 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str = "Z73MyQ5WFZNjAQYkIGqjxBR55xAMv7r/v/qv/dMhl121zVQYbC3Y3Hhx"
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
+
+    # Export control (who may download / export data, and from where)
+    # Comma-separated role names that may export or download data.
+    EXPORT_ALLOWED_ROLES: str = "Tenant Admin,Data Scientist,ML Engineer"
+    # Comma-separated IPs / CIDR ranges allowed to export, e.g. "10.0.0.0/8,203.0.113.5".
+    # Empty = no IP restriction. (A browser cannot report a MAC address, so the client IP is used instead.)
+    EXPORT_ALLOWED_IPS: str = ""
+    # Reverse proxies whose X-Forwarded-For header is trusted when working out the client IP.
+    TRUSTED_PROXY_IPS: str = "127.0.0.1,::1"
+    # How long per-node downloadable artifacts (train/test sets, metrics, model file) are kept.
+    NODE_ARTIFACT_TTL_HOURS: int = 168
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     FERNET_KEY: Optional[str] = "Rc4YoP_92ZxBPiwTRsprsTUA__aqFDBqZPCz7sLFR_g="
     RESET_TOKEN_EXPIRE_HOURS: int = 24
