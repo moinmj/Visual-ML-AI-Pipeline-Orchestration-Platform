@@ -149,6 +149,21 @@ class EmailTriggerIMAPRecipe(BaseRecipe):
                     "tab": "Parameters",
                     "description": "If enabled, extracts CSV or Excel attachments and outputs their contents as the pipeline table."
                 },
+                "attachment_name_filter": {
+                    "type": "text",
+                    "title": "Attachment Name Filter (Optional)",
+                    "default": "",
+                    "tab": "Parameters",
+                    "description": "Only extract attachments matching this name or keyword (e.g. 'orders', 'sales.csv')."
+                },
+                "attachment_selection": {
+                    "type": "select",
+                    "title": "Multi-Attachment Handling",
+                    "enum": ["Concatenate All", "First Attachment Only", "Last Attachment Only"],
+                    "default": "Concatenate All",
+                    "tab": "Parameters",
+                    "description": "How to handle multiple attachments: merge them, or pick only the first/last one."
+                },
                 "unread_only": {
                     "type": "boolean",
                     "title": "Unread Only",
@@ -223,6 +238,8 @@ class EmailTriggerIMAPRecipe(BaseRecipe):
         mailbox_name = str(config.get("mailbox_name") or "INBOX").strip()
         action = config.get("action", "Mark as Read")
         download_attachments = bool(config.get("download_attachments", False))
+        attachment_name_filter = str(config.get("attachment_name_filter") or "").strip().lower()
+        attachment_selection = config.get("attachment_selection", "Concatenate All")
         fmt = config.get("format", "Simple")
         unread_only = bool(config.get("unread_only", True))
         limit = max(1, int(config.get("limit") or 10))
@@ -296,6 +313,8 @@ class EmailTriggerIMAPRecipe(BaseRecipe):
                                 filename = _decode_mime_header(filename)
                                 attachments_found.append(filename)
                                 if download_attachments:
+                                    if attachment_name_filter and attachment_name_filter not in filename.lower():
+                                        continue
                                     payload = part.get_payload(decode=True)
                                     if payload:
                                         if filename.endswith(".csv"):
@@ -356,7 +375,12 @@ class EmailTriggerIMAPRecipe(BaseRecipe):
 
                 # If attachments were downloaded and parsed into tabular data, use that
                 if download_attachments and attachment_dfs:
-                    df_out = pd.concat(attachment_dfs, ignore_index=True)
+                    if attachment_selection == "First Attachment Only":
+                        df_out = attachment_dfs[0]
+                    elif attachment_selection == "Last Attachment Only":
+                        df_out = attachment_dfs[-1]
+                    else:
+                        df_out = pd.concat(attachment_dfs, ignore_index=True)
                 elif email_records:
                     df_out = pd.DataFrame(email_records)
                 else:
