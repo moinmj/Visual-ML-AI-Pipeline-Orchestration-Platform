@@ -216,14 +216,24 @@ class DAGExecutor:
         if "target_column" in (node.config or {}) and node.config["target_column"]:
             pipeline_context["target_column"] = node.config["target_column"]
 
-    @staticmethod
-    def _cache_dataframe(execution_id: str, node_id: str, outputs: Dict[str, Any]) -> None:
-        """Caches a node's dataframe on disk for instant pagination and CSV download.
+    @classmethod
+    def _cache_dataframe(cls, execution_id: str, node_id: str, outputs: Dict[str, Any], recipe_id: str = "") -> None:
+        """Caches a node's dataframe on disk for instant pagination, previews, and CSV download.
         Also saves everything else the node produced (train/test sets, metrics, model) as
-        downloadable artifacts."""
+        downloadable artifacts, and seeds the test-step cache for instant canvas previewing."""
         try:
             from backend.app.engine.execution.node_artifacts import save_node_artifacts
             save_node_artifacts(execution_id, node_id, outputs)
+        except Exception:
+            pass
+        try:
+            from backend.app.engine.execution.step_executor import NodeStepExecutor
+            NodeStepExecutor.save_node_output(
+                session_id=execution_id,
+                node_id=node_id,
+                recipe_id=recipe_id,
+                outputs=outputs
+            )
         except Exception:
             pass
         df_out = outputs.get("dataframe")
@@ -618,6 +628,7 @@ class DAGExecutor:
                 step_snapshots[node.id] = snapshot_info
                 # Save this node's result so a later run can resume after it
                 state.node_succeeded(node.id, outputs, make_json_safe(snapshot_info), make_json_safe(summary))
+                cls._cache_dataframe(execution_id, node.id, outputs, recipe_id=node.recipe_id)
 
                 _add_result(NodeExecutionResult(
                     node_id=node.id,

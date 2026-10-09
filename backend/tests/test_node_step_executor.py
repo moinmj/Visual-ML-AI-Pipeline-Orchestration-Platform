@@ -570,6 +570,38 @@ async def test_mlflow_tracker_preview():
         assert preview_data["data"][0]["registered_model_name"] == "TestModel"
 
 
+@pytest.mark.asyncio
+async def test_preview_from_full_workflow_execution():
+    """Verify preview endpoint resolves nodes from full DAG execution without 404."""
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=auth_headers()) as client:
+        # 1. Execute a full workflow DAG via /workflows/execute
+        wf_payload = {
+            "name": "Full DAG Test",
+            "nodes": [
+                {"id": "node_csv", "recipe_id": "csv_loader", "config": {}},
+                {"id": "node_imputer", "recipe_id": "missing_value_imputer", "config": {}}
+            ],
+            "edges": [
+                {"source": "node_csv", "target": "node_imputer", "source_handle": "output", "target_handle": "input"}
+            ],
+            "node_configs": {}
+        }
+        exec_resp = await client.post("/api/v1/workflows/execute", json=wf_payload)
+        assert exec_resp.status_code == 200
+        exec_data = exec_resp.json()
+        assert exec_data["status"] == "SUCCESS"
+        exec_id = exec_data["execution_id"]
+
+        # 2. Preview the imputer node using the execution_id
+        preview_resp = await client.get(
+            f"/api/v1/workflows/sessions/{exec_id}/nodes/node_imputer/preview?page=1&limit=10"
+        )
+        assert preview_resp.status_code == 200
+        pdata = preview_resp.json()
+        assert pdata["total_rows"] > 0
+        assert len(pdata["data"]) > 0
+
+
 
 
 

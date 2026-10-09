@@ -2456,7 +2456,8 @@ async def get_test_step_table_preview(
     session_id: str,
     node_id: str,
     page: int = Query(1, ge=1, description="1-indexed page number"),
-    limit: int = Query(50, ge=1, le=500, description="Records per page")
+    limit: int = Query(50, ge=1, le=500, description="Records per page"),
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Renders server-side paginated tabular data from a previously executed test step in this session.
@@ -2471,6 +2472,30 @@ async def get_test_step_table_preview(
             if isinstance(v, pd.DataFrame):
                 df = v
                 break
+
+    # Graceful fallback for full workflow execution runs (parquet caches)
+    if df is None or not isinstance(df, pd.DataFrame):
+        try:
+            from backend.app.core.tenant_context import tenant_cache_dir
+            from backend.app.infrastructure.storage.storage_manager import storage_manager
+            from backend.app.engine.execution.node_artifacts import artifacts_dir
+
+            art_file = artifacts_dir(session_id, node_id) / "dataframe.parquet"
+            if art_file.exists():
+                df = pd.read_parquet(art_file)
+            else:
+                for subpath in [
+                    f"{tenant_cache_dir()}/executions/{session_id}/{node_id}.parquet",
+                    f"executions/{session_id}/{node_id}.parquet",
+                    f"{tenant_cache_dir()}/executions/{session_id}/node_{node_id}.parquet",
+                    f"executions/{session_id}/node_{node_id}.parquet",
+                ]:
+                    p_abs = storage_manager.get_absolute_path(subpath)
+                    if p_abs.exists():
+                        df = pd.read_parquet(p_abs)
+                        break
+        except Exception as ex:
+            logger.debug(f"Could not load execution parquet for preview: {ex}")
 
     # Graceful fallback for governance, tracker, and evaluator nodes
     if df is None or not isinstance(df, pd.DataFrame):
@@ -2491,6 +2516,19 @@ async def get_test_step_table_preview(
                     scalar_m = {k: v for k, v in meta["metrics"].items() if isinstance(v, (int, float, str, bool))}
                     if scalar_m:
                         df = pd.DataFrame([scalar_m])
+
+    # Check database WorkflowExecution snapshot as last resort
+    if (df is None or not isinstance(df, pd.DataFrame)) and db is not None:
+        try:
+            from backend.app.workflows.models import WorkflowExecution
+            res_we = await db.execute(select(WorkflowExecution).where(WorkflowExecution.execution_id == session_id))
+            we = res_we.scalar_one_or_none()
+            if we and we.step_snapshots and isinstance(we.step_snapshots, dict):
+                node_snap = we.step_snapshots.get(node_id)
+                if node_snap and isinstance(node_snap, dict) and node_snap.get("preview_rows"):
+                    df = pd.DataFrame(node_snap["preview_rows"])
+        except Exception as ex:
+            logger.debug(f"Could not load DB execution snapshot for preview: {ex}")
 
     if df is None or not isinstance(df, pd.DataFrame):
         raise HTTPException(
