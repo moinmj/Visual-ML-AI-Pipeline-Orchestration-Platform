@@ -44,6 +44,11 @@ class NodeStepExecutor:
         # Per-tenant folder: the same session_id in another tenant is a different session.
         from backend.app.core.tenant_context import tenant_cache_dir
         p = storage_manager.get_absolute_path(f"{tenant_cache_dir()}/test_sessions/{clean_sid}")
+        if not p.exists():
+            for fb_prefix in ["t_none/test_sessions", "test_sessions"]:
+                fb = storage_manager.get_absolute_path(f"{fb_prefix}/{clean_sid}")
+                if fb.exists() and (fb / f"node_loader_api_df.parquet").exists() or (fb.exists() and any(fb.glob("node_*.*"))):
+                    return fb
         p.mkdir(parents=True, exist_ok=True)
         return p
 
