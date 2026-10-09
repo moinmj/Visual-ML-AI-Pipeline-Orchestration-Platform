@@ -10,6 +10,8 @@ class Workflow(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     # Owning tenant (from the caller's token). Rows are only ever visible to this tenant.
     tenant_id = Column(Integer, nullable=True, index=True)
+    # User who created it (the token's "sub"); filled in automatically on create, never changed.
+    user_id = Column(String(255), nullable=True, index=True)
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
 
@@ -38,6 +40,8 @@ class WorkflowExecution(Base):
     workflow_id = Column(String(36), ForeignKey("workflows.id", ondelete="CASCADE"), nullable=False, index=True)
     # Owning tenant (same as the parent workflow's).
     tenant_id = Column(Integer, nullable=True, index=True)
+    # User who started this run (the token's "sub"); filled in automatically.
+    user_id = Column(String(255), nullable=True, index=True)
     version_number = Column(Integer, nullable=False, default=1)
     run_label = Column(String(255), nullable=True)
 
