@@ -47,10 +47,19 @@ class EmailTriggerIMAPRecipe(BaseRecipe):
         "(Gmail, Outlook, custom mail server), retrieves messages with unread/subject/sender filters, "
         "and extracts emails or attachments directly into a DataFrame."
     )
-    input_types = []  # Root trigger node
+    input_types = ["dataframe"]  # Optional upstream connection (e.g. Cron trigger)
     output_types = ["dataframe"]
 
-    inputs: List[RecipePort] = []
+    inputs: List[RecipePort] = [
+        RecipePort(
+            id="trigger_signal",
+            label="Trigger Signal (Optional)",
+            type="dataframe",
+            required=False,
+            max_connections=1,
+            description="Optional upstream cron schedule or trigger signal"
+        )
+    ]
     outputs: List[RecipePort] = [
         RecipePort(
             id="output",
