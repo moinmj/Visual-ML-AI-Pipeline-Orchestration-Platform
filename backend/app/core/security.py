@@ -20,7 +20,7 @@ from jose import ExpiredSignatureError, JWTError, jwt
 
 from backend.app.core.config import settings
 from backend.app.core.logging import logger
-from backend.app.core.tenant_context import set_current_tenant_id
+from backend.app.core.tenant_context import set_current_tenant_id, set_current_user_id
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -143,6 +143,8 @@ async def get_current_user(
     # executors for the rest of this request. (async on purpose: a sync
     # dependency runs in a worker thread and the value would not reach the endpoint.)
     set_current_tenant_id(user.tenant_id)
+    # ...and the caller's user ID (token 'sub'), stamped as user_id on new rows.
+    set_current_user_id(user.sub)
     return user
 
 

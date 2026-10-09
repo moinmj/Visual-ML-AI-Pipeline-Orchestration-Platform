@@ -12,7 +12,9 @@ Installed once at import time (imported from main.py). Two SQLAlchemy hooks:
    .execution_options(skip_tenant_filter=True).
 
 2. before_flush: new rows get the caller's tenant_id stamped on them, and any
-   attempt to write a row that belongs to a different tenant raises.
+   attempt to write a row that belongs to a different tenant raises. New rows
+   also get the caller's user_id (token "sub") as their creator; it is never
+   changed afterwards, so editing someone else's workflow keeps the creator.
 
 Raw SQL (text()) and Core connections are not affected - e.g. startup
 migrations in session.init_db.
@@ -20,7 +22,7 @@ migrations in session.init_db.
 from sqlalchemy import event
 from sqlalchemy.orm import Session, with_loader_criteria
 
-from backend.app.core.tenant_context import get_current_tenant_id
+from backend.app.core.tenant_context import get_current_tenant_id, get_current_user_id
 from backend.app.workflows.models import Workflow, WorkflowExecution
 from backend.app.datasets.models import Dataset
 
@@ -52,9 +54,13 @@ def _stamp_and_check_tenant(session, flush_context, instances):
             tid = int(tid)
         except (ValueError, TypeError):
             pass
+    uid = get_current_user_id()
     for obj in list(session.new) + list(session.dirty) + list(session.deleted):
         if not isinstance(obj, TENANT_SCOPED_MODELS):
             continue
+        # Creator: only set on new rows that don't have one yet.
+        if obj in session.new and uid is not None and getattr(obj, "user_id", None) is None:
+            obj.user_id = uid
         if obj.tenant_id is None and tid is not None:
             obj.tenant_id = tid
         if tid is not None and obj.tenant_id is not None:

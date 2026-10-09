@@ -13,11 +13,16 @@ must be tenant-isolated reads it from here:
     and keep their temporary cache files in a per-tenant folder.
 
 The tenant is ALWAYS taken from the token, never from a path, query or body.
+
+The caller's user ID (the token's "sub") is kept here too: the database guard
+stamps it as user_id on every NEW workflow, execution and dataset, so each row
+records who created it.
 """
 from contextvars import ContextVar
 from typing import Optional
 
 _current_tenant_id: ContextVar[Optional[int]] = ContextVar("current_tenant_id", default=None)
+_current_user_id: ContextVar[Optional[str]] = ContextVar("current_user_id", default=None)
 
 
 def set_current_tenant_id(tenant_id: Optional[int]) -> None:
@@ -26,6 +31,15 @@ def set_current_tenant_id(tenant_id: Optional[int]) -> None:
 
 def get_current_tenant_id() -> Optional[int]:
     return _current_tenant_id.get()
+
+
+def set_current_user_id(user_id: Optional[str]) -> None:
+    """The authenticated caller's user ID (token 'sub'), stored as text."""
+    _current_user_id.set(str(user_id) if user_id not in (None, "") else None)
+
+
+def get_current_user_id() -> Optional[str]:
+    return _current_user_id.get()
 
 
 def tenant_cache_dir() -> str:

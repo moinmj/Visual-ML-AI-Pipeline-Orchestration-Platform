@@ -100,6 +100,24 @@ async def init_db():
         except Exception:
             pass
 
+    # user_id (creator, from the token's "sub") on existing tables. Idempotent;
+    # rows created before this keep NULL, e.g. back-fill with:
+    #   UPDATE workflows SET user_id = '2' WHERE user_id IS NULL;
+    for table in ("datasets", "workflows", "workflow_executions"):
+        try:
+            async with engine.begin() as conn:
+                if _IS_SQLITE:
+                    await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN user_id VARCHAR(255)"))
+                else:
+                    await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS user_id VARCHAR(255)"))
+        except Exception:
+            pass  # column already exists
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text(f"CREATE INDEX IF NOT EXISTS ix_{table}_user_id ON {table} (user_id)"))
+        except Exception:
+            pass
+
     # Legacy SQLite-only column back-fill (databases created before soft-delete support).
     # Not needed on PostgreSQL: create_all builds the full schema on a fresh database.
     if _IS_SQLITE:
