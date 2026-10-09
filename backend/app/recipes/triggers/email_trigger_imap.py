@@ -302,6 +302,7 @@ class EmailTriggerIMAPRecipe(BaseRecipe):
                                             try:
                                                 att_df = pd.read_csv(io.BytesIO(payload))
                                                 att_df["_source_email_subject"] = subject
+                                                att_df["_source_attachment"] = filename
                                                 attachment_dfs.append(att_df)
                                             except Exception as pe:
                                                 logger.warning(f"Failed parsing CSV attachment {filename}: {pe}")
@@ -309,6 +310,7 @@ class EmailTriggerIMAPRecipe(BaseRecipe):
                                             try:
                                                 att_df = pd.read_excel(io.BytesIO(payload))
                                                 att_df["_source_email_subject"] = subject
+                                                att_df["_source_attachment"] = filename
                                                 attachment_dfs.append(att_df)
                                             except Exception as pe:
                                                 logger.warning(f"Failed parsing Excel attachment {filename}: {pe}")
