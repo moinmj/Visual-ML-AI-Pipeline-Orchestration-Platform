@@ -1,6 +1,6 @@
 from typing import List, Dict, Any, Optional, Set
 from collections import defaultdict, deque
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from backend.app.core.exceptions import ValidationException
 from backend.app.recipes.base.registry import recipe_registry
 
@@ -17,6 +17,16 @@ class WorkflowEdge(BaseModel):
     target: str = Field(..., description="Target node ID")
     source_handle: Optional[str] = None
     target_handle: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_handles(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if not data.get("source_handle"):
+                data["source_handle"] = data.get("sourceHandle") or data.get("source_port")
+            if not data.get("target_handle"):
+                data["target_handle"] = data.get("targetHandle") or data.get("target_port")
+        return data
 
 
 class WorkflowGraph(BaseModel):
@@ -109,7 +119,11 @@ class WorkflowGraph(BaseModel):
         for node in ordered_nodes:
             try:
                 recipe = recipe_registry.get(node.recipe_id)
-            except Exception:
+            except Exception as e:
+                # Planned ("coming soon") recipes are listed in the catalog but can't run yet.
+                from backend.app.core.exceptions import ValidationException
+                if isinstance(e, ValidationException):
+                    add_error(f"❌ Node '{node.id}': {e.message}")
                 continue
 
             parents = parent_map[node.id]

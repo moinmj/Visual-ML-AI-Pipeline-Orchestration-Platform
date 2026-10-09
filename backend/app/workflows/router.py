@@ -1,5 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Body, Query, Response, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Body, Query, Response, Request, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
+from fastapi.responses import StreamingResponse
+import asyncio
+import time
+import json as _json
 from typing import Dict, Any, List, Optional, Union
 import math
 import uuid
@@ -14,7 +18,7 @@ from sqlalchemy.future import select
 
 logger = logging.getLogger(__name__)
 
-from backend.app.infrastructure.database.session import get_db
+from backend.app.infrastructure.database.session import get_db, AsyncSessionLocal
 from backend.app.engine.dag.graph import WorkflowGraph
 from backend.app.engine.execution.executor import DAGExecutor, WorkflowExecutionResult
 from backend.app.engine.execution.job_manager import job_manager
@@ -31,7 +35,10 @@ from backend.app.workflows.schemas import (
     WorkflowCompareResponse,
     AssociatedDatasetItem,
     WorkflowInferSchemaRequest,
-    WorkflowInferSchemaResponse
+    WorkflowInferSchemaResponse,
+    NodeTestStepRequest,
+    NodeTestStepResponse,
+    SessionClearResponse
 )
 from backend.app.engine.inference import (
     PipelineInferencer,
@@ -44,11 +51,63 @@ from backend.app.engine.inference import (
     CombinedDatasetRequest,
     CombinedDatasetResponse
 )
-from backend.app.core.security import get_current_user, require_role, require_permission
+from backend.app.core.security import get_current_user, require_role, require_permission, require_export_access, _decode_token, TokenData
+from backend.app.core.tenant_context import get_current_tenant_id, tenant_cache_dir, set_current_tenant_id
 
 from backend.app.datasets.models import Dataset
 
-router = APIRouter(prefix="/workflows", tags=["Workflows & DAG Execution"])
+# Tenant isolation: every route needs a valid Bearer token (router-level dependency),
+# and the caller's tenant (from the token) is applied automatically to every
+# Workflow / WorkflowExecution / Dataset query by the DB tenant guard
+# (infrastructure/database/tenant_guard.py). Another tenant's workflow therefore
+# behaves exactly like a non-existent one (404). Jobs, live models and temp
+# caches are separated per tenant as well.
+router = APIRouter(
+    prefix="/workflows",
+    tags=["Workflows & DAG Execution"],
+    dependencies=[Depends(get_current_user)],
+)
+
+# WebSocket routes live on their own router: the HTTP login dependency above (HTTPBearer) cannot run
+# on a WebSocket, so the socket endpoint authenticates itself from its first message instead.
+ws_router = APIRouter(prefix="/workflows", tags=["Workflows & DAG Execution"])
+
+
+def _require_resumable(resume_from: Optional[str]) -> None:
+    """404 unless the caller's tenant has saved state for that earlier execution."""
+    if not resume_from:
+        return
+    from backend.app.engine.execution.run_state import resume_info
+    if resume_info(resume_from) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"Nothing to resume for execution '{resume_from}': it succeeded, its saved state "
+                "expired (72h), or it doesn't exist. Run the workflow normally instead."
+            ),
+        )
+
+
+_RESUME_QUERY_DESC = (
+    "ID of an earlier FAILED execution (or async job). Nodes that succeeded there and were not "
+    "changed are not run again - their saved results are reused - and execution continues from "
+    "the failed node. Changing a node re-runs it and everything after it."
+)
+
+
+async def _unused_id(db: AsyncSession, model, wanted_id: Optional[str]) -> str:
+    """
+    Returns wanted_id if no row of `model` (in ANY tenant) uses it, otherwise a
+    fresh UUID. IDs can come from the client, so a new workflow/execution must
+    never collide with - or reveal - another tenant's record.
+    """
+    if wanted_id:
+        taken = await db.execute(
+            select(model.id).where(model.id == str(wanted_id)).execution_options(skip_tenant_filter=True)
+        )
+        if taken.first() is None:
+            return str(wanted_id)
+    return str(uuid.uuid4())
 
 
 async def resolve_workflow_dataset(
@@ -553,6 +612,8 @@ async def record_workflow_execution_history(
     ex_row = existing.scalar_one_or_none()
     if ex_row:
         return ex_row
+    # Not ours: if another tenant already uses this ID, record under a fresh one.
+    execution_id = await _unused_id(db, WorkflowExecution, execution_id)
 
     # Determine next auto-incrementing version number for this workflow
     max_ver_stmt = select(func.max(WorkflowExecution.version_number)).where(WorkflowExecution.workflow_id == workflow_id)
@@ -572,7 +633,7 @@ async def record_workflow_execution_history(
         ):
             prior_ex = existing_wf_rec.last_execution
             prior_rec = WorkflowExecution(
-                id=prior_ex.get("execution_id"),
+                id=await _unused_id(db, WorkflowExecution, prior_ex.get("execution_id")),
                 workflow_id=workflow_id,
                 version_number=1,
                 run_label="Run #1",
@@ -738,7 +799,8 @@ async def save_workflow(
         wf.deleted_at = None
         wf.updated_at = datetime.now(timezone.utc)
     else:
-        # Create new
+        # Create new (never reuse an ID that exists in another tenant)
+        target_id = await _unused_id(db, Workflow, target_id)
         wf = Workflow(
             id=target_id,
             name=payload.name,
@@ -961,6 +1023,76 @@ async def get_job_status(job_id: str):
     return job
 
 
+@router.get("/jobs/{job_id}/logs")
+async def get_job_live_logs(
+    job_id: str,
+    since: int = Query(0, ge=0, description="Return only log lines from this index on (use next_since from the previous call)"),
+):
+    """
+    Live progress of a running (or finished) async job, for polling every ~1s:
+    status, NEW log lines since `since`, per-node status (PENDING / RUNNING /
+    SUCCESS / REUSED / FAILED), the node running now and completed/total.
+    Stop polling when "done" is true.
+    """
+    progress = job_manager.get_job_progress(job_id, since=since)
+    if progress is None:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+    return progress
+
+
+@router.get("/jobs/{job_id}/stream")
+async def stream_job_live_logs(job_id: str, request: Request):
+    """
+    Same live progress as /logs, pushed as Server-Sent Events (text/event-stream).
+    Each 'progress' event carries only the new log lines; a final 'done' event is
+    sent when the job finishes. Needs the Authorization header, so use a fetch-based
+    SSE client (e.g. @microsoft/fetch-event-source), not the browser's EventSource.
+    """
+    if job_manager.get_job_progress(job_id) is None:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+
+    async def events():
+        since = 0
+        last_state = None
+        while True:
+            if await request.is_disconnected():
+                break
+            progress = job_manager.get_job_progress(job_id, since=since)
+            if progress is None:
+                break
+            state_key = (progress["status"], progress["done"], progress["current_node"], _json.dumps(progress["node_status"], sort_keys=True))
+            if progress["logs"] or state_key != last_state:
+                yield f"event: progress\ndata: {_json.dumps(progress, default=str)}\n\n"
+                last_state = state_key
+            since = progress["next_since"]
+            if progress["done"]:
+                yield f"event: done\ndata: {_json.dumps({'job_id': job_id, 'status': progress['status']})}\n\n"
+                break
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.get("/executions/{execution_id}/resume-info")
+async def get_resume_info(execution_id: str):
+    """
+    Whether an execution can be resumed, and which nodes would be reused
+    (succeeded), which failed and which never ran. 404 if there is nothing to resume.
+    """
+    from backend.app.engine.execution.run_state import resume_info
+    info = resume_info(execution_id)
+    if info is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Nothing to resume for execution '{execution_id}' (succeeded, expired or not found).",
+        )
+    return info
+
+
 @router.get("/{workflow_id}", response_model=WorkflowResponse)
 async def get_workflow(
     workflow_id: str,
@@ -1065,7 +1197,8 @@ async def upsert_workflow(
         wf.deleted_at = None
         wf.updated_at = datetime.now(timezone.utc)
     else:
-        # Create new
+        # Create new (never reuse an ID that exists in another tenant)
+        target_id = await _unused_id(db, Workflow, target_id)
         wf = Workflow(
             id=target_id,
             name=payload.name or "Untitled Pipeline",
@@ -1269,25 +1402,47 @@ async def restore_workflow(
 # DAG VALIDATION & EXECUTION ENDPOINTS
 # -------------------------------------------------------------
 
+def _storable_config(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Node config as it should be saved in the DB: runtime-only values such as the
+    DataFrame injected by preload_workflow_datasets are left out (they are not
+    JSON and would make saving the workflow / execution history fail).
+    """
+    out = {}
+    for k, v in (config or {}).items():
+        if isinstance(v, (pd.DataFrame, pd.Series)):
+            continue
+        out[k] = v
+    return out
+
+
 def workflow_graph_to_db_payload(workflow: WorkflowGraph) -> tuple:
     """Helper to convert WorkflowGraph instance to DB nodes, edges, and node_configs."""
     nodes_payload = []
     node_configs = {}
     for n in workflow.nodes:
+        cfg = _storable_config(n.config)
         nodes_payload.append({
             "id": n.id,
             "recipe_id": n.recipe_id,
             "label": n.label or n.id,
             "content": n.label or n.id,
-            "config": n.config
+            "config": cfg
         })
         node_configs[n.id] = {
             "recipe_id": n.recipe_id,
             "label": n.label or n.id,
-            "config": n.config
+            "config": cfg
         }
+    # Keep the port handles (e.g. join 'left'/'right') so a saved workflow re-runs identically
     edges_payload = [
-        {"id": f"e_{e.source}_{e.target}", "source": e.source, "target": e.target}
+        {
+            "id": f"e_{e.source}_{e.target}",
+            "source": e.source,
+            "target": e.target,
+            "source_handle": getattr(e, "source_handle", None),
+            "target_handle": getattr(e, "target_handle", None),
+        }
         for e in workflow.edges
     ]
     return nodes_payload, edges_payload, node_configs
@@ -1306,10 +1461,52 @@ def db_workflow_to_graph(wf: Workflow) -> WorkflowGraph:
         label = nd.get("label") or nd.get("content") or n_cfg.get("label", nid)
         nodes.append(WorkflowNode(id=nid, recipe_id=recipe_id, config=config, label=label))
     edges = [
-        WorkflowEdge(source=ed["source"], target=ed["target"])
+        WorkflowEdge(
+            source=ed["source"],
+            target=ed["target"],
+            source_handle=ed.get("source_handle") or ed.get("sourceHandle") or ed.get("source_port"),
+            target_handle=ed.get("target_handle") or ed.get("targetHandle") or ed.get("target_port")
+        )
         for ed in wf.edges or []
     ]
     return WorkflowGraph(nodes=nodes, edges=edges)
+
+
+async def preload_workflow_datasets(
+    workflow: WorkflowGraph,
+    db: AsyncSession,
+    tenant_id: Optional[int] = None
+) -> None:
+    """
+    Preloads datasets for root loader nodes (e.g. csv_loader) in a workflow graph,
+    injecting the loaded DataFrame directly into the node's config so DAGExecutor
+    does not need to create external sync DB connections or fail on drivers.
+    """
+    from backend.app.infrastructure.storage.storage_manager import storage_manager
+    for node in workflow.nodes:
+        if node.recipe_id in ("csv_loader", "dataset_loader", "file_ingestion"):
+            cfg = dict(node.config or {})
+            if "dataframe" in cfg and cfg["dataframe"] is not None:
+                continue
+            dataset_id = cfg.get("dataset_id") or getattr(node, "dataset_id", None)
+            if not dataset_id and "dataset" in cfg:
+                dataset_id = cfg["dataset"]
+            if dataset_id and db:
+                try:
+                    ds_query = select(Dataset).where(Dataset.id == str(dataset_id))
+                    if tenant_id is not None:
+                        ds_query = ds_query.where(Dataset.tenant_id == tenant_id)
+                    res = await db.execute(ds_query)
+                    ds_obj = res.scalar_one_or_none()
+                    if ds_obj and ds_obj.storage_path:
+                        df_loaded = storage_manager.read_dataframe(
+                            ds_obj.storage_path,
+                            tenant_id if tenant_id is not None else ds_obj.tenant_id
+                        )
+                        cfg["dataframe"] = df_loaded
+                        node.config = cfg
+                except Exception as ex:
+                    logger.warning(f"Could not preload dataset '{dataset_id}' for node '{node.id}': {ex}")
 
 
 @router.post(
@@ -1362,98 +1559,83 @@ async def validate_workflow_by_id(
     }
 
 
-@router.post(
-    "/execute",
-    response_model=WorkflowExecutionResult,
-    dependencies=[Depends(require_role("Tenant Admin", "Data Scientist", "ML Engineer"))]
-)
-async def execute_workflow(
+async def _autosave_workflow(
+    db: AsyncSession,
     workflow: WorkflowGraph,
-    include_node_outputs: bool = Query(False, description="Opt-in to include full raw data of every node (default: false for lean response)"),
-    auto_save: bool = Query(False, description="Automatically upsert/save current workflow to DB before executing"),
-    workflow_id: Optional[str] = Query(None, description="Optional workflow ID to link in execution result"),
-    workflow_name: Optional[str] = Query(None, description="Optional workflow title if auto-saving to DB"),
-    request: Request = None,
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Execute a full workflow DAG end-to-end synchronously.
-    Execution does NOT auto-save to DB by default; workflows and execution results are saved via the Save Workbook endpoint.
-    """
-    target_id = (
-        workflow_id
-        or getattr(workflow, "workflow_id", None)
-        or getattr(workflow, "id", None)
-        or getattr(workflow, "pipeline_id", None)
+    target_id: Optional[str],
+    workflow_name: Optional[str],
+) -> str:
+    """Saves (creates or updates) the workflow before a run; returns its ID. Shared by /execute and /async-execute."""
+    target_id = target_id or str(uuid.uuid4())
+    nodes_payload, edges_payload, node_configs = workflow_graph_to_db_payload(workflow)
+    
+    ds_id, ds_name = await resolve_workflow_dataset(
+        db=db,
+        dataset_id=workflow.dataset_id,
+        dataset_name=workflow.dataset_name,
+        nodes=nodes_payload,
+        node_configs=node_configs
     )
-    if not target_id:
-        target_id = extract_workflow_id_from_context(request)
-    if auto_save:
-        target_id = target_id or str(uuid.uuid4())
-        nodes_payload, edges_payload, node_configs = workflow_graph_to_db_payload(workflow)
-        
-        ds_id, ds_name = await resolve_workflow_dataset(
-            db=db,
-            dataset_id=workflow.dataset_id,
-            dataset_name=workflow.dataset_name,
+
+    result = await db.execute(select(Workflow).where(Workflow.id == target_id))
+    wf = result.scalar_one_or_none()
+    if wf:
+        incoming_name = workflow_name or workflow.name
+        if incoming_name and not (is_generic_workbook_name(incoming_name) and not is_generic_workbook_name(wf.name)):
+            wf.name = incoming_name
+        if ds_id is not None:
+            wf.dataset_id = ds_id
+        if ds_name is not None:
+            wf.dataset_name = ds_name
+        wf.nodes = nodes_payload
+        wf.edges = edges_payload
+        wf.node_configs = node_configs
+        wf.is_active = True
+        wf.deleted_at = None
+        wf.updated_at = datetime.now(timezone.utc)
+    else:
+        # never reuse an ID that exists in another tenant
+        target_id = await _unused_id(db, Workflow, target_id)
+        wf = Workflow(
+            id=target_id,
+            name=workflow.name or workflow_name or "Auto-Saved Pipeline",
+            description="Auto-saved during execution run",
+            dataset_id=ds_id,
+            dataset_name=ds_name,
             nodes=nodes_payload,
-            node_configs=node_configs
+            edges=edges_payload,
+            node_configs=node_configs,
+            is_active=True
         )
+        db.add(wf)
+    await db.commit()
 
-        result = await db.execute(select(Workflow).where(Workflow.id == target_id))
-        wf = result.scalar_one_or_none()
-        if wf:
-            incoming_name = workflow_name or workflow.name
-            if incoming_name and not (is_generic_workbook_name(incoming_name) and not is_generic_workbook_name(wf.name)):
-                wf.name = incoming_name
-            if ds_id is not None:
-                wf.dataset_id = ds_id
-            if ds_name is not None:
-                wf.dataset_name = ds_name
-            wf.nodes = nodes_payload
-            wf.edges = edges_payload
-            wf.node_configs = node_configs
-            wf.is_active = True
-            wf.deleted_at = None
-            wf.updated_at = datetime.now(timezone.utc)
-        else:
-            wf = Workflow(
-                id=target_id,
-                name=workflow.name or workflow_name or "Auto-Saved Pipeline",
-                description="Auto-saved during execution run",
-                dataset_id=ds_id,
-                dataset_name=ds_name,
-                nodes=nodes_payload,
-                edges=edges_payload,
-                node_configs=node_configs,
-                is_active=True
-            )
-            db.add(wf)
-        await db.commit()
+    return target_id
 
-    execution_id = str(uuid.uuid4())
-    result = DAGExecutor.execute_workflow(
-        execution_id=execution_id,
-        workflow=workflow,
-        include_node_outputs=include_node_outputs
-    )
-    if target_id:
-        result.workflow_id = target_id
 
-    # Cache execution result in memory for lookup if user subsequently saves the workbook
+async def _persist_execution(
+    db: AsyncSession,
+    workflow: WorkflowGraph,
+    result: Any,
+    target_id: Optional[str],
+) -> bool:
+    """
+    After a run of a saved workflow: stores it as the workflow's last execution and records
+    an immutable history entry. Shared by /execute and /async-execute. Returns True if saved.
+    """
+    if not target_id:
+        return False
     try:
-        job_manager.register_job_result(result.execution_id, result, workflow_id=target_id)
-    except Exception:
-        pass
-
-    # When workflow exists in DB, always persist execution run to history and update wf.last_execution
-    if target_id:
         res_wf = await db.execute(select(Workflow).where(Workflow.id == target_id))
         wf_rec = res_wf.scalar_one_or_none()
         if wf_rec:
             exec_nodes_payload, exec_edges_payload, exec_node_configs = (
                 workflow_graph_to_db_payload(workflow)
             )
+            safe_node_results = [
+                nr.model_dump() if hasattr(nr, "model_dump") else (nr.dict() if hasattr(nr, "dict") else nr)
+                for nr in (result.node_results or [])
+            ]
             wf_rec.last_execution = jsonable_encoder({
                 "execution_id": result.execution_id,
                 "status": result.status,
@@ -1462,7 +1644,7 @@ async def execute_workflow(
                 "anomaly_summary": result.anomaly_summary,
                 "forecasting_summary": result.forecasting_summary,
                 "governance_summary": result.governance_summary,
-                "node_results": result.node_results,
+                "node_results": safe_node_results,
                 "execution_logs": result.logs,
                 "step_snapshots": result.step_snapshots,
                 "inference_schema": getattr(result, "inference_schema", None),
@@ -1485,7 +1667,7 @@ async def execute_workflow(
                         "anomaly_summary": result.anomaly_summary,
                         "forecasting_summary": result.forecasting_summary,
                         "governance_summary": result.governance_summary,
-                        "node_results": result.node_results,
+                        "node_results": safe_node_results,
                         "inference_schema": getattr(result, "inference_schema", None),
                     },
                     step_snapshots=result.step_snapshots,
@@ -1494,6 +1676,96 @@ async def execute_workflow(
                 )
             except Exception as e:
                 logger.exception(f"Failed to record execution history for workflow {target_id}: {e}")
+    except Exception as e:
+        logger.warning(f"Could not persist workflow execution state to DB for {target_id}: {e}")
+        return False
+    return True
+
+
+# Background tasks that save async runs to the DB when they finish (kept referenced until done)
+_PERSIST_TASKS: set = set()
+
+
+def _persist_when_finished(job_id: str, workflow: WorkflowGraph, target_id: str) -> None:
+    """
+    Runs on the server's event loop (inside the caller's tenant context): waits for the
+    background job to finish, then saves it exactly like /execute does (last execution
+    + history). The job only reports done=true to the frontend after this has run.
+    """
+    from backend.app.infrastructure.database.session import AsyncSessionLocal
+    future = job_manager.job_futures.get(job_id)
+
+    async def _finalize():
+        saved = False
+        try:
+            if future is not None:
+                await asyncio.wrap_future(future)
+            job = job_manager.get_job(job_id)
+            result = job.get("result") if job else None
+            if result is not None:
+                async with AsyncSessionLocal() as session:
+                    saved = await _persist_execution(session, workflow, result, target_id)
+        except Exception as e:
+            logger.warning(f"Could not save async run {job_id} of workflow {target_id}: {e}")
+        finally:
+            job_manager.mark_persisted(job_id, saved)
+
+    task = asyncio.create_task(_finalize())
+    _PERSIST_TASKS.add(task)
+    task.add_done_callback(_PERSIST_TASKS.discard)
+
+
+@router.post(
+    "/execute",
+    response_model=WorkflowExecutionResult,
+    dependencies=[Depends(require_role("Tenant Admin", "Data Scientist", "ML Engineer"))]
+)
+async def execute_workflow(
+    workflow: WorkflowGraph,
+    include_node_outputs: bool = Query(False, description="Opt-in to include full raw data of every node (default: false for lean response)"),
+    auto_save: bool = Query(False, description="Automatically upsert/save current workflow to DB before executing"),
+    workflow_id: Optional[str] = Query(None, description="Optional workflow ID to link in execution result"),
+    workflow_name: Optional[str] = Query(None, description="Optional workflow title if auto-saving to DB"),
+    resume_from: Optional[str] = Query(None, description=_RESUME_QUERY_DESC),
+    request: Request = None,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Execute a full workflow DAG end-to-end synchronously.
+    Execution does NOT auto-save to DB by default; workflows and execution results are saved via the Save Workbook endpoint.
+    """
+    target_id = (
+        workflow_id
+        or getattr(workflow, "workflow_id", None)
+        or getattr(workflow, "id", None)
+        or getattr(workflow, "pipeline_id", None)
+    )
+    if not target_id:
+        target_id = extract_workflow_id_from_context(request)
+    if auto_save:
+        target_id = await _autosave_workflow(db, workflow, target_id, workflow_name)
+
+    _require_resumable(resume_from)
+    execution_id = str(uuid.uuid4())
+    tid = get_current_tenant_id()
+    await preload_workflow_datasets(workflow=workflow, db=db, tenant_id=tid)
+
+    result = DAGExecutor.execute_workflow(
+        execution_id=execution_id,
+        workflow=workflow,
+        include_node_outputs=include_node_outputs,
+        resume_from=resume_from
+    )
+    if target_id:
+        result.workflow_id = target_id
+
+    # Cache execution result in memory for lookup if user subsequently saves the workbook
+    try:
+        job_manager.register_job_result(result.execution_id, result, workflow_id=target_id)
+    except Exception:
+        pass
+
+    await _persist_execution(db, workflow, result, target_id)
     return result
 
 
@@ -1507,6 +1779,7 @@ async def execute_workflow_by_id(
     workflow: Optional[WorkflowGraph] = None,
     include_node_outputs: bool = Query(False, description="Opt-in to include full raw data of every node"),
     auto_save: bool = Query(False, description="Automatically save updated graph and execution to DB"),
+    resume_from: Optional[str] = Query(None, description=_RESUME_QUERY_DESC),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -1547,11 +1820,16 @@ async def execute_workflow_by_id(
     else:
         graph_to_execute = db_workflow_to_graph(wf)
 
+    _require_resumable(resume_from)
     execution_id = str(uuid.uuid4())
+    tid = get_current_tenant_id()
+    await preload_workflow_datasets(workflow=graph_to_execute, db=db, tenant_id=tid)
+
     exec_result = DAGExecutor.execute_workflow(
         execution_id=execution_id,
         workflow=graph_to_execute,
-        include_node_outputs=include_node_outputs
+        include_node_outputs=include_node_outputs,
+        resume_from=resume_from
     )
     exec_result.workflow_id = workflow_id
 
@@ -1561,49 +1839,56 @@ async def execute_workflow_by_id(
         pass
 
     # Always persist execution run to history and update wf.last_execution
-    exec_nodes_payload, exec_edges_payload, exec_node_configs = (
-        workflow_graph_to_db_payload(graph_to_execute)
-    )
-    wf.last_execution = jsonable_encoder({
-        "execution_id": exec_result.execution_id,
-        "status": exec_result.status,
-        "total_duration_ms": exec_result.total_duration_ms,
-        "final_metrics": exec_result.final_metrics,
-        "anomaly_summary": exec_result.anomaly_summary,
-        "forecasting_summary": exec_result.forecasting_summary,
-        "governance_summary": exec_result.governance_summary,
-        "node_results": exec_result.node_results,
-        "execution_logs": exec_result.logs,
-        "step_snapshots": exec_result.step_snapshots,
-        "inference_schema": getattr(exec_result, "inference_schema", None),
-    })
-    await db.commit()
-
-    # Record immutable history snapshot
     try:
-        await record_workflow_execution_history(
-            db=db,
-            workflow_id=workflow_id,
-            execution_id=exec_result.execution_id,
-            status_str=exec_result.status,
-            total_duration_ms=exec_result.total_duration_ms or 0.0,
-            nodes=exec_nodes_payload,
-            edges=exec_edges_payload,
-            node_configs=exec_node_configs,
-            metrics=exec_result.final_metrics,
-            reports={
-                "anomaly_summary": exec_result.anomaly_summary,
-                "forecasting_summary": exec_result.forecasting_summary,
-                "governance_summary": exec_result.governance_summary,
-                "node_results": exec_result.node_results,
-                "inference_schema": getattr(exec_result, "inference_schema", None),
-            },
-            step_snapshots=exec_result.step_snapshots,
-            logs=exec_result.logs,
-            run_label=None
+        exec_nodes_payload, exec_edges_payload, exec_node_configs = (
+            workflow_graph_to_db_payload(graph_to_execute)
         )
+        safe_node_results = [
+            nr.model_dump() if hasattr(nr, "model_dump") else (nr.dict() if hasattr(nr, "dict") else nr)
+            for nr in (exec_result.node_results or [])
+        ]
+        wf.last_execution = jsonable_encoder({
+            "execution_id": exec_result.execution_id,
+            "status": exec_result.status,
+            "total_duration_ms": exec_result.total_duration_ms,
+            "final_metrics": exec_result.final_metrics,
+            "anomaly_summary": exec_result.anomaly_summary,
+            "forecasting_summary": exec_result.forecasting_summary,
+            "governance_summary": exec_result.governance_summary,
+            "node_results": safe_node_results,
+            "execution_logs": exec_result.logs,
+            "step_snapshots": exec_result.step_snapshots,
+            "inference_schema": getattr(exec_result, "inference_schema", None),
+        })
+        await db.commit()
+
+        # Record immutable history snapshot
+        try:
+            await record_workflow_execution_history(
+                db=db,
+                workflow_id=workflow_id,
+                execution_id=exec_result.execution_id,
+                status_str=exec_result.status,
+                total_duration_ms=exec_result.total_duration_ms or 0.0,
+                nodes=exec_nodes_payload,
+                edges=exec_edges_payload,
+                node_configs=exec_node_configs,
+                metrics=exec_result.final_metrics,
+                reports={
+                    "anomaly_summary": exec_result.anomaly_summary,
+                    "forecasting_summary": exec_result.forecasting_summary,
+                    "governance_summary": exec_result.governance_summary,
+                    "node_results": safe_node_results,
+                    "inference_schema": getattr(exec_result, "inference_schema", None),
+                },
+                step_snapshots=exec_result.step_snapshots,
+                logs=exec_result.logs,
+                run_label=None
+            )
+        except Exception as e:
+            logger.exception(f"Failed to record execution history for workflow {workflow_id}: {e}")
     except Exception as e:
-        logger.exception(f"Failed to record execution history for workflow {workflow_id}: {e}")
+        logger.warning(f"Could not persist workflow execution state to DB for {workflow_id}: {e}")
 
     return exec_result
 
@@ -1614,24 +1899,209 @@ async def execute_workflow_by_id(
 )
 async def submit_async_workflow(
     workflow: WorkflowGraph,
-    include_node_outputs: bool = Query(False, description="Opt-in to include full raw data of every node")
+    include_node_outputs: bool = Query(False, description="Opt-in to include full raw data of every node"),
+    auto_save: bool = Query(False, description="Save/update the workflow before running (same as /execute)"),
+    workflow_id: Optional[str] = Query(None, description="Workflow ID to link the run to (same as /execute)"),
+    workflow_name: Optional[str] = Query(None, description="Workflow title when auto-saving"),
+    resume_from: Optional[str] = Query(None, description=_RESUME_QUERY_DESC),
+    execution_id: Optional[str] = Query(None, description="Optional id chosen by the frontend (e.g. a UUID). Lets it call GET /jobs/{execution_id}/logs for live logs while this call is still running. Must be unused."),
+    wait: bool = Query(True, description="True (default): run in the background worker pool and return the SAME response as /execute once finished (single call). False: return a job_id immediately and follow it via /jobs/{job_id}/logs or /stream."),
+    request: Request = None,
+    db: AsyncSession = Depends(get_db),
 ):
     """
-    Submit a workflow for asynchronous background execution (n8n/Boomi worker pool pattern).
-    Returns immediately with a job_id for status polling.
+    Runs the workflow in the background worker pool (same engine as /execute).
+
+    Live logs: pass your own execution_id and poll GET /jobs/{execution_id}/logs while this call runs.
+
+    wait=true (default): the call returns when the run is finished, with exactly the
+    same response body as /execute (final_metrics, forecasting_summary, node_results,
+    step_snapshots, logs, ...). The run is saved to last execution / history like /execute.
+
+    wait=false: starts the run in the background and returns immediately with a job_id.
+    Takes the same options as /execute (auto_save, workflow_id, workflow_name, resume_from).
+
+    Follow the job with GET /jobs/{job_id}/logs (polling) or /jobs/{job_id}/stream (SSE):
+    live logs and node status while it runs; when "done" is true the same response also
+    contains "result" (exactly what /execute returns) and, if it failed, "resume_info".
+    A run linked to a workflow is saved to its last execution and history like /execute.
     """
-    job_id = job_manager.submit_job(
-        workflow=workflow,
-        trigger_type="api_async",
-        include_node_outputs=include_node_outputs
+    target_id = (
+        workflow_id
+        or getattr(workflow, "workflow_id", None)
+        or getattr(workflow, "id", None)
+        or getattr(workflow, "pipeline_id", None)
     )
+    if not target_id:
+        target_id = extract_workflow_id_from_context(request)
+    if auto_save:
+        target_id = await _autosave_workflow(db, workflow, target_id, workflow_name)
+
+    _require_resumable(resume_from)
+    if execution_id is not None and not re.fullmatch(r"[A-Za-z0-9_-]{8,64}", execution_id):
+        raise HTTPException(status_code=400, detail="execution_id must be 8-64 characters: letters, digits, '-' or '_'.")
+    # Same dataset preloading as the synchronous /execute (loads the caller's own datasets)
+    await preload_workflow_datasets(workflow=workflow, db=db, tenant_id=get_current_tenant_id())
+    try:
+        job_id = job_manager.submit_job(
+            workflow=workflow,
+            trigger_type="api_async",
+            include_node_outputs=include_node_outputs,
+            resume_from=resume_from,
+            workflow_id=target_id,
+            job_id=execution_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    if target_id:
+        _persist_when_finished(job_id, workflow, target_id)
+
+    if wait:
+        # Wait for the worker thread without blocking the server's event loop
+        future = job_manager.job_futures.get(job_id)
+        if future is not None:
+            await asyncio.wrap_future(future)
+        # A run of a saved workflow is only complete once it has been written to the DB
+        for _ in range(1200):  # up to ~60s
+            job = job_manager.get_job(job_id) or {}
+            if not (job.get("needs_persist") and job.get("persisted") is None):
+                break
+            await asyncio.sleep(0.05)
+        job = job_manager.get_job(job_id) or {}
+        result = job.get("result")
+        if result is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=job.get("error") or "Workflow execution failed before producing a result.",
+            )
+        return result
+
     return {
         "job_id": job_id,
+        "execution_id": job_id,
+        "workflow_id": target_id,
         "status": "PENDING",
+        "resumed_from": resume_from,
+        "logs_url": f"/api/v1/workflows/jobs/{job_id}/logs",
+        "stream_url": f"/api/v1/workflows/jobs/{job_id}/stream",
         "message": "Workflow execution dispatched to background worker pool."
     }
 
 
+
+
+_WS_ALLOWED_ROLES = ("Tenant Admin", "Data Scientist", "ML Engineer")
+
+
+@ws_router.websocket("/ws/execute")
+async def execute_workflow_ws(websocket: WebSocket):
+    """
+    ONE WebSocket connection per run: live logs while it runs, then the full result.
+
+    Client -> server, first message (JSON), within 30s:
+        {"type": "start",
+         "token": "<access token>",            # browsers cannot set headers on a WebSocket
+         "workflow": { ...same body as /execute... },
+         "options": {"execution_id": "<uuid>", "auto_save": false, "workflow_id": null,
+                     "workflow_name": null, "include_node_outputs": false, "resume_from": null}}
+    Server -> client, in order:
+        {"type": "started",     "job_id": ..., "execution_id": ..., ...}
+        {"type": "progress",    ...}   (repeats: new log lines, node_status, current_node, progress)
+        {"type": "resume_info", ...}   (only when the run failed)
+        {"type": "result",      "data": <exactly what /execute returns>}
+        {"type": "done",        "job_id": ..., "status": ...}
+    On a problem: {"type": "error", "status": <http-like code>, "detail": "..."} then the socket closes.
+    If the client disconnects the run keeps going; it can still be followed with GET /jobs/{id}/logs.
+    """
+    await websocket.accept()
+
+    async def _send(payload: Dict[str, Any]) -> None:
+        await websocket.send_json(jsonable_encoder(payload))
+
+    async def _fail(code: int, detail: str, close_code: int) -> None:
+        try:
+            await _send({"type": "error", "status": code, "detail": detail})
+            await websocket.close(code=close_code)
+        except Exception:
+            pass
+
+    try:
+        # 1) first message = start frame (auth + workflow + options)
+        try:
+            msg = await asyncio.wait_for(websocket.receive_json(), timeout=30)
+        except asyncio.TimeoutError:
+            return await _fail(408, "No start message received within 30 seconds.", 4408)
+        except ValueError:
+            return await _fail(400, "The first message must be JSON.", 4400)
+        if not isinstance(msg, dict) or msg.get("type") != "start":
+            return await _fail(400, "The first message must be {\"type\": \"start\", ...}.", 4400)
+
+        # 2) same checks as the HTTP endpoint: valid token, allowed role, caller's tenant
+        try:
+            user = _decode_token(str(msg.get("token") or "").removeprefix("Bearer ").strip())
+        except HTTPException as e:
+            return await _fail(e.status_code, str(e.detail), 4401)
+        if not user.has_role(*_WS_ALLOWED_ROLES):
+            return await _fail(403, "Your role is not allowed to execute workflows.", 4403)
+        set_current_tenant_id(user.tenant_id)
+
+        try:
+            workflow = WorkflowGraph.model_validate(msg.get("workflow") or {})
+        except Exception as e:
+            return await _fail(422, f"Invalid workflow: {e}", 4422)
+
+        # 3) start the run in the background worker pool (same path as /async-execute)
+        opts = msg.get("options") or {}
+        try:
+            async with AsyncSessionLocal() as db:
+                submitted = await submit_async_workflow(
+                    workflow=workflow,
+                    include_node_outputs=bool(opts.get("include_node_outputs", False)),
+                    auto_save=bool(opts.get("auto_save", False)),
+                    workflow_id=opts.get("workflow_id"),
+                    workflow_name=opts.get("workflow_name"),
+                    resume_from=opts.get("resume_from"),
+                    execution_id=opts.get("execution_id"),
+                    wait=False,
+                    request=None,
+                    db=db,
+                )
+        except HTTPException as e:
+            return await _fail(e.status_code, str(e.detail), 4000 + e.status_code % 1000)
+
+        job_id = submitted["job_id"]
+        await _send({"type": "started", **submitted})
+
+        # 4) stream progress until the run is finished (and saved), then the result
+        since, last_state, last_sent = 0, None, time.monotonic()
+        while True:
+            progress = job_manager.get_job_progress(job_id, since=since)
+            if progress is None:
+                return await _fail(404, f"Job '{job_id}' not found.", 4404)
+            since = progress["next_since"]
+
+            if progress["done"]:
+                result = progress.pop("result", None)
+                resume = progress.pop("resume_info", None)
+                await _send({"type": "progress", **progress})
+                if resume is not None:
+                    await _send({"type": "resume_info", "data": resume})
+                await _send({"type": "result", "data": result})
+                await _send({"type": "done", "job_id": job_id, "status": progress["status"]})
+                await websocket.close()
+                return
+
+            state = (progress["status"], progress["current_node"], _json.dumps(progress["node_status"], sort_keys=True))
+            if progress["logs"] or state != last_state:
+                await _send({"type": "progress", **progress})
+                last_state, last_sent = state, time.monotonic()
+            elif time.monotonic() - last_sent > 15:
+                await _send({"type": "ping"})  # keeps proxies from closing an idle connection
+                last_sent = time.monotonic()
+            await asyncio.sleep(0.5)
+    except (WebSocketDisconnect, RuntimeError):
+        # client went away; the run itself keeps going in the worker pool
+        return
 
 
 @router.post("/trigger/{webhook_path}")
@@ -1674,7 +2144,8 @@ async def _get_execution_node_dataframe(
 ) -> Optional[pd.DataFrame]:
     """Helper to locate, load, or reconstruct any node's full DataFrame for an execution run."""
     from backend.app.infrastructure.storage.storage_manager import storage_manager
-    p_rel = f"executions/{execution_id}/{node_id}.parquet"
+    # Cache lives in the caller's tenant folder, so another tenant's execution_id finds nothing here.
+    p_rel = f"{tenant_cache_dir()}/executions/{execution_id}/{node_id}.parquet"
     p_abs = storage_manager.get_absolute_path(p_rel)
     if p_abs.exists():
         try:
@@ -1682,14 +2153,30 @@ async def _get_execution_node_dataframe(
         except Exception:
             pass
 
+    def _extract_df(node_output_map: Dict[str, Any]) -> Optional[pd.DataFrame]:
+        if node_id not in node_output_map:
+            return None
+        target_out = node_output_map[node_id]
+        if not isinstance(target_out, dict):
+            return None
+        d = target_out.get("dataframe")
+        if isinstance(d, pd.DataFrame):
+            return d
+        for fk in ["dataframe_train", "dataframe_test", "matched_dataframe", "forecast_df"]:
+            if isinstance(target_out.get(fk), pd.DataFrame):
+                return target_out[fk]
+        for v in target_out.values():
+            if isinstance(v, pd.DataFrame):
+                return v
+        return None
+
     job = job_manager.get_job(execution_id)
     if job:
         res = job.get("results") or job.get("result")
         node_outs = getattr(res, "node_outputs", {}) if not isinstance(res, dict) else res.get("node_outputs", {})
-        if node_id in node_outs:
-            df = node_outs[node_id].get("dataframe")
-            if isinstance(df, pd.DataFrame):
-                return df
+        df = _extract_df(node_outs)
+        if df is not None:
+            return df
 
     ex_res = await db.execute(select(WorkflowExecution).where(WorkflowExecution.id == execution_id))
     ex_row = ex_res.scalar_one_or_none()
@@ -1715,21 +2202,32 @@ async def _get_execution_node_dataframe(
             include_node_outputs=True
         )
         node_outs = exec_res.node_outputs or {}
-        if node_id in node_outs and isinstance(node_outs[node_id].get("dataframe"), pd.DataFrame):
-            df = node_outs[node_id]["dataframe"]
+        df = _extract_df(node_outs)
+        if df is not None:
             try:
                 p_abs.parent.mkdir(parents=True, exist_ok=True)
                 df.to_parquet(p_abs, index=False)
             except Exception:
                 pass
             return df
+
+    # Check if execution_id is a test session_id from NodeStepExecutor
+    try:
+        from backend.app.engine.execution.step_executor import NodeStepExecutor
+        sess_outs = NodeStepExecutor.load_node_output(session_id=execution_id, node_id=node_id)
+        df_sess = _extract_df(sess_outs) or sess_outs.get("dataframe")
+        if isinstance(df_sess, pd.DataFrame):
+            return df_sess
+    except Exception:
+        pass
+
     return None
 
 
 @router.post(
     "/export-dataset",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_role("Tenant Admin", "Data Scientist", "ML Engineer"))]
+    dependencies=[Depends(require_export_access)]
 )
 async def export_workflow_node_dataset(
     payload: Dict[str, Any] = Body(..., description="Export intermediate or joined node output as a permanent dataset in the library"),
@@ -1821,21 +2319,23 @@ async def export_workflow_node_dataset(
         ds_name = ds_name[:-4]
 
     rel_storage_path = f"datasets/{new_ds_id}_{file_name}"
-    abs_path = storage_manager.get_absolute_path(rel_storage_path)
-    abs_path.parent.mkdir(parents=True, exist_ok=True)
-    df_clean.to_csv(abs_path, index=False)
-    file_size_bytes = abs_path.stat().st_size
+    csv_bytes = df_clean.to_csv(index=False).encode("utf-8")
+    # Stored in Ozone under ml-workflow/t<caller's tenant>/datasets/...
+    tenant_id = get_current_tenant_id()
+    storage_path = await storage_manager.save_file(csv_bytes, rel_storage_path, tenant_id)
+    file_size_bytes = len(csv_bytes)
 
     profile_data = DataProfiler.profile_dataframe(df_clean)
 
     new_dataset = Dataset(
         id=new_ds_id,
+        tenant_id=tenant_id,
         name=ds_name,
         description=description or f"Exported from workflow node '{target_node_id}'",
         file_name=file_name,
         file_format="csv",
         file_size_bytes=file_size_bytes,
-        storage_path=rel_storage_path,
+        storage_path=storage_path,
         row_count=len(df_clean),
         column_count=len(df_clean.columns),
         quality_score=float(profile_data.get("quality_score", 100.0)),
@@ -1901,6 +2401,142 @@ async def infer_workflow_schema(
     )
 
 
+@router.post(
+    "/nodes/{node_id}/test-step",
+    response_model=NodeTestStepResponse,
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_role("Tenant Admin", "Data Scientist", "ML Engineer", "Business User"))]
+)
+async def test_workflow_node_step(
+    node_id: str,
+    payload: NodeTestStepRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Executes a single visual canvas node in isolation (n8n/Boomi-style 'Test Step').
+    Caches intermediate DataFrames and ML artifacts per test session, auto-resolves
+    unrun ancestors, and returns instant preview rows, columns, and execution diagnostics.
+    """
+    from backend.app.engine.execution.step_executor import NodeStepExecutor
+
+    nodes = payload.nodes or []
+    edges = payload.edges or []
+    node_configs = payload.node_configs or {}
+
+    wf_id = getattr(payload, "workflow_id", None)
+    if (not nodes or len(nodes) == 0) and wf_id:
+        result = await db.execute(select(Workflow).where(Workflow.id == wf_id))
+        wf = result.scalar_one_or_none()
+        if wf:
+            nodes = wf.nodes or []
+            edges = wf.edges or []
+            if not node_configs and wf.node_configs:
+                node_configs = wf.node_configs
+
+    session_id = payload.session_id or wf_id or f"draft_{uuid.uuid4().hex[:12]}"
+
+    return await NodeStepExecutor.execute_node_step(
+        target_node_id=node_id,
+        nodes=nodes,
+        edges=edges,
+        node_configs=node_configs,
+        session_id=session_id,
+        sample_size=payload.sample_size,
+        auto_run_ancestors=payload.auto_run_ancestors,
+        dry_run=payload.dry_run,
+        db=db
+    )
+
+
+@router.get(
+    "/sessions/{session_id}/nodes/{node_id}/preview",
+    dependencies=[Depends(get_current_user)]
+)
+async def get_test_step_table_preview(
+    session_id: str,
+    node_id: str,
+    page: int = Query(1, ge=1, description="1-indexed page number"),
+    limit: int = Query(50, ge=1, le=500, description="Records per page")
+):
+    """
+    Renders server-side paginated tabular data from a previously executed test step in this session.
+    """
+    from backend.app.engine.execution.step_executor import NodeStepExecutor
+    from backend.app.engine.execution.executor import make_json_safe
+
+    outputs = NodeStepExecutor.load_node_output(session_id=session_id, node_id=node_id)
+    df = outputs.get("dataframe")
+    if df is None or not isinstance(df, pd.DataFrame):
+        for v in outputs.values():
+            if isinstance(v, pd.DataFrame):
+                df = v
+                break
+
+    # Graceful fallback for governance, tracker, and evaluator nodes
+    if df is None or not isinstance(df, pd.DataFrame):
+        if outputs.get("governance_record") and isinstance(outputs["governance_record"], dict):
+            df = pd.DataFrame([outputs["governance_record"]])
+        elif outputs.get("metrics") and isinstance(outputs["metrics"], dict) and len(outputs["metrics"]) > 0:
+            scalar_m = {k: v for k, v in outputs["metrics"].items() if isinstance(v, (int, float, str, bool))}
+            if scalar_m:
+                df = pd.DataFrame([scalar_m])
+        else:
+            meta = NodeStepExecutor.load_node_meta(session_id=session_id, node_id=node_id)
+            if meta:
+                if meta.get("preview_rows"):
+                    df = pd.DataFrame(meta["preview_rows"])
+                elif meta.get("output_summary") and isinstance(meta["output_summary"], dict) and meta["output_summary"].get("governance_record"):
+                    df = pd.DataFrame([meta["output_summary"]["governance_record"]])
+                elif meta.get("metrics") and isinstance(meta["metrics"], dict) and len(meta["metrics"]) > 0:
+                    scalar_m = {k: v for k, v in meta["metrics"].items() if isinstance(v, (int, float, str, bool))}
+                    if scalar_m:
+                        df = pd.DataFrame([scalar_m])
+
+    if df is None or not isinstance(df, pd.DataFrame):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No tabular test output found for node '{node_id}' in session '{session_id}'."
+        )
+
+    df = df.drop(columns=["_merge"], errors="ignore")
+    total_rows = len(df)
+    total_cols = len(df.columns)
+    total_pages = math.ceil(total_rows / limit) if (limit > 0 and total_rows > 0) else 1
+    skip = (page - 1) * limit
+    page_df = df.iloc[skip:skip + limit].copy()
+    for c in page_df.select_dtypes(include=["datetime", "datetimetz"]).columns:
+        page_df[c] = page_df[c].dt.strftime("%Y-%m-%d %H:%M:%S")
+    clean_page = page_df.replace({float("nan"): None, float("inf"): None, float("-inf"): None})
+    clean_page = clean_page.where(pd.notnull(clean_page), None)
+
+    return {
+        "execution_id": session_id,
+        "session_id": session_id,
+        "node_id": node_id,
+        "total_rows": total_rows,
+        "total_columns": total_cols,
+        "page": page,
+        "limit": limit,
+        "total_pages": total_pages,
+        "columns": list(df.columns),
+        "data": [make_json_safe(r) for r in clean_page.to_dict(orient="records")]
+    }
+
+
+@router.delete(
+    "/sessions/{session_id}",
+    response_model=SessionClearResponse,
+    dependencies=[Depends(require_role("Tenant Admin", "Data Scientist", "ML Engineer", "Business User"))]
+)
+async def clear_test_session(session_id: str):
+    """
+    Cleans up all cached test session artifacts and parquet tables from disk.
+    """
+    from backend.app.engine.execution.step_executor import NodeStepExecutor
+    return NodeStepExecutor.clear_session(session_id)
+
+
+
 @router.get(
     "/{execution_id}/nodes/{node_id}/data",
     dependencies=[Depends(get_current_user)]
@@ -1929,11 +2565,16 @@ async def get_node_table_data(
     total_cols = len(df.columns)
     total_pages = math.ceil(total_rows / limit) if (limit > 0 and total_rows > 0) else 1
     skip = (page - 1) * limit
-    page_df = df.iloc[skip:skip + limit]
+    page_df = df.iloc[skip:skip + limit].copy()
+    for c in page_df.select_dtypes(include=["datetime", "datetimetz"]).columns:
+        page_df[c] = page_df[c].dt.strftime("%Y-%m-%d %H:%M:%S")
     clean_page = page_df.replace({float("nan"): None, float("inf"): None, float("-inf"): None})
+    clean_page = clean_page.where(pd.notnull(clean_page), None)
 
+    from backend.app.engine.execution.executor import make_json_safe
     return {
         "execution_id": execution_id,
+        "session_id": execution_id,
         "node_id": node_id,
         "total_rows": total_rows,
         "total_columns": total_cols,
@@ -1941,13 +2582,103 @@ async def get_node_table_data(
         "limit": limit,
         "total_pages": total_pages,
         "columns": list(df.columns),
-        "data": clean_page.to_dict(orient="records")
+        "data": [make_json_safe(r) for r in clean_page.to_dict(orient="records")]
     }
+
+
+def _artifact_json_to_df(data: Any) -> pd.DataFrame:
+    """Flattens a JSON artifact (metrics, feature importances, ...) into a table for CSV download."""
+    if isinstance(data, list) and data and all(isinstance(r, dict) for r in data):
+        return pd.json_normalize(data)
+    if isinstance(data, dict):
+        flat = pd.json_normalize(data, sep=".").iloc[0].to_dict() if data else {}
+        return pd.DataFrame({"field": list(flat.keys()), "value": [str(v) if isinstance(v, (list, dict)) else v for v in flat.values()]})
+    return pd.DataFrame({"value": data if isinstance(data, list) else [data]})
+
+
+@router.get(
+    "/{execution_id}/nodes/{node_id}/artifacts",
+    dependencies=[Depends(get_current_user)]
+)
+async def list_node_artifacts(execution_id: str, node_id: str):
+    """
+    Lists everything downloadable for one node of a run: tables (e.g. dataframe, dataframe_train,
+    dataframe_test, forecast_df), results (metrics, feature_importances, forecasting_summary, ...)
+    and the fitted model file, with the formats each one can be downloaded in.
+    """
+    from backend.app.engine.execution import node_artifacts
+    items = node_artifacts.list_artifacts(execution_id, node_id)
+    if not items:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No downloadable output found for this node (the run may have expired, or the node produced no output).",
+        )
+    return {"execution_id": execution_id, "node_id": node_id, "artifacts": items}
+
+
+@router.get("/{execution_id}/nodes/{node_id}/artifacts/{artifact_name}/download")
+async def download_node_artifact(
+    execution_id: str,
+    node_id: str,
+    artifact_name: str,
+    format: Optional[str] = Query(None, description="table: csv (default) | json | parquet; result: json (default) | csv; model: joblib"),
+    limit: Optional[int] = Query(None, ge=1, description="Optional max rows (tables only)"),
+    user: TokenData = Depends(require_export_access),
+):
+    """Downloads one artifact of a node (see the list endpoint). Needs export permission."""
+    from backend.app.engine.execution import node_artifacts
+    path = node_artifacts.find_artifact(execution_id, node_id, artifact_name)
+    if path is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Artifact '{artifact_name}' not found for node '{node_id}'.")
+
+    base = f"{node_id}_{artifact_name}"
+    fmt = (format or "").lower().strip()
+
+    def _send(content: bytes, media_type: str, ext: str):
+        return Response(
+            content=content,
+            media_type=media_type,
+            headers={"Content-Disposition": f'attachment; filename="{base}.{ext}"'},
+        )
+
+    if path.suffix == ".parquet":
+        fmt = fmt or "csv"
+        if fmt == "parquet" and not limit:
+            return _send(path.read_bytes(), "application/octet-stream", "parquet")
+        df = pd.read_parquet(path)
+        if limit:
+            df = df.head(limit)
+        if fmt == "csv":
+            return _send(df.to_csv(index=False).encode("utf-8"), "text/csv", "csv")
+        if fmt == "json":
+            return _send(df.to_json(orient="records", date_format="iso").encode("utf-8"), "application/json", "json")
+        if fmt == "parquet":
+            import io
+            buf = io.BytesIO()
+            df.to_parquet(buf, index=False)
+            return _send(buf.getvalue(), "application/octet-stream", "parquet")
+        raise HTTPException(status_code=400, detail="format must be csv, json or parquet for a table.")
+
+    if path.suffix == ".json":
+        fmt = fmt or "json"
+        if fmt == "json":
+            return _send(path.read_bytes(), "application/json", "json")
+        if fmt == "csv":
+            df = _artifact_json_to_df(_json.loads(path.read_text(encoding="utf-8")))
+            return _send(df.to_csv(index=False).encode("utf-8"), "text/csv", "csv")
+        raise HTTPException(status_code=400, detail="format must be json or csv for a result.")
+
+    if path.suffix == ".joblib":
+        if fmt not in ("", "joblib"):
+            raise HTTPException(status_code=400, detail="A model can only be downloaded as joblib.")
+        return _send(path.read_bytes(), "application/octet-stream", "joblib")
+
+    raise HTTPException(status_code=400, detail="Unsupported artifact type.")
 
 
 @router.get(
     "/{execution_id}/nodes/{node_id}/export-csv",
-    dependencies=[Depends(get_current_user)]
+    dependencies=[Depends(require_export_access)]
 )
 async def export_node_data_to_csv(
     execution_id: str,
@@ -2210,7 +2941,7 @@ async def list_workflow_history(
             last_ex = wf.last_execution
             norm_status = normalize_history_status(last_ex.get("status"))
             synth_rec = WorkflowExecution(
-                id=last_ex.get("execution_id") or str(uuid.uuid4()),
+                id=await _unused_id(db, WorkflowExecution, last_ex.get("execution_id")),
                 workflow_id=workflow_id,
                 version_number=1,
                 run_label="Run #1",
@@ -2457,7 +3188,7 @@ def _convert_prediction_to_csv(response: PredictionResponse) -> str:
         return df_csv.to_csv(index=False)
 
 
-@router.post("/{execution_id}/predict/export-csv")
+@router.post("/{execution_id}/predict/export-csv", dependencies=[Depends(require_export_access)])
 async def export_prediction_csv(
     execution_id: str,
     payload: PredictionRequest = Body(...)
@@ -2528,7 +3259,7 @@ async def generate_combined_dataset(
     return PipelineInferencer.generate_combined_dataset(bundle=bundle, request=payload)
 
 
-@router.post("/{execution_id}/generate-future-dataset/export-combined-csv")
+@router.post("/{execution_id}/generate-future-dataset/export-combined-csv", dependencies=[Depends(require_export_access)])
 async def export_combined_dataset_csv(
     execution_id: str,
     payload: CombinedDatasetRequest = Body(...)
@@ -2545,4 +3276,3 @@ async def export_combined_dataset_csv(
             "Content-Disposition": f"attachment; filename=combined_dataset_{execution_id}.csv"
         }
     )
-

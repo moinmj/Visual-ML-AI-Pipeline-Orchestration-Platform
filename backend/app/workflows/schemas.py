@@ -250,3 +250,43 @@ class WorkflowInferSchemaResponse(BaseModel):
     errors: List[str] = Field(default_factory=list)
 
 
+class NodeTestStepRequest(BaseModel):
+    nodes: List[Dict[str, Any]] = Field(default_factory=list, description="Visual canvas nodes")
+    edges: List[Dict[str, Any]] = Field(default_factory=list, description="DAG edges connecting nodes")
+    node_configs: Dict[str, Any] = Field(default_factory=dict, description="Per-node parameter configurations")
+    session_id: Optional[str] = Field(None, description="Optional session ID to link multi-step test caches (auto-generated if omitted)")
+    sample_size: Optional[int] = Field(None, description="Optional row limit for fast testing of large datasets")
+    auto_run_ancestors: bool = Field(True, description="Automatically execute and cache unrun ancestor nodes")
+    dry_run: bool = Field(False, description="Simulate execution without external side effects (emails, messages)")
+
+
+class NodeTestStepResponse(BaseModel):
+    success: bool = True
+    session_id: Optional[str] = Field(None, description="Active session ID used for caching")
+    node_id: str
+    recipe_id: str
+    recipe_name: str = "Component"
+    status: str = "SUCCESS"  # SUCCESS, FAILED
+    duration_ms: float = 0.0
+    row_count: Optional[int] = None
+    columns: List[str] = Field(default_factory=list)
+    column_types: Dict[str, str] = Field(default_factory=dict)
+    preview_rows: List[Dict[str, Any]] = Field(default_factory=list)
+    output_summary: Dict[str, Any] = Field(default_factory=dict)
+    metrics: Optional[Dict[str, Any]] = None
+    error_message: Optional[str] = None
+    error_title: Optional[str] = None
+    error_suggestion: Optional[str] = None
+    ancestors_executed: List[str] = Field(default_factory=list)
+    available_left_columns: List[str] = Field(default_factory=list)
+    available_right_columns: List[str] = Field(default_factory=list)
+    ports: Dict[str, NodePortSchema] = Field(default_factory=dict)
+
+
+class SessionClearResponse(BaseModel):
+    success: bool = True
+    session_id: str
+    message: str
+
+
+

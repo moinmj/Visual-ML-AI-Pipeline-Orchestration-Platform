@@ -173,6 +173,9 @@ class TrainTestSplitRecipe(BaseRecipe):
                 y_test  = y_test.astype(int)
 
             res = {
+                "dataframe":       df_sorted,
+                "dataframe_train": train_df,
+                "dataframe_test":  test_df,
                 "X_train":         X_train,
                 "X_test":          X_test,
                 "y_train":         y_train,
@@ -237,6 +240,9 @@ class TrainTestSplitRecipe(BaseRecipe):
         # Use find_date_column + extract_test_dates_from_column to safely extract
         # real date strings. Integer-only columns like Date_year will be rejected.
         res = {
+            "dataframe":       df,
+            "dataframe_train": df.loc[X_train.index],
+            "dataframe_test":  df.loc[X_test.index],
             "X_train":         X_train,
             "X_test":          X_test,
             "y_train":         y_train,

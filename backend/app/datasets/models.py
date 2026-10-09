@@ -8,6 +8,14 @@ class Dataset(Base):
     __tablename__ = "datasets"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+
+    # Owning tenant (taken from the caller's token, never from the request).
+    # Every read/list/delete filters on it. Rows created before tenant scoping
+    # existed have NULL here, so they match no tenant and are invisible to all.
+    tenant_id = Column(Integer, nullable=True, index=True)
+    # User who created it (the token's "sub"); filled in automatically on create, never changed.
+    user_id = Column(String(255), nullable=True, index=True)
+
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
     file_name = Column(String(255), nullable=False)
@@ -23,5 +31,5 @@ class Dataset(Base):
     # Statistical profile JSON
     profile = Column(JSON, nullable=True)
 
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))

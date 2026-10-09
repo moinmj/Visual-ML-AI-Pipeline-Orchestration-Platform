@@ -1,5 +1,7 @@
 from backend.app.recipes.base.registry import recipe_registry
 from backend.app.recipes.ingestion.csv_loader import CSVLoaderRecipe
+from backend.app.recipes.ingestion.export_writer import ExportWriterRecipe
+from backend.app.recipes.preprocessing.custom_python_step import CustomPythonStepRecipe
 from backend.app.recipes.preprocessing.missing_values import MissingValueImputerRecipe
 from backend.app.recipes.preprocessing.scaling import FeatureScalerRecipe
 from backend.app.recipes.preprocessing.encoding import CategoricalEncoderRecipe
@@ -35,6 +37,7 @@ from backend.app.recipes.preprocessing.dataset_join import DatasetJoinRecipe
 from backend.app.recipes.governance.mlflow_tracker import MLflowTrackerRecipe
 from backend.app.recipes.triggers.webhook_trigger import WebhookTriggerRecipe
 from backend.app.recipes.triggers.cron_trigger import CronScheduleTriggerRecipe
+from backend.app.recipes.triggers.email_trigger_imap import EmailTriggerIMAPRecipe
 
 # Flow Control Recipes
 from backend.app.recipes.flow_control.if_condition import IfConditionRecipe
@@ -62,9 +65,11 @@ from backend.app.recipes.integrations.openweathermap import OpenWeatherMapRecipe
 
 def register_all_recipes():
     recipe_registry.register(CSVLoaderRecipe())
+    recipe_registry.register(ExportWriterRecipe())
     recipe_registry.register(DatasetJoinRecipe())
     recipe_registry.register(WebhookTriggerRecipe())
     recipe_registry.register(CronScheduleTriggerRecipe())
+    recipe_registry.register(EmailTriggerIMAPRecipe())
     recipe_registry.register(ColumnSelectorRecipe())
     recipe_registry.register(DataTypeConverterRecipe())
     recipe_registry.register(DuplicateRemoverRecipe())
@@ -104,6 +109,7 @@ def register_all_recipes():
     recipe_registry.register(LoopBatchRecipe())
     recipe_registry.register(DelayRecipe())
     recipe_registry.register(SQLStepRecipe())
+    recipe_registry.register(CustomPythonStepRecipe())
     recipe_registry.register(LimitRecipe())
     recipe_registry.register(SortRecipe())
     recipe_registry.register(AggregateRecipe())

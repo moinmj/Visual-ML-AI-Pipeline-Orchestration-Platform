@@ -32,60 +32,47 @@ class PivotRecipe(BaseRecipe):
             "type": "object",
             "properties": {
                 "mode": {
-                    "type": "string",
+                    "type": "radio",
                     "title": "Operation Mode",
                     "enum": ["pivot", "unpivot"],
                     "default": "pivot",
-                    "description": "pivot (long-to-wide by grouping index and pivoting column headers) or unpivot (wide-to-long/melt)."
+                    "description": "pivot (long-to-wide) or unpivot (wide-to-long/melt)."
                 },
                 "index": {
-                    "title": "Row Identifiers (Index / ID Vars)",
-                    "description": "Columns to retain as row identifier keys.",
-                    "oneOf": [
-                        {"type": "string"},
-                        {"type": "array", "items": {"type": "string"}}
-                    ]
+                    "type": "column",
+                    "title": "Row Identifiers Column(s)",
+                    "description": "Column(s) to retain as row identifier keys."
                 },
                 "columns": {
-                    "title": "Pivot Column(s) (pivot mode only)",
-                    "description": "Column whose unique values become the new wide column headers.",
-                    "oneOf": [
-                        {"type": "string"},
-                        {"type": "array", "items": {"type": "string"}}
-                    ]
+                    "type": "column",
+                    "title": "Pivot Column(s)",
+                    "description": "Column whose unique values become the new wide column headers (pivot mode only)."
                 },
                 "values": {
+                    "type": "column",
                     "title": "Value Column(s)",
-                    "description": "Column(s) containing values to aggregate in cells (pivot) or unpivot into values (unpivot).",
-                    "oneOf": [
-                        {"type": "string"},
-                        {"type": "array", "items": {"type": "string"}}
-                    ]
+                    "description": "Column(s) containing values to aggregate in cells (pivot) or unpivot into values (unpivot)."
                 },
                 "agg_func": {
-                    "type": "string",
+                    "type": "select",
                     "title": "Aggregation Function (pivot only)",
                     "enum": ["sum", "mean", "count", "first", "last", "min", "max", "median"],
                     "default": "sum"
                 },
                 "fill_value": {
+                    "type": "text",
                     "title": "Fill Value (pivot only)",
-                    "description": "Value to replace missing/null cells in the pivoted table (e.g. 0).",
-                    "oneOf": [
-                        {"type": "number"},
-                        {"type": "string"},
-                        {"type": "null"}
-                    ],
-                    "default": 0
+                    "default": 0,
+                    "description": "Value to replace missing/null cells in the pivoted table (e.g. 0)."
                 },
                 "var_name": {
-                    "type": "string",
+                    "type": "text",
                     "title": "Variable Column Name (unpivot only)",
                     "default": "variable",
                     "description": "Name of the column for unpivoted headers."
                 },
                 "value_name": {
-                    "type": "string",
+                    "type": "text",
                     "title": "Value Column Name (unpivot only)",
                     "default": "value",
                     "description": "Name of the column for unpivoted values."
@@ -99,10 +86,59 @@ class PivotRecipe(BaseRecipe):
             return []
         if isinstance(val, str):
             clean = val.strip()
-            return [clean] if clean else []
+            if not clean:
+                return []
+            # Support comma-separated strings typed in input boxes (e.g. 'A, B, C')
+            if "," in clean:
+                return [p.strip() for p in clean.split(",") if p.strip()]
+            return [clean]
         if isinstance(val, (list, tuple)):
-            return [str(c).strip() for c in val if c is not None and str(c).strip()]
+            res = []
+            for c in val:
+                if c is not None and str(c).strip():
+                    item = str(c).strip()
+                    if "," in item:
+                        res.extend([p.strip() for p in item.split(",") if p.strip()])
+                    else:
+                        res.append(item)
+            return res
         return []
+
+    def _match_column(self, col_name: str, available_cols: List[str]) -> Optional[str]:
+        """Case-insensitive and symbol-flexible match (e.g. CUSTOMER-ID vs customer_id vs CYSTOMER-ID)."""
+        if not col_name:
+            return None
+        if col_name in available_cols:
+            return col_name
+        
+        # 1. Exact case-insensitive match
+        for c in available_cols:
+            if c.lower() == col_name.lower():
+                return c
+        
+        # 2. Normalized match (remove spaces, underscores, dashes)
+        clean_target = col_name.lower().replace("-", "").replace("_", "").replace(" ", "")
+        for c in available_cols:
+            clean_c = c.lower().replace("-", "").replace("_", "").replace(" ", "")
+            if clean_c == clean_target:
+                return c
+        
+        # 3. Typo/fuzzy fallback (e.g. CYSTOMER vs CUSTOMER)
+        for c in available_cols:
+            clean_c = c.lower().replace("-", "").replace("_", "").replace(" ", "")
+            if clean_c.replace("y", "u") == clean_target.replace("y", "u"):
+                return c
+            
+        # 4. Unambiguous substring/suffix match (e.g. "air" or "nair" matching "Priya Nair")
+        if len(clean_target) >= 3:
+            sub_matches = [
+                c for c in available_cols
+                if clean_target in c.lower().replace("-", "").replace("_", "").replace(" ", "")
+            ]
+            if len(sub_matches) == 1:
+                return sub_matches[0]
+
+        return None
 
     def validate_config(self, config: Dict[str, Any]) -> List[str]:
         errors = []
@@ -128,10 +164,16 @@ class PivotRecipe(BaseRecipe):
         if df is None:
             raise ValueError("PivotRecipe expects 'dataframe' in inputs.")
 
+        all_cols = list(df.columns)
         mode = str(config.get("mode", "pivot")).lower().strip()
-        index_cols = self._normalize_col_list(config.get("index") if config.get("index") is not None else config.get("id_vars"))
-        pivot_cols = self._normalize_col_list(config.get("columns"))
-        value_cols = self._normalize_col_list(config.get("values") if config.get("values") is not None else config.get("value_vars"))
+        raw_index_cols = self._normalize_col_list(config.get("index") if config.get("index") is not None else config.get("id_vars"))
+        raw_pivot_cols = self._normalize_col_list(config.get("columns"))
+        raw_value_cols = self._normalize_col_list(config.get("values") if config.get("values") is not None else config.get("value_vars"))
+
+        # Resolve columns with flexible matching
+        index_cols = [self._match_column(c, all_cols) or c for c in raw_index_cols]
+        pivot_cols = [self._match_column(c, all_cols) or c for c in raw_pivot_cols]
+        value_cols = [self._match_column(c, all_cols) or c for c in raw_value_cols]
 
         if mode == "pivot":
             if not pivot_cols:
@@ -190,7 +232,17 @@ class PivotRecipe(BaseRecipe):
 
         else:  # unpivot (melt)
             valid_id_vars = [c for c in index_cols if c in df.columns] if index_cols else None
-            valid_value_vars = [c for c in value_cols if c in df.columns] if value_cols else None
+            
+            # If value columns specified, filter to existing columns
+            matched_value_vars = [c for c in value_cols if c in df.columns] if value_cols else None
+            
+            # If value_cols was not specified OR none of the specified columns existed,
+            # default to all columns not in id_vars so we unpivot all wide columns
+            if not matched_value_vars:
+                valid_value_vars = [c for c in df.columns if c not in (valid_id_vars or [])]
+            else:
+                valid_value_vars = matched_value_vars
+
             var_name = str(config.get("var_name", "variable")).strip() or "variable"
             value_name = str(config.get("value_name", "value")).strip() or "value"
 
@@ -228,5 +280,6 @@ class PivotRecipe(BaseRecipe):
         else:
             id_vars = self._normalize_col_list(config.get("index"))
             val_vars = self._normalize_col_list(config.get("values"))
-            return f"df = df.melt(id_vars={repr(id_vars)}, value_vars={repr(val_vars)}, " \
+            val_arg = repr(val_vars) if val_vars else "None"
+            return f"df = df.melt(id_vars={repr(id_vars)}, value_vars={val_arg}, " \
                    f"var_name='{config.get('var_name', 'variable')}', value_name='{config.get('value_name', 'value')}')"

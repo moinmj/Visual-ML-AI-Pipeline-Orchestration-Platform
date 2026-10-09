@@ -21,11 +21,13 @@ from backend.app.infrastructure.database.tenant_session import init_tenant_db
 import backend.app.datasets.models
 import backend.app.workflows.models
 import backend.app.tenant_data.models
+# Tenant isolation for workflows / executions / datasets (registers SQLAlchemy hooks).
+import backend.app.infrastructure.database.tenant_guard  # noqa: F401
 
 # Import routers
 from backend.app.datasets.router import router as datasets_router
 from backend.app.recipes.router import router as recipes_router
-from backend.app.workflows.router import router as workflows_router
+from backend.app.workflows.router import router as workflows_router, ws_router as workflows_ws_router
 from backend.app.recommendation.router import router as recommendation_router
 from backend.app.templates.router import router as templates_router
 from backend.app.auth.router import router as auth_router
@@ -65,6 +67,8 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Lets the browser read paging totals (e.g. GET /datasets/?search=...&limit=20).
+    expose_headers=["X-Total-Count"],
 )
 
 
@@ -76,6 +80,8 @@ async def platform_exception_handler(request: Request, exc: PlatformException):
         status_code = status.HTTP_404_NOT_FOUND
     elif exc.code == "VALIDATION_ERROR":
         status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+    elif exc.code == "STORAGE_ERROR":
+        status_code = status.HTTP_502_BAD_GATEWAY
 
     return JSONResponse(
         status_code=status_code,
@@ -103,6 +109,7 @@ async def health_check():
 app.include_router(datasets_router, prefix=settings.API_V1_STR)
 app.include_router(recipes_router, prefix=settings.API_V1_STR)
 app.include_router(workflows_router, prefix=settings.API_V1_STR)
+app.include_router(workflows_ws_router, prefix=settings.API_V1_STR)
 app.include_router(recommendation_router, prefix=settings.API_V1_STR)
 app.include_router(templates_router, prefix=settings.API_V1_STR)
 app.include_router(auth_router, prefix=settings.API_V1_STR)

@@ -153,6 +153,7 @@ class TimeSeriesSplitRecipe(BaseRecipe):
                 "target_column": target_col,
                 "time_column": time_col
             },
+            "dataframe": df_sorted,
             "dataframe_train": df_train,
             "dataframe_test": df_test,
             "metadata": {

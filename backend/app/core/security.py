@@ -12,11 +12,15 @@ Adapted from the platform's existing auth pattern - see
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Optional
 
-from fastapi import Depends, HTTPException, status
+import ipaddress
+
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import ExpiredSignatureError, JWTError, jwt
 
 from backend.app.core.config import settings
+from backend.app.core.logging import logger
+from backend.app.core.tenant_context import set_current_tenant_id, set_current_user_id
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -86,11 +90,17 @@ def _decode_token(token: str) -> TokenData:
         raise credentials_error
 
     sub = payload.get("sub") or payload.get("user_id") or payload.get("id") or payload.get("email") or payload.get("username")
-    tenant_id = payload.get("tenant_id") or payload.get("tenantId") or payload.get("tenant") or 1
+    # No fallback tenant: a token without a tenant claim is rejected, otherwise
+    # every such token would silently land in (and see the data of) tenant 1.
+    tenant_id = payload.get("tenant_id") or payload.get("tenantId") or payload.get("tenant")
     roles = payload.get("roles", []) or payload.get("role", [])
     perms = payload.get("permissions", []) or payload.get("perms", [])
 
-    if sub is None:
+    if sub is None or tenant_id is None:
+        raise credentials_error
+    try:
+        tenant_id = int(tenant_id)
+    except (TypeError, ValueError):
         raise credentials_error
 
     # Reject refresh tokens used as access tokens.
@@ -103,13 +113,13 @@ def _decode_token(token: str) -> TokenData:
 
     return TokenData(
         sub=str(sub),
-        tenant_id=int(tenant_id),
+        tenant_id=tenant_id,
         roles=roles if isinstance(roles, list) else [roles],
         permissions=perms if isinstance(perms, list) else [],
     )
 
 
-def get_current_user(
+async def get_current_user(
     credentials: Annotated[Optional[HTTPAuthorizationCredentials], Depends(_bearer)],
 ) -> TokenData:
     """FastAPI dependency: validates the Bearer token, returns the caller.
@@ -128,7 +138,14 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    return _decode_token(credentials.credentials)
+    user = _decode_token(credentials.credentials)
+    # Make the caller's tenant available to the DB tenant guard, job manager and
+    # executors for the rest of this request. (async on purpose: a sync
+    # dependency runs in a worker thread and the value would not reach the endpoint.)
+    set_current_tenant_id(user.tenant_id)
+    # ...and the caller's user ID (token 'sub'), stamped as user_id on new rows.
+    set_current_user_id(user.sub)
+    return user
 
 
 def require_role(*allowed_roles: str):
@@ -159,3 +176,67 @@ def require_permission(*allowed_perms: str):
             )
         return user
     return _check
+
+def _csv_setting(value: Optional[str]) -> list[str]:
+    return [v.strip() for v in (value or "").split(",") if v.strip()]
+
+
+def client_ip(request: Request) -> str:
+    """
+    The caller's IP. X-Forwarded-For is only believed when the direct peer is one of
+    TRUSTED_PROXY_IPS (our own reverse proxy); the entry used is the right-most one that
+    is not itself a trusted proxy, so a client cannot spoof it by sending its own header.
+    """
+    peer = request.client.host if request.client else ""
+    trusted = set(_csv_setting(settings.TRUSTED_PROXY_IPS))
+    if peer in trusted:
+        forwarded = [p.strip() for p in request.headers.get("x-forwarded-for", "").split(",") if p.strip()]
+        for hop in reversed(forwarded):
+            if hop not in trusted:
+                return hop
+    return peer
+
+
+def ip_allowed(ip: str) -> bool:
+    """True when EXPORT_ALLOWED_IPS is empty, or the IP is inside one of its addresses / ranges."""
+    entries = _csv_setting(settings.EXPORT_ALLOWED_IPS)
+    if not entries:
+        return True
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    for entry in entries:
+        try:
+            if addr in ipaddress.ip_network(entry, strict=False):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+async def require_export_access(
+    request: Request,
+    user: Annotated[TokenData, Depends(get_current_user)],
+) -> TokenData:
+    """
+    Gate for every endpoint that exports / downloads data:
+      - the caller needs one of EXPORT_ALLOWED_ROLES, and
+      - when EXPORT_ALLOWED_IPS is set, the request must come from an allowed IP.
+    Every allowed export is written to the log (who, from where, what).
+    """
+    allowed_roles = _csv_setting(settings.EXPORT_ALLOWED_ROLES)
+    if not user.has_role(*allowed_roles):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Exporting data requires one of these roles: {allowed_roles}. Your roles: {user.roles}",
+        )
+    ip = client_ip(request)
+    if not ip_allowed(ip):
+        logger.warning(f"Export blocked for '{user.sub}' (tenant {user.tenant_id}): IP {ip} not in allow-list")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Exporting data is not allowed from your network.",
+        )
+    logger.info(f"EXPORT user='{user.sub}' tenant={user.tenant_id} ip={ip} {request.method} {request.url.path}")
+    return user

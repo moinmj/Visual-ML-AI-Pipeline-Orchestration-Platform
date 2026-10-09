@@ -542,7 +542,12 @@ class TenantDataService:
         dataset_name = name or f"{model.name} ({resolved_table})"
         storage_rel_path = f"datasets/{dataset_id}_{model.name}.parquet"
 
-        storage_manager.save_dataframe(df, storage_rel_path, file_format="parquet")
+        # Stored in Ozone under ml-workflow/t<tenant_id>/datasets/... ; the returned
+        # s3:// path (not the relative key) is what goes into the DB, so the dataset
+        # shows up in GET /datasets/.
+        storage_path = storage_manager.save_dataframe(
+            df, storage_rel_path, tenant_id=tenant_id, file_format="parquet"
+        )
         profile_data = DataProfiler.profile_dataframe(df)
         profile_data["source"] = {
             "type": "tenant_model_table",
@@ -556,12 +561,13 @@ class TenantDataService:
 
         dataset = Dataset(
             id=dataset_id,
+            tenant_id=tenant_id,
             name=dataset_name,
             description=description or f"Ingested from model '{model.name}' (datasource '{resolved_table}').",
             file_name=f"{model.name}.parquet",
             file_format="parquet",
             file_size_bytes=int(df.memory_usage(deep=True).sum()),
-            storage_path=storage_rel_path,
+            storage_path=storage_path,
             row_count=profile_data["row_count"],
             column_count=profile_data["column_count"],
             quality_score=profile_data["quality_score"],

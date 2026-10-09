@@ -17,12 +17,12 @@ class CSVLoaderRecipe(BaseRecipe):
             "type": "object",
             "properties": {
                 "dataset_id": {
-                    "type": "string",
+                    "type": "dataset",
                     "title": "Dataset ID",
                     "description": "ID of the dataset previously uploaded to the platform."
                 },
                 "delimiter": {
-                    "type": "string",
+                    "type": "select",
                     "title": "Delimiter",
                     "default": ",",
                     "enum": [",", ";", "\t", "|"]
@@ -46,57 +46,69 @@ class CSVLoaderRecipe(BaseRecipe):
         dataset_id = config.get("dataset_id")
         delimiter = config.get("delimiter", ",")
 
-        # 3. Resolve dataset_id to storage_path if not directly provided
+        # Tenant of the workflow run (injected by the executor). When present, only
+        # that tenant's datasets/Ozone folder can be read.
+        tenant_id = config.get("tenant_id")
+        tenant_id = int(tenant_id) if tenant_id is not None else None
+        dataset_tenant_id = None
+
+        # Only Ozone paths are accepted; a local filesystem path in the node
+        # config could otherwise read any file on the server.
+        if storage_path and not str(storage_path).startswith("s3://"):
+            raise RuntimeError(
+                f"Only Ozone datasets (s3://...) can be loaded; got '{storage_path}'. "
+                "Use a dataset_id or a path returned by the Datasets API."
+            )
+
+        # 3. Resolve dataset_id to storage_path (from the datasets table) if not directly provided
         if dataset_id and not storage_path:
-            import os
             from backend.app.core.config import settings
 
-            storage_root = settings.LOCAL_STORAGE_DIR
-            if os.path.exists(storage_root):
-                for root, _, files in os.walk(storage_root):
-                    for f in files:
-                        if dataset_id in f:
-                            storage_path = os.path.relpath(os.path.join(root, f), storage_root).replace("\\", "/")
-                            break
-                    if storage_path:
-                        break
-
-            # Fallback: Query SQLite database for dataset record
-            if not storage_path:
+            # Look up the dataset record in the platform database (SQLite or PostgreSQL)
+            try:
+                from sqlalchemy import create_engine, text
+                from sqlalchemy.pool import NullPool
+                sync_url = (
+                    settings.DATABASE_URL
+                    .replace("+aiosqlite", "")
+                    .replace("+asyncpg", "")
+                )
+                if sync_url.startswith(("postgres://", "postgresql://")):
+                    sync_url = "postgresql+psycopg2://" + sync_url.split("://", 1)[1]
+                eng = create_engine(sync_url, poolclass=NullPool)
                 try:
-                    import sqlite3
-                    db_file = settings.DATABASE_URL.replace("sqlite+aiosqlite:///", "").replace("sqlite:///", "")
-                    if os.path.exists(db_file):
-                        conn = sqlite3.connect(db_file)
-                        cur = conn.cursor()
-                        cur.execute("SELECT storage_path FROM datasets WHERE id = ? LIMIT 1", (str(dataset_id),))
-                        row = cur.fetchone()
+                    with eng.connect() as conn:
+                        if tenant_id is not None:
+                            row = conn.execute(
+                                text("SELECT storage_path, tenant_id FROM datasets WHERE id = :id AND tenant_id = :tid LIMIT 1"),
+                                {"id": str(dataset_id), "tid": tenant_id},
+                            ).fetchone()
+                        else:
+                            row = conn.execute(
+                                text("SELECT storage_path, tenant_id FROM datasets WHERE id = :id LIMIT 1"),
+                                {"id": str(dataset_id)},
+                            ).fetchone()
                         if row and row[0]:
                             storage_path = row[0]
-                        conn.close()
-                except Exception:
-                    pass
+                            dataset_tenant_id = row[1]
+                finally:
+                    eng.dispose()
+            except Exception:
+                pass
 
         # 4. Load from storage_path
         if storage_path:
+            if not str(storage_path).startswith("s3://"):
+                raise RuntimeError(
+                    f"Dataset '{dataset_id}' is not stored in Ozone ('{storage_path}'). "
+                    "Re-upload it so it is stored under the ml-workflow prefix."
+                )
             try:
                 from backend.app.infrastructure.storage.storage_manager import storage_manager
-                df = storage_manager.read_dataframe(storage_path)
+                read_tenant = tenant_id if tenant_id is not None else dataset_tenant_id
+                df = storage_manager.read_dataframe(storage_path, read_tenant)
             except Exception as e:
-                import os
-                if os.path.exists(storage_path):
-                    if storage_path.endswith(".csv"):
-                        df = pd.read_csv(storage_path, delimiter=delimiter)
-                    elif storage_path.endswith(".parquet"):
-                        df = pd.read_parquet(storage_path)
-                    elif storage_path.endswith((".xlsx", ".xls")):
-                        df = pd.read_excel(storage_path)
-                    elif storage_path.endswith(".json"):
-                        df = pd.read_json(storage_path)
-                    else:
-                        df = pd.read_csv(storage_path)
-                else:
-                    raise RuntimeError(f"Could not load uploaded dataset '{dataset_id or storage_path}': {str(e)}")
+                raise RuntimeError(f"Could not load uploaded dataset '{dataset_id or storage_path}': {str(e)}")
         elif context and isinstance(context, dict) and "dataframe" in context and context["dataframe"] is not None:
             df = context["dataframe"]
         elif dataset_id:

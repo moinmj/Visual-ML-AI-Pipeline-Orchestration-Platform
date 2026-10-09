@@ -1,13 +1,15 @@
 from typing import Dict, List, Optional, Tuple
 from backend.app.recipes.base.recipe import BaseRecipe, RecipeMetadata
-from backend.app.core.exceptions import NotFoundException
+from backend.app.core.exceptions import NotFoundException, ValidationException
 from backend.app.core.logging import logger
 
 
 _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "webhook_trigger": ("Ingestion & Orchestration", "Triggers"),
     "cron_trigger": ("Ingestion & Orchestration", "Triggers"),
+    "email_trigger_imap": ("Ingestion & Orchestration", "Triggers"),
     "csv_loader": ("Ingestion & Orchestration", "Load"),
+    "export_writer": ("Ingestion & Orchestration", "Output"),
     "dataset_join": ("Data Preparation & Transformation", "Combine/Structure"),
     "column_selector": ("Data Preparation & Transformation", "Combine/Structure"),
     "data_type_converter": ("Data Preparation & Transformation", "Cleanup & Quality"),
@@ -48,6 +50,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "loop": ("Flow Control", "Iteration"),
     "delay": ("Flow Control", "Timing"),
     "sql_step": ("Data Preparation & Transformation", "Custom Logic"),
+    "custom_python_step": ("Data Preparation & Transformation", "Custom Logic"),
     "limit": ("Data Preparation & Transformation", "Combine/Structure"),
     "sort": ("Data Preparation & Transformation", "Combine/Structure"),
     "aggregate": ("Data Preparation & Transformation", "Combine/Structure"),
@@ -79,6 +82,9 @@ class RecipeRegistry:
             "email": "gmail",
             "weather": "openweathermap",
             "union": "merge",
+            "imap": "email_trigger_imap",
+            "imap_trigger": "email_trigger_imap",
+            "email_trigger": "email_trigger_imap",
         }
 
     def register(self, recipe: BaseRecipe):
@@ -96,24 +102,58 @@ class RecipeRegistry:
         meta.subgroup = subgroup
         return meta
 
+    def _planned(self) -> Dict[str, RecipeMetadata]:
+        """Planned recipes that are not implemented yet (a registered class always wins)."""
+        from backend.app.recipes.base.planned_recipes import PLANNED_RECIPES
+        return {rid: meta for rid, meta in PLANNED_RECIPES.items() if rid not in self._recipes}
+
     def get(self, recipe_id: str) -> BaseRecipe:
+        """
+        Returns an implemented (enabled) recipe. Everything that runs, tests,
+        validates or auto-wires recipes goes through here, so planned recipes are
+        refused in one place with a clear message.
+        """
         resolved_id = self._aliases.get(recipe_id, recipe_id)
         if resolved_id not in self._recipes:
+            planned = self._planned().get(resolved_id)
+            if planned:
+                raise ValidationException(
+                    f"Recipe '{planned.name}' ({resolved_id}) is not available yet (coming soon). "
+                    "Remove it from the workflow to run or test the pipeline."
+                )
             raise NotFoundException("Recipe", recipe_id)
         return self._recipes[resolved_id]
 
     def has(self, recipe_id: str) -> bool:
+        """True only for implemented (enabled) recipes."""
         resolved_id = self._aliases.get(recipe_id, recipe_id)
         return resolved_id in self._recipes
 
-    def list_all(self, category: Optional[str] = None) -> List[RecipeMetadata]:
-        recipes = list(self._recipes.values())
+    def get_metadata(self, recipe_id: str) -> RecipeMetadata:
+        """Metadata (with group/subgroup and 'enabled') for an enabled OR planned recipe."""
+        resolved_id = self._aliases.get(recipe_id, recipe_id)
+        if resolved_id in self._recipes:
+            return self._to_metadata_with_group(self._recipes[resolved_id])
+        planned = self._planned().get(resolved_id)
+        if planned:
+            return planned
+        raise NotFoundException("Recipe", recipe_id)
+
+    def list_all(self, category: Optional[str] = None, enabled: Optional[bool] = None) -> List[RecipeMetadata]:
+        """
+        All recipes for the catalog: implemented ones ("enabled": true) followed by
+        planned ones ("enabled": false). Optional filters: category, enabled.
+        """
+        metas = [self._to_metadata_with_group(r) for r in self._recipes.values()]
+        metas += list(self._planned().values())
         if category:
-            recipes = [r for r in recipes if r.category.lower() == category.lower()]
-        return [self._to_metadata_with_group(r) for r in recipes]
+            metas = [m for m in metas if m.category.lower() == category.lower()]
+        if enabled is not None:
+            metas = [m for m in metas if m.enabled == enabled]
+        return metas
 
     def get_categories(self) -> List[str]:
-        return sorted(list(set(r.category for r in self._recipes.values())))
+        return sorted({m.category for m in self.list_all()})
 
 
 recipe_registry = RecipeRegistry()
