@@ -66,6 +66,15 @@ class SlackRecipe(BaseRecipe):
 
     def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
         webhook_url = str(config.get("webhook_url", "")).strip()
+        if webhook_url and not webhook_url.startswith(("http://", "https://")):
+            if webhook_url.startswith("hooks.slack.com"):
+                webhook_url = f"https://{webhook_url}"
+            elif "/" in webhook_url:
+                clean_path = webhook_url.lstrip("/")
+                if not clean_path.startswith("services/"):
+                    clean_path = f"services/{clean_path}"
+                webhook_url = f"https://hooks.slack.com/{clean_path}"
+
         message_text = config.get("message", "Pipeline update")
         include_summary = bool(config.get("include_metrics_summary", True))
 
