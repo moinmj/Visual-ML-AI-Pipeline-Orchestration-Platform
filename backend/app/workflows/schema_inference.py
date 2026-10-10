@@ -379,7 +379,7 @@ class WorkflowSchemaInferencer:
             recipe_id=recipe_id,
             columns=active_cols,
             column_details=active_details,
-            available_left_columns=[],
+            available_left_columns=list(parent_cols),
             available_right_columns=[],
             ports={"output": port_out, "dataframe": port_out}
         )
