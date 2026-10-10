@@ -253,8 +253,7 @@ class DAGExecutor:
                 from backend.app.core.tenant_context import tenant_cache_dir
                 p_rel = f"{tenant_cache_dir()}/executions/{execution_id}/{node_id}.parquet"
                 p_abs = storage_manager.get_absolute_path(p_rel)
-                p_abs.parent.mkdir(parents=True, exist_ok=True)
-                df_out.to_parquet(p_abs, index=False)
+                storage_manager.safe_to_parquet(df_out, p_abs)
             except Exception:
                 pass
 
@@ -573,7 +572,7 @@ class DAGExecutor:
                 cls._propagate_context(outputs, node, pipeline_context)
 
                 # Cache dataframe output to disk for instant pagination and CSV download
-                cls._cache_dataframe(execution_id, node.id, outputs)
+                cls._cache_dataframe(execution_id, node.id, outputs, recipe_id=node.recipe_id)
 
                 # Capture summaries & KPIs
                 _capture_summaries(outputs)

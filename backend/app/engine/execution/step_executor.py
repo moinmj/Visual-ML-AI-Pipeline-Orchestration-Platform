@@ -121,7 +121,7 @@ class NodeStepExecutor:
 
         if isinstance(primary_df, pd.DataFrame):
             df_file = sdir / f"node_{node_id}_df.parquet"
-            primary_df.to_parquet(df_file, index=False)
+            storage_manager.safe_to_parquet(primary_df, df_file)
 
         # 2. Save Port-Specific DataFrames
         port_mappings = {
@@ -134,14 +134,14 @@ class NodeStepExecutor:
         for out_key, port_name in port_mappings.items():
             if out_key in outputs and isinstance(outputs[out_key], pd.DataFrame):
                 p_file = sdir / f"node_{node_id}_port_{port_name}.parquet"
-                outputs[out_key].to_parquet(p_file, index=False)
+                storage_manager.safe_to_parquet(outputs[out_key], p_file)
 
         # Also save any other named DataFrames
         for k, v in outputs.items():
             if isinstance(v, pd.DataFrame) and k not in port_mappings and k != "dataframe":
                 clean_k = "".join(c for c in k if c.isalnum() or c == "_")
                 p_file = sdir / f"node_{node_id}_port_{clean_k}.parquet"
-                v.to_parquet(p_file, index=False)
+                storage_manager.safe_to_parquet(v, p_file)
 
         # 3. Save Non-DataFrame ML Artifacts via Joblib
         artifacts = {}

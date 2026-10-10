@@ -592,7 +592,7 @@ async def test_preview_from_full_workflow_execution():
         assert exec_data["status"] == "SUCCESS"
         exec_id = exec_data["execution_id"]
 
-        # 2. Preview the imputer node using the execution_id
+        # 2. Preview the imputer node using the execution_id on the session preview endpoint
         preview_resp = await client.get(
             f"/api/v1/workflows/sessions/{exec_id}/nodes/node_imputer/preview?page=1&limit=10"
         )
@@ -600,6 +600,70 @@ async def test_preview_from_full_workflow_execution():
         pdata = preview_resp.json()
         assert pdata["total_rows"] > 0
         assert len(pdata["data"]) > 0
+
+        # 3. Preview via canvas node card endpoint /{execution_id}/nodes/{node_id}/data
+        data_resp = await client.get(
+            f"/api/v1/workflows/{exec_id}/nodes/node_imputer/data?page=1&limit=10"
+        )
+        assert data_resp.status_code == 200, f"Node table data returned {data_resp.status_code}: {data_resp.text}"
+        node_data = data_resp.json()
+        assert node_data["total_rows"] > 0
+        assert len(node_data["data"]) > 0
+        assert "execution_id" in node_data
+        assert node_data["node_id"] == "node_imputer"
+
+
+@pytest.mark.asyncio
+async def test_safe_to_parquet_with_mixed_struct_and_preview_data():
+    """Verify safe_to_parquet handles mixed struct/scalar values and get_node_table_data resolves it."""
+    from backend.app.infrastructure.storage.storage_manager import storage_manager
+    from backend.app.workflows.router import _RECENT_EXECUTION_RESULTS
+
+    # DataFrame with mixed dict and scalar values (like the user's age column)
+    df_mixed = pd.DataFrame([
+        {"user_id": "U1", "age": {"source": "25.0", "parsedValue": 25}, "city": "NYC"},
+        {"user_id": "U2", "age": "11", "city": "LA"},
+        {"user_id": "U3", "age": 30, "city": "CHI"}
+    ])
+
+    test_path = storage_manager.get_absolute_path("test_mixed_safe.parquet")
+    try:
+        success = storage_manager.safe_to_parquet(df_mixed, test_path)
+        assert success is True
+        assert test_path.exists()
+        loaded_df = pd.read_parquet(test_path)
+        assert len(loaded_df) == 3
+        assert "age" in loaded_df.columns
+    finally:
+        if test_path.exists():
+            test_path.unlink()
+
+    # Verify /{execution_id}/nodes/{node_id}/data resolves from in-memory _RECENT_EXECUTION_RESULTS with step_snapshots
+    mock_exec_id = f"test_mock_exec_{uuid.uuid4().hex[:8]}"
+    _RECENT_EXECUTION_RESULTS[mock_exec_id] = {
+        "execution_id": mock_exec_id,
+        "node_outputs": {},  # intentionally empty, like real execution
+        "step_snapshots": {
+            "node_test": {
+                "node_id": "node_test",
+                "columns": ["user_id", "age", "city"],
+                "preview_rows": [
+                    {"user_id": "U1", "age": {"source": "25.0", "parsedValue": 25}, "city": "NYC"},
+                    {"user_id": "U2", "age": "11", "city": "LA"}
+                ]
+            }
+        }
+    }
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=auth_headers()) as client:
+        resp = await client.get(f"/api/v1/workflows/{mock_exec_id}/nodes/node_test/data?page=1&limit=10")
+        assert resp.status_code == 200, f"Failed to get table data: {resp.text}"
+        body = resp.json()
+        assert body["total_rows"] == 2
+        assert len(body["data"]) == 2
+        assert body["data"][0]["user_id"] == "U1"
+        assert body["columns"] == ["user_id", "age", "city"]
+
 
 
 
