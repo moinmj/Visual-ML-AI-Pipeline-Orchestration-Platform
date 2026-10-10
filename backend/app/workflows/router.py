@@ -2577,6 +2577,63 @@ async def get_test_step_table_preview(
                 df = v
                 break
 
+    has_mock_data = (
+        isinstance(df, pd.DataFrame)
+        and ("_email_source" in df.columns or ("status" in df.columns and (df["status"] == "SIMULATED").any()))
+    )
+
+    # If the draft session contains mock/simulated data or no data, check for a fresh real workflow execution
+    if df is None or not isinstance(df, pd.DataFrame) or has_mock_data:
+        try:
+            from backend.app.core.tenant_context import tenant_cache_dir
+            from backend.app.infrastructure.storage.storage_manager import storage_manager
+            for rec_id, rec_res in reversed(list(_RECENT_EXECUTION_RESULTS.items())):
+                snaps = getattr(rec_res, "step_snapshots", {}) if not isinstance(rec_res, dict) else rec_res.get("step_snapshots", {})
+                if node_id in snaps:
+                    rec_df = None
+                    for subpath in [
+                        f"{tenant_cache_dir()}/executions/{rec_id}/{node_id}.parquet",
+                        f"t_none/executions/{rec_id}/{node_id}.parquet",
+                        f"executions/{rec_id}/{node_id}.parquet",
+                        f"{tenant_cache_dir()}/test_sessions/{rec_id}/node_{node_id}_df.parquet",
+                        f"t_none/test_sessions/{rec_id}/node_{node_id}_df.parquet",
+                    ]:
+                        p_abs = storage_manager.get_absolute_path(subpath)
+                        if p_abs.exists():
+                            try:
+                                rec_df = pd.read_parquet(p_abs)
+                                break
+                            except Exception:
+                                pass
+                    if rec_df is None:
+                        node_outs = getattr(rec_res, "node_outputs", {}) if not isinstance(rec_res, dict) else rec_res.get("node_outputs", {})
+                        target_out = node_outs.get(node_id) if isinstance(node_outs, dict) else None
+                        if isinstance(target_out, dict) and isinstance(target_out.get("dataframe"), pd.DataFrame):
+                            rec_df = target_out["dataframe"]
+                    if rec_df is None:
+                        snap = snaps[node_id]
+                        if snap and isinstance(snap, dict) and snap.get("preview_rows"):
+                            rec_df = pd.DataFrame(snap["preview_rows"])
+                            cols = snap.get("columns")
+                            if cols and isinstance(cols, list) and all(c in rec_df.columns for c in cols):
+                                rec_df = rec_df[cols]
+
+                    if rec_df is not None:
+                        df = rec_df
+                        if session_id.startswith("draft_"):
+                            try:
+                                NodeStepExecutor.save_node_output(
+                                    session_id=session_id,
+                                    node_id=node_id,
+                                    recipe_id="",
+                                    outputs={"dataframe": df}
+                                )
+                            except Exception:
+                                pass
+                        break
+        except Exception as ex:
+            logger.debug(f"Could not load recent execution for preview: {ex}")
+
     # Graceful fallback for full workflow execution runs (parquet caches)
     if df is None or not isinstance(df, pd.DataFrame):
         try:
