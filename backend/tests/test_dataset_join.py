@@ -551,7 +551,16 @@ async def test_workflow_schema_inference_endpoint():
     from backend.app.infrastructure.database.session import AsyncSessionLocal
     import uuid
 
-    app.dependency_overrides[get_current_user] = lambda: TokenData("test", 1, ["Tenant Admin", "Data Scientist", "ML Engineer"], ["*"])
+    from backend.app.core.tenant_context import set_current_tenant_id, set_current_user_id
+
+    def mock_user():
+        set_current_tenant_id(1)
+        set_current_user_id("test")
+        return TokenData("test", 1, ["Tenant Admin", "Data Scientist", "ML Engineer"], ["*"])
+
+    app.dependency_overrides[get_current_user] = mock_user
+    set_current_tenant_id(1)
+    set_current_user_id("test")
 
     def auth_headers():
         token = create_access_token(sub="test-user", tenant_id=1, roles=["Tenant Admin"])
@@ -565,6 +574,7 @@ async def test_workflow_schema_inference_endpoint():
     async with AsyncSessionLocal() as session:
         ds_orders = Dataset(
             id=ds_orders_id,
+            tenant_id=1,
             name="Orders Dataset",
             file_name="orders.csv",
             file_format="csv",
@@ -582,6 +592,7 @@ async def test_workflow_schema_inference_endpoint():
         )
         ds_customers = Dataset(
             id=ds_customers_id,
+            tenant_id=1,
             name="Customers Dataset",
             file_name="customers.csv",
             file_format="csv",
