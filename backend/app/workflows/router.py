@@ -1685,6 +1685,20 @@ async def _persist_execution(
 # Background tasks that save async runs to the DB when they finish (kept referenced until done)
 _PERSIST_TASKS: set = set()
 
+_RECENT_EXECUTION_RESULTS: Dict[str, Any] = {}
+_MAX_RECENT_RESULTS = 100
+
+
+def _cache_recent_execution_result(execution_id: str, result: Any) -> None:
+    try:
+        if execution_id and result:
+            _RECENT_EXECUTION_RESULTS[execution_id] = result
+            if len(_RECENT_EXECUTION_RESULTS) > _MAX_RECENT_RESULTS:
+                oldest = next(iter(_RECENT_EXECUTION_RESULTS))
+                _RECENT_EXECUTION_RESULTS.pop(oldest, None)
+    except Exception:
+        pass
+
 
 def _persist_when_finished(job_id: str, workflow: WorkflowGraph, target_id: str) -> None:
     """
@@ -1703,6 +1717,7 @@ def _persist_when_finished(job_id: str, workflow: WorkflowGraph, target_id: str)
             job = job_manager.get_job(job_id)
             result = job.get("result") if job else None
             if result is not None:
+                _cache_recent_execution_result(job_id, result)
                 async with AsyncSessionLocal() as session:
                     saved = await _persist_execution(session, workflow, result, target_id)
         except Exception as e:
@@ -1759,7 +1774,8 @@ async def execute_workflow(
     if target_id:
         result.workflow_id = target_id
 
-    # Cache execution result in memory for lookup if user subsequently saves the workbook
+    # Cache execution result in memory for lookup if user subsequently saves the workbook or previews nodes
+    _cache_recent_execution_result(result.execution_id, result)
     try:
         job_manager.register_job_result(result.execution_id, result, workflow_id=target_id)
     except Exception:
@@ -1833,6 +1849,7 @@ async def execute_workflow_by_id(
     )
     exec_result.workflow_id = workflow_id
 
+    _cache_recent_execution_result(exec_result.execution_id, exec_result)
     try:
         job_manager.register_job_result(exec_result.execution_id, exec_result, workflow_id=workflow_id)
     except Exception:
@@ -2144,17 +2161,10 @@ async def _get_execution_node_dataframe(
 ) -> Optional[pd.DataFrame]:
     """Helper to locate, load, or reconstruct any node's full DataFrame for an execution run."""
     from backend.app.infrastructure.storage.storage_manager import storage_manager
-    # Cache lives in the caller's tenant folder, so another tenant's execution_id finds nothing here.
-    p_rel = f"{tenant_cache_dir()}/executions/{execution_id}/{node_id}.parquet"
-    p_abs = storage_manager.get_absolute_path(p_rel)
-    if p_abs.exists():
-        try:
-            return pd.read_parquet(p_abs)
-        except Exception:
-            pass
+    from backend.app.core.tenant_context import tenant_cache_dir
 
     def _extract_df(node_output_map: Dict[str, Any]) -> Optional[pd.DataFrame]:
-        if node_id not in node_output_map:
+        if not isinstance(node_output_map, dict) or node_id not in node_output_map:
             return None
         target_out = node_output_map[node_id]
         if not isinstance(target_out, dict):
@@ -2170,56 +2180,150 @@ async def _get_execution_node_dataframe(
                 return v
         return None
 
+    def _extract_from_snapshots(snapshots: Any) -> Optional[pd.DataFrame]:
+        if not isinstance(snapshots, dict) or node_id not in snapshots:
+            return None
+        snap = snapshots[node_id]
+        if isinstance(snap, dict) and snap.get("preview_rows"):
+            rows = snap["preview_rows"]
+            if isinstance(rows, list) and len(rows) > 0:
+                try:
+                    df = pd.DataFrame(rows)
+                    cols = snap.get("columns")
+                    if cols and isinstance(cols, list) and all(c in df.columns for c in cols):
+                        df = df[cols]
+                    return df
+                except Exception:
+                    pass
+        return None
+
+    # 1. In-memory recent executions cache
+    recent_res = _RECENT_EXECUTION_RESULTS.get(execution_id)
+    if recent_res:
+        node_outs = getattr(recent_res, "node_outputs", {}) if not isinstance(recent_res, dict) else recent_res.get("node_outputs", {})
+        df = _extract_df(node_outs)
+        if df is not None:
+            return df
+        snaps = getattr(recent_res, "step_snapshots", {}) if not isinstance(recent_res, dict) else recent_res.get("step_snapshots", {})
+        df_snap = _extract_from_snapshots(snaps)
+        if df_snap is not None:
+            return df_snap
+
+    # 2. In-memory job manager
     job = job_manager.get_job(execution_id)
     if job:
         res = job.get("results") or job.get("result")
-        node_outs = getattr(res, "node_outputs", {}) if not isinstance(res, dict) else res.get("node_outputs", {})
-        df = _extract_df(node_outs)
-        if df is not None:
-            return df
+        if res:
+            node_outs = getattr(res, "node_outputs", {}) if not isinstance(res, dict) else res.get("node_outputs", {})
+            df = _extract_df(node_outs)
+            if df is not None:
+                return df
+            snaps = getattr(res, "step_snapshots", {}) if not isinstance(res, dict) else res.get("step_snapshots", {})
+            df_snap = _extract_from_snapshots(snaps)
+            if df_snap is not None:
+                return df_snap
 
-    ex_res = await db.execute(select(WorkflowExecution).where(WorkflowExecution.id == execution_id))
-    ex_row = ex_res.scalar_one_or_none()
-    if ex_row:
-        from backend.app.engine.dag.graph import WorkflowGraph, WorkflowNode, WorkflowEdge
-        nodes = []
-        saved_configs = ex_row.snapshot_node_configs or {}
-        for nd in ex_row.snapshot_nodes or []:
-            nid = nd["id"]
-            n_cfg = saved_configs.get(nid, {})
-            recipe_id = nd.get("recipe_id") or n_cfg.get("recipe_id", "csv_loader")
-            config = nd.get("config") or n_cfg.get("config", {})
-            label = nd.get("label") or nd.get("content") or n_cfg.get("label", nid)
-            nodes.append(WorkflowNode(id=nid, recipe_id=recipe_id, config=config, label=label))
-        edges = [
-            WorkflowEdge(source=ed["source"], target=ed["target"], target_handle=ed.get("target_handle") or ed.get("targetHandle"))
-            for ed in ex_row.snapshot_edges or []
-        ]
-        graph = WorkflowGraph(nodes=nodes, edges=edges)
-        exec_res = DAGExecutor.execute_workflow(
-            execution_id=str(uuid.uuid4()),
-            workflow=graph,
-            include_node_outputs=True
-        )
-        node_outs = exec_res.node_outputs or {}
-        df = _extract_df(node_outs)
-        if df is not None:
+    # 3. Parquet files on disk (check active tenant folder, cross-tenant fallbacks, and test_sessions)
+    candidates = [
+        f"{tenant_cache_dir()}/executions/{execution_id}/{node_id}.parquet",
+        f"t_none/executions/{execution_id}/{node_id}.parquet",
+        f"executions/{execution_id}/{node_id}.parquet",
+        f"{tenant_cache_dir()}/executions/{execution_id}/artifacts/{node_id}/dataframe.parquet",
+        f"t_none/executions/{execution_id}/artifacts/{node_id}/dataframe.parquet",
+        f"{tenant_cache_dir()}/test_sessions/{execution_id}/node_{node_id}_df.parquet",
+        f"t_none/test_sessions/{execution_id}/node_{node_id}_df.parquet",
+        f"test_sessions/{execution_id}/node_{node_id}_df.parquet",
+    ]
+    for p_rel in candidates:
+        p_abs = storage_manager.get_absolute_path(p_rel)
+        if p_abs.exists():
             try:
-                p_abs.parent.mkdir(parents=True, exist_ok=True)
-                df.to_parquet(p_abs, index=False)
+                return pd.read_parquet(p_abs)
             except Exception:
                 pass
-            return df
 
-    # Check if execution_id is a test session_id from NodeStepExecutor
+    # 4. Check NodeStepExecutor session metadata & outputs
     try:
         from backend.app.engine.execution.step_executor import NodeStepExecutor
+        meta = NodeStepExecutor.load_node_meta(session_id=execution_id, node_id=node_id)
+        if meta and meta.get("preview_rows"):
+            rows = meta["preview_rows"]
+            if isinstance(rows, list) and len(rows) > 0:
+                try:
+                    df = pd.DataFrame(rows)
+                    cols = meta.get("columns")
+                    if cols and isinstance(cols, list) and all(c in df.columns for c in cols):
+                        df = df[cols]
+                    return df
+                except Exception:
+                    pass
         sess_outs = NodeStepExecutor.load_node_output(session_id=execution_id, node_id=node_id)
         df_sess = _extract_df(sess_outs) or sess_outs.get("dataframe")
         if isinstance(df_sess, pd.DataFrame):
             return df_sess
     except Exception:
         pass
+
+    # 5. Database WorkflowExecution records (check stored step_snapshots & replay if needed)
+    if db is not None:
+        try:
+            ex_res = await db.execute(select(WorkflowExecution).where(WorkflowExecution.id == execution_id))
+            ex_row = ex_res.scalar_one_or_none()
+            if ex_row:
+                if ex_row.step_snapshots and isinstance(ex_row.step_snapshots, dict):
+                    df_snap = _extract_from_snapshots(ex_row.step_snapshots)
+                    if df_snap is not None:
+                        return df_snap
+                if ex_row.reports and isinstance(ex_row.reports, dict):
+                    df_snap = _extract_from_snapshots(ex_row.reports.get("step_snapshots", {}))
+                    if df_snap is not None:
+                        return df_snap
+
+                from backend.app.engine.dag.graph import WorkflowGraph, WorkflowNode, WorkflowEdge
+                nodes = []
+                saved_configs = ex_row.snapshot_node_configs or {}
+                for nd in ex_row.snapshot_nodes or []:
+                    nid = nd["id"]
+                    n_cfg = saved_configs.get(nid, {})
+                    recipe_id = nd.get("recipe_id") or n_cfg.get("recipe_id", "csv_loader")
+                    config = nd.get("config") or n_cfg.get("config", {})
+                    label = nd.get("label") or nd.get("content") or n_cfg.get("label", nid)
+                    nodes.append(WorkflowNode(id=nid, recipe_id=recipe_id, config=config, label=label))
+                edges = [
+                    WorkflowEdge(source=ed["source"], target=ed["target"], target_handle=ed.get("target_handle") or ed.get("targetHandle"))
+                    for ed in ex_row.snapshot_edges or []
+                ]
+                graph = WorkflowGraph(nodes=nodes, edges=edges)
+                exec_res = DAGExecutor.execute_workflow(
+                    execution_id=str(uuid.uuid4()),
+                    workflow=graph,
+                    include_node_outputs=True
+                )
+                node_outs = exec_res.node_outputs or {}
+                df = _extract_df(node_outs)
+                if df is not None:
+                    try:
+                        p_primary = storage_manager.get_absolute_path(f"{tenant_cache_dir()}/executions/{execution_id}/{node_id}.parquet")
+                        storage_manager.safe_to_parquet(df, p_primary)
+                    except Exception:
+                        pass
+                    return df
+        except Exception as e:
+            logger.debug(f"Error checking DB for execution dataframe: {e}")
+
+        # Also check Workflow.last_execution if workflow was saved
+        try:
+            wf_res = await db.execute(select(Workflow).where(Workflow.last_execution.is_not(None)))
+            wfs = wf_res.scalars().all()
+            for wf in wfs:
+                le = wf.last_execution
+                if isinstance(le, dict) and le.get("execution_id") == execution_id:
+                    snaps = le.get("step_snapshots")
+                    df_snap = _extract_from_snapshots(snaps)
+                    if df_snap is not None:
+                        return df_snap
+        except Exception:
+            pass
 
     return None
 
@@ -2472,6 +2576,63 @@ async def get_test_step_table_preview(
             if isinstance(v, pd.DataFrame):
                 df = v
                 break
+
+    has_mock_data = (
+        isinstance(df, pd.DataFrame)
+        and ("_email_source" in df.columns or ("status" in df.columns and (df["status"] == "SIMULATED").any()))
+    )
+
+    # If the draft session contains mock/simulated data or no data, check for a fresh real workflow execution
+    if df is None or not isinstance(df, pd.DataFrame) or has_mock_data:
+        try:
+            from backend.app.core.tenant_context import tenant_cache_dir
+            from backend.app.infrastructure.storage.storage_manager import storage_manager
+            for rec_id, rec_res in reversed(list(_RECENT_EXECUTION_RESULTS.items())):
+                snaps = getattr(rec_res, "step_snapshots", {}) if not isinstance(rec_res, dict) else rec_res.get("step_snapshots", {})
+                if node_id in snaps:
+                    rec_df = None
+                    for subpath in [
+                        f"{tenant_cache_dir()}/executions/{rec_id}/{node_id}.parquet",
+                        f"t_none/executions/{rec_id}/{node_id}.parquet",
+                        f"executions/{rec_id}/{node_id}.parquet",
+                        f"{tenant_cache_dir()}/test_sessions/{rec_id}/node_{node_id}_df.parquet",
+                        f"t_none/test_sessions/{rec_id}/node_{node_id}_df.parquet",
+                    ]:
+                        p_abs = storage_manager.get_absolute_path(subpath)
+                        if p_abs.exists():
+                            try:
+                                rec_df = pd.read_parquet(p_abs)
+                                break
+                            except Exception:
+                                pass
+                    if rec_df is None:
+                        node_outs = getattr(rec_res, "node_outputs", {}) if not isinstance(rec_res, dict) else rec_res.get("node_outputs", {})
+                        target_out = node_outs.get(node_id) if isinstance(node_outs, dict) else None
+                        if isinstance(target_out, dict) and isinstance(target_out.get("dataframe"), pd.DataFrame):
+                            rec_df = target_out["dataframe"]
+                    if rec_df is None:
+                        snap = snaps[node_id]
+                        if snap and isinstance(snap, dict) and snap.get("preview_rows"):
+                            rec_df = pd.DataFrame(snap["preview_rows"])
+                            cols = snap.get("columns")
+                            if cols and isinstance(cols, list) and all(c in rec_df.columns for c in cols):
+                                rec_df = rec_df[cols]
+
+                    if rec_df is not None:
+                        df = rec_df
+                        if session_id.startswith("draft_"):
+                            try:
+                                NodeStepExecutor.save_node_output(
+                                    session_id=session_id,
+                                    node_id=node_id,
+                                    recipe_id="",
+                                    outputs={"dataframe": df}
+                                )
+                            except Exception:
+                                pass
+                        break
+        except Exception as ex:
+            logger.debug(f"Could not load recent execution for preview: {ex}")
 
     # Graceful fallback for full workflow execution runs (parquet caches)
     if df is None or not isinstance(df, pd.DataFrame):

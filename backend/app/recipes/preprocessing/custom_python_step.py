@@ -6,6 +6,10 @@ import json
 import re
 import random
 import datetime
+import subprocess
+import importlib
+import importlib.util
+from pathlib import Path
 from contextlib import redirect_stdout
 from typing import Dict, Any, List, Optional
 import pandas as pd
@@ -17,17 +21,30 @@ from backend.app.core.logging import logger
 
 FORBIDDEN_MODULES = {"subprocess", "shutil", "socket", "http", "urllib", "requests", "ctypes", "multiprocessing", "threading"}
 FORBIDDEN_CALLS = {"exit", "quit", "breakpoint"}
+PACKAGE_NAME_REGEX = re.compile(r"^[a-zA-Z0-9_\-\.<=>~!+]+$")
+
+
+def _create_safe_import():
+    import builtins
+
+    def safe_import(name, globals=None, locals=None, fromlist=(), level=0):
+        root_pkg = name.split(".")[0]
+        if root_pkg in FORBIDDEN_MODULES:
+            raise ImportError(f"Importing module '{root_pkg}' is restricted for security.")
+        return builtins.__import__(name, globals, locals, fromlist, level)
+
+    return safe_import
 
 
 class CustomPythonStepRecipe(BaseRecipe):
     recipe_id = "custom_python_step"
     name = "Custom Python Step"
-    version = "1.0.0"
+    version = "1.1.0"
     category = "preprocessing"
     description = (
         "Runs user-written Python code to transform or generate dataframes, "
         "with n8n-style items/records and pandas DataFrame support, built-in standard libraries, "
-        "and live console log capture."
+        "package management (internet PyPI or local wheels), and live console log capture."
     )
     input_types = ["dataframe"]
     output_types = ["dataframe"]
@@ -36,6 +53,28 @@ class CustomPythonStepRecipe(BaseRecipe):
         return {
             "type": "object",
             "properties": {
+                "packages": {
+                    "type": "string",
+                    "title": "Additional Python Packages",
+                    "default": "",
+                    "description": (
+                        "Comma-separated list of extra Python packages to install/import (e.g. 'scipy, faker, polars'). "
+                        "Pre-bundled libraries (pandas, numpy, math, json, re, random, datetime) do not need to be listed."
+                    )
+                },
+                "install_source": {
+                    "type": "string",
+                    "title": "Package Installation Source",
+                    "enum": ["internet", "local"],
+                    "default": "internet",
+                    "description": "Choose 'internet' to install packages from PyPI or 'local' to install from offline wheel files."
+                },
+                "local_wheels_dir": {
+                    "type": "string",
+                    "title": "Local Wheels Directory (for offline install)",
+                    "default": "./data/packages",
+                    "description": "Path to local directory containing .whl or source archive files when install_source is 'local'."
+                },
                 "code": {
                     "type": "textarea",
                     "title": "Python Code",
@@ -75,11 +114,80 @@ class CustomPythonStepRecipe(BaseRecipe):
                     "code": "for item in items:\n    item['is_valid'] = True\nreturn items\n"
                 },
                 {
+                    "label": "Use Scipy / External Library",
+                    "code": "import scipy.stats as stats\ndf['z_score'] = stats.zscore(df.select_dtypes(include='number').iloc[:, 0])\n"
+                },
+                {
                     "label": "Create New Output DataFrame",
                     "code": "output_df = pd.DataFrame({'metric': ['A', 'B', 'C'], 'value': [100, 250, 400]})\n"
                 }
             ]
         }
+
+    def _parse_packages(self, val: Any) -> List[str]:
+        if not val:
+            return []
+        if isinstance(val, str):
+            return [p.strip() for p in val.split(",") if p.strip()]
+        if isinstance(val, (list, tuple)):
+            res = []
+            for item in val:
+                if item and str(item).strip():
+                    parts = str(item).split(",")
+                    res.extend([p.strip() for p in parts if p.strip()])
+            return res
+        return []
+
+    def _ensure_packages_installed(
+        self,
+        packages: List[str],
+        install_source: str = "internet",
+        local_wheels_dir: Optional[str] = None
+    ) -> List[str]:
+        """Installs requested packages via pip from PyPI or local wheels directory if not already available."""
+        installed_now: List[str] = []
+        install_source = (install_source or "internet").lower().strip()
+
+        for pkg in packages:
+            clean_name = re.split(r"[><=~!+]", pkg.strip())[0].strip().replace("-", "_")
+            if not clean_name:
+                continue
+
+            # Check if module is already present in python environment
+            if importlib.util.find_spec(clean_name) is not None:
+                continue
+
+            logger.info(f"CustomPythonStep: Installing package '{pkg}' via '{install_source}'...")
+            cmd = [sys.executable, "-m", "pip", "install", "--no-warn-script-location"]
+
+            if install_source == "local":
+                wheels_path = Path(local_wheels_dir or "./data/packages").resolve()
+                if not wheels_path.exists():
+                    raise FileNotFoundError(
+                        f"Local wheels directory '{wheels_path}' does not exist. "
+                        "Please place your offline .whl files in that directory."
+                    )
+                cmd.extend(["--no-index", f"--find-links={wheels_path}"])
+
+            cmd.append(pkg.strip())
+
+            try:
+                subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=180,
+                    check=True
+                )
+                importlib.invalidate_caches()
+                installed_now.append(pkg.strip())
+            except subprocess.CalledProcessError as e:
+                err_msg = (e.stderr or e.stdout or str(e)).strip()
+                raise RuntimeError(f"Failed to install package '{pkg}' via {install_source}: {err_msg}")
+            except subprocess.TimeoutExpired:
+                raise TimeoutError(f"Timed out installing package '{pkg}' via {install_source} after 180s.")
+
+        return installed_now
 
     def validate_config(self, config: Dict[str, Any]) -> List[str]:
         errors = []
@@ -87,6 +195,12 @@ class CustomPythonStepRecipe(BaseRecipe):
         if not code:
             errors.append("Python code cannot be empty.")
             return errors
+
+        # Validate package names
+        pkgs = self._parse_packages(config.get("packages"))
+        for p in pkgs:
+            if not PACKAGE_NAME_REGEX.match(p):
+                errors.append(f"Invalid package specification '{p}'. Must contain only valid package name characters.")
 
         # Syntax check via AST
         try:
@@ -127,7 +241,6 @@ class CustomPythonStepRecipe(BaseRecipe):
                 return pd.DataFrame(val)
             return pd.DataFrame({"value": val})
         if isinstance(val, dict):
-            # Check if dict of lists / scalars
             try:
                 return pd.DataFrame(val)
             except Exception:
@@ -149,12 +262,21 @@ class CustomPythonStepRecipe(BaseRecipe):
         except SyntaxError as e:
             raise ValueError(f"Python code syntax error at line {e.lineno}: {e.msg}")
 
-        # Setup runtime execution scope
+        # Install requested packages if needed
+        pkgs = self._parse_packages(config.get("packages"))
+        install_src = config.get("install_source", "internet")
+        wheels_dir = config.get("local_wheels_dir", "./data/packages")
+        installed_packages = []
+        if pkgs:
+            installed_packages = self._ensure_packages_installed(pkgs, install_src, wheels_dir)
+
+        # Setup runtime execution scope with Safe Import Hook
         df_input_copy = df.copy()
         items_list = df.to_dict(orient="records")
 
         stdout_buf = io.StringIO()
         result_df: Optional[pd.DataFrame] = None
+        safe_import = _create_safe_import()
 
         safe_globals = {
             "__builtins__": {
@@ -162,14 +284,16 @@ class CustomPythonStepRecipe(BaseRecipe):
                 "callable": callable, "chr": chr, "complex": complex, "dict": dict, "dir": dir,
                 "divmod": divmod, "enumerate": enumerate, "filter": filter, "float": float,
                 "format": format, "frozenset": frozenset, "getattr": getattr, "hasattr": hasattr,
-                "hash": hash, "hex": hex, "id": id, "int": int, "isinstance": isinstance,
-                "issubclass": issubclass, "iter": iter, "len": len, "list": list, "map": map,
-                "max": max, "min": min, "next": next, "oct": oct, "ord": ord, "pow": pow,
-                "print": print, "range": range, "repr": repr, "reversed": reversed, "round": round,
-                "set": set, "slice": slice, "sorted": sorted, "str": str, "sum": sum,
-                "tuple": tuple, "type": type, "zip": zip,
+                "setattr": setattr, "delattr": delattr, "hash": hash, "hex": hex, "id": id,
+                "int": int, "isinstance": isinstance, "issubclass": issubclass, "iter": iter,
+                "len": len, "list": list, "map": map, "max": max, "min": min, "next": next,
+                "oct": oct, "ord": ord, "pow": pow, "print": print, "range": range, "repr": repr,
+                "reversed": reversed, "round": round, "set": set, "slice": slice, "sorted": sorted,
+                "str": str, "sum": sum, "tuple": tuple, "type": type, "zip": zip,
                 "Exception": Exception, "ValueError": ValueError, "TypeError": TypeError,
-                "KeyError": KeyError, "IndexError": IndexError
+                "KeyError": KeyError, "IndexError": IndexError, "AttributeError": AttributeError,
+                "ImportError": ImportError, "RuntimeError": RuntimeError, "ZeroDivisionError": ZeroDivisionError,
+                "StopIteration": StopIteration, "__import__": safe_import
             },
             "pd": pd,
             "pandas": pd,
@@ -234,7 +358,6 @@ class CustomPythonStepRecipe(BaseRecipe):
                         result_df = df_input_copy
 
             except Exception as e:
-                # Capture clean line error
                 exc_type, exc_value, exc_tb = sys.exc_info()
                 tb_lines = []
                 while exc_tb:
@@ -248,7 +371,6 @@ class CustomPythonStepRecipe(BaseRecipe):
 
         # Sanitize output DataFrame
         result_df = result_df.reset_index(drop=True)
-        # Convert non-string column names to clean strings
         result_df.columns = [str(c) for c in result_df.columns]
 
         return {
@@ -257,18 +379,23 @@ class CustomPythonStepRecipe(BaseRecipe):
             "output_summary": {
                 "row_count": len(result_df),
                 "columns": list(result_df.columns),
+                "installed_packages": installed_packages,
                 "console_output": console_output.strip() if console_output else None
             },
             "metrics": {
                 "row_count": len(result_df),
                 "column_count": len(result_df.columns),
+                "installed_packages_count": len(installed_packages),
                 "console_output": console_output.strip() if console_output else None
             }
         }
 
     def to_code(self, config: Dict[str, Any]) -> str:
         code = config.get("code", "df['processed'] = True").strip()
+        pkgs = self._parse_packages(config.get("packages"))
+        pkg_comment = f"# Required packages: {', '.join(pkgs)}\n" if pkgs else ""
         return (
             "# Custom Python Step\n"
+            f"{pkg_comment}"
             f"{code}\n"
         )

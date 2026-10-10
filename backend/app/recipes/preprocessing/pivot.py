@@ -39,19 +39,70 @@ class PivotRecipe(BaseRecipe):
                     "description": "pivot (long-to-wide) or unpivot (wide-to-long/melt)."
                 },
                 "index": {
-                    "type": "column",
+                    "type": "string",
                     "title": "Row Identifiers Column(s)",
-                    "description": "Column(s) to retain as row identifier keys."
+                    "format": "column",
+                    "ui:widget": "column_select",
+                    "description": "Column(s) to retain as row identifier keys.",
+                    "oneOf": [
+                        {
+                            "type": "string",
+                            "title": "Single Column",
+                            "format": "column"
+                        },
+                        {
+                            "type": "array",
+                            "title": "Multiple Columns",
+                            "items": {
+                                "type": "string",
+                                "format": "column"
+                            }
+                        }
+                    ]
                 },
                 "columns": {
-                    "type": "column",
+                    "type": "string",
                     "title": "Pivot Column(s)",
-                    "description": "Column whose unique values become the new wide column headers (pivot mode only)."
+                    "format": "column",
+                    "ui:widget": "column_select",
+                    "description": "Column whose unique values become the new wide column headers (pivot mode only).",
+                    "oneOf": [
+                        {
+                            "type": "string",
+                            "title": "Single Column",
+                            "format": "column"
+                        },
+                        {
+                            "type": "array",
+                            "title": "Multiple Columns",
+                            "items": {
+                                "type": "string",
+                                "format": "column"
+                            }
+                        }
+                    ]
                 },
                 "values": {
-                    "type": "column",
+                    "type": "string",
                     "title": "Value Column(s)",
-                    "description": "Column(s) containing values to aggregate in cells (pivot) or unpivot into values (unpivot)."
+                    "format": "column",
+                    "ui:widget": "column_select",
+                    "description": "Column(s) containing values to aggregate in pivot mode or unpivot into values.",
+                    "oneOf": [
+                        {
+                            "type": "string",
+                            "title": "Single Column",
+                            "format": "column"
+                        },
+                        {
+                            "type": "array",
+                            "title": "Multiple Columns",
+                            "items": {
+                                "type": "string",
+                                "format": "column"
+                            }
+                        }
+                    ]
                 },
                 "agg_func": {
                     "type": "select",
