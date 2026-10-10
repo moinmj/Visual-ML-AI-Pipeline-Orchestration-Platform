@@ -65,7 +65,8 @@ def save_node_artifacts(execution_id: str, node_id: str, outputs: Dict[str, Any]
                 if len(value.columns) == 0:
                     continue
                 folder.mkdir(parents=True, exist_ok=True)
-                value.to_parquet(folder / f"{name}{_TABLE}", index=False)
+                from backend.app.infrastructure.storage.storage_manager import storage_manager
+                storage_manager.safe_to_parquet(value, folder / f"{name}{_TABLE}")
             elif _looks_like_model(value):
                 folder.mkdir(parents=True, exist_ok=True)
                 joblib.dump(value, folder / f"{name}{_MODEL}")

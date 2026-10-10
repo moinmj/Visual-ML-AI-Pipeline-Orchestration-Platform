@@ -42,6 +42,34 @@ class StorageManager:
         """
         return self.base_dir / relative_path
 
+    @staticmethod
+    def safe_to_parquet(df: pd.DataFrame, dest_path: Union[Path, str]) -> bool:
+        """
+        Safely writes a DataFrame to a local Parquet file.
+        If PyArrow raises ArrowInvalid or ArrowTypeError (e.g. mixed struct/dict and scalar values),
+        it automatically serializes complex/mixed object columns into clean JSON strings
+        so the Parquet table can be reliably saved without errors.
+        """
+        p = Path(dest_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            df.to_parquet(p, index=False)
+            return True
+        except Exception:
+            try:
+                import json
+                df_copy = df.copy()
+                for col in df_copy.columns:
+                    if df_copy[col].dtype == "object":
+                        df_copy[col] = df_copy[col].apply(
+                            lambda x: json.dumps(x, default=str) if isinstance(x, (dict, list)) else (str(x) if (x is not None and not pd.isna(x)) else None)
+                        )
+                df_copy.to_parquet(p, index=False)
+                return True
+            except Exception as e:
+                logger.warning(f"safe_to_parquet failed writing to {p}: {e}")
+                return False
+
     def read_dataframe(self, relative_path: str, tenant_id: Optional[int] = None) -> pd.DataFrame:
         """
         Reads tabular data from storage into a Pandas DataFrame based on file extension.
