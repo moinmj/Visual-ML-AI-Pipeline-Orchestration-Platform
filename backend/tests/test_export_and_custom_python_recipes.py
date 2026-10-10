@@ -227,3 +227,34 @@ async def test_autowire_data_ingestion_custom_python_and_export_writer():
     assert e2["source"] == "processor_custom_python_step_1"
     assert e2["target"] == "processor_export_writer_1"
 
+
+def test_custom_python_step_packages_and_safe_imports():
+    """Verify safe import hook and package configuration."""
+    recipe = CustomPythonStepRecipe()
+    df = pd.DataFrame({"val": [16, 25, 36]})
+
+    # 1. Importing math and scipy via safe import
+    code = """
+import math
+import scipy
+df['root'] = df['val'].apply(math.sqrt)
+"""
+    res = recipe.execute({"dataframe": df}, {"code": code, "packages": "scipy"})
+    out_df = res["dataframe"]
+    assert "root" in out_df.columns
+    assert list(out_df["root"]) == [4.0, 5.0, 6.0]
+
+    # 2. Package parsing & validation
+    assert recipe._parse_packages("scipy, faker, polars") == ["scipy", "faker", "polars"]
+    assert recipe._parse_packages(["scipy", "numpy"]) == ["scipy", "numpy"]
+    errs = recipe.validate_config({"code": "df['x'] = 1", "packages": "scipy; rm -rf /"})
+    assert any("Invalid package specification" in e for e in errs)
+
+    # 3. Security: forbidden modules are blocked at AST validation and runtime
+    errs_ast = recipe.validate_config({"code": "import subprocess"})
+    assert any("subprocess" in e for e in errs_ast)
+
+    with pytest.raises(Exception):
+        recipe.execute({"dataframe": df}, {"code": "import socket"})
+
+
