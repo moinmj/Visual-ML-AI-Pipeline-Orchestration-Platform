@@ -248,11 +248,20 @@ class WorkflowCronScheduler:
         for node in raw_nodes:
             if not isinstance(node, dict):
                 continue
-            recipe_id = node.get("recipe_id") or (saved_configs.get(node.get("id"), {}) if isinstance(saved_configs, dict) else {}).get("recipe_id")
+            node_id = node.get("id")
+            node_saved = saved_configs.get(node_id, {}) if isinstance(saved_configs, dict) else {}
+            recipe_id = node.get("recipe_id") or node_saved.get("recipe_id")
             if recipe_id == "cron_trigger":
-                node_id = node.get("id")
-                node_saved = saved_configs.get(node_id, {}) if isinstance(saved_configs, dict) else {}
-                cfg = dict(node.get("config") or node_saved.get("config") or {})
+                # Extract config: support nested {"config": {...}} or flat {...} dictionary
+                cfg = {}
+                if isinstance(node.get("config"), dict) and node["config"]:
+                    cfg = dict(node["config"])
+                elif isinstance(node_saved.get("config"), dict) and node_saved["config"]:
+                    cfg = dict(node_saved["config"])
+                elif isinstance(node_saved, dict) and any(k in node_saved for k in ["cron_expression", "interval_preset", "timezone"]):
+                    cfg = dict(node_saved)
+                elif isinstance(node, dict) and any(k in node for k in ["cron_expression", "interval_preset", "timezone"]):
+                    cfg = dict(node)
 
                 preset = cfg.get("interval_preset", "")
                 expr = cfg.get("cron_expression", "").strip()

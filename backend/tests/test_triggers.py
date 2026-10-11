@@ -97,8 +97,33 @@ async def test_scheduler_force_tick_and_resilience():
         nodes=json.dumps([{"id": "c2", "recipe_id": "cron_trigger"}]),
         node_configs=json.dumps({"c2": {"recipe_id": "cron_trigger", "config": {"cron_expression": "*/15 * * * *"}}})
     )
-    cfg_str = workflow_scheduler._extract_cron_config(wf_str)
-    assert cfg_str is not None
-    assert cfg_str["cron_expression"] == "*/15 * * * *"
+    # Test _extract_cron_config with flat node_configs (Format A from canvas)
+    wf_flat = Workflow(
+        id="test_wf_cron_flat",
+        name="Cron Flat Config Test",
+        is_active=True,
+        nodes=[{"id": "processor_cron_trigger_3", "recipe_id": "cron_trigger"}],
+        node_configs={
+            "processor_cron_trigger_3": {
+                "cron_expression": "*/15 * * * *",
+                "interval_preset": "Every 15 Minutes",
+                "timezone": "Asia/Kolkata"
+            }
+        }
+    )
+    cfg_flat = workflow_scheduler._extract_cron_config(wf_flat)
+    assert cfg_flat is not None
+    assert cfg_flat["cron_expression"] == "*/15 * * * *"
+    assert cfg_flat["interval_preset"] == "Every 15 Minutes"
+    assert cfg_flat["timezone"] == "Asia/Kolkata"
+
+    # Test db_workflow_to_graph with flat node_configs
+    from backend.app.workflows.router import db_workflow_to_graph
+    graph = db_workflow_to_graph(wf_flat)
+    node_graph = next((n for n in graph.nodes if n.id == "processor_cron_trigger_3"), None)
+    assert node_graph is not None
+    assert node_graph.config["cron_expression"] == "*/15 * * * *"
+    assert node_graph.config["timezone"] == "Asia/Kolkata"
+
 
 
