@@ -3475,3 +3475,27 @@ async def export_combined_dataset_csv(
             "Content-Disposition": f"attachment; filename=combined_dataset_{execution_id}.csv"
         }
     )
+
+
+@router.get("/scheduler/status")
+async def get_cron_scheduler_status():
+    """Returns the live status of the background workflow cron scheduler."""
+    from backend.app.workflows.scheduler import workflow_scheduler
+    return {
+        "running": workflow_scheduler._running,
+        "check_interval_seconds": workflow_scheduler.check_interval_seconds,
+        "recent_triggered_count": len(workflow_scheduler._last_triggered),
+        "recent_triggered": workflow_scheduler._last_triggered
+    }
+
+
+@router.post("/scheduler/tick")
+async def trigger_cron_scheduler_tick():
+    """Manually triggers a schedule evaluation tick (for testing and manual triggering)."""
+    from backend.app.workflows.scheduler import workflow_scheduler
+    triggered = await workflow_scheduler.tick()
+    return {
+        "status": "COMPLETED",
+        "triggered_count": len(triggered),
+        "triggered_workflow_ids": triggered
+    }
