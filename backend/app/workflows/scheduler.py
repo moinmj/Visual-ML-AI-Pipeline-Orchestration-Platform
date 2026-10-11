@@ -24,6 +24,69 @@ CRON_PRESETS = {
 }
 
 
+def resolve_timezone(tz_name: Optional[str]) -> ZoneInfo:
+    """Robust, case-insensitive IANA timezone resolver with regional aliases."""
+    if not tz_name or not str(tz_name).strip():
+        try:
+            local_tz = datetime.datetime.now().astimezone().tzinfo
+            if isinstance(local_tz, ZoneInfo):
+                return local_tz
+        except Exception:
+            pass
+        return ZoneInfo("UTC")
+
+    clean = str(tz_name).strip()
+    try:
+        return ZoneInfo(clean)
+    except Exception:
+        pass
+
+    clean_lower = clean.lower()
+    aliases = {
+        "asia": "Asia/Kolkata",
+        "india": "Asia/Kolkata",
+        "ist": "Asia/Kolkata",
+        "calcutta": "Asia/Kolkata",
+        "kolkata": "Asia/Kolkata",
+        "pakistan": "Asia/Karachi",
+        "karachi": "Asia/Karachi",
+        "pkt": "Asia/Karachi",
+        "dubai": "Asia/Dubai",
+        "uae": "Asia/Dubai",
+        "singapore": "Asia/Singapore",
+        "tokyo": "Asia/Tokyo",
+        "japan": "Asia/Tokyo",
+        "london": "Europe/London",
+        "gmt": "Etc/GMT",
+        "utc": "UTC",
+        "est": "America/New_York",
+        "pst": "America/Los_Angeles",
+        "cst": "America/Chicago",
+    }
+    if clean_lower in aliases:
+        try:
+            return ZoneInfo(aliases[clean_lower])
+        except Exception:
+            pass
+
+    try:
+        import zoneinfo as zi
+        tz_map = {z.lower(): z for z in zi.available_timezones()}
+        if clean_lower in tz_map:
+            return ZoneInfo(tz_map[clean_lower])
+        for k, v in tz_map.items():
+            if k.startswith(clean_lower):
+                return ZoneInfo(v)
+    except Exception:
+        pass
+
+    try:
+        return ZoneInfo("Asia/Kolkata") if "asia" in clean_lower else ZoneInfo("UTC")
+    except Exception:
+        return ZoneInfo("UTC")
+
+
+
 def match_cron_field(field_spec: str, val: int, min_val: int = 0, max_val: int = 59) -> bool:
     """Matches a single cron expression field against an integer value."""
     field_spec = field_spec.strip()
@@ -140,10 +203,7 @@ class WorkflowCronScheduler:
 
                 cron_expr = cron_cfg["cron_expression"]
                 tz_name = cron_cfg.get("timezone", "UTC")
-                try:
-                    tz = ZoneInfo(tz_name)
-                except Exception:
-                    tz = ZoneInfo("UTC")
+                tz = resolve_timezone(tz_name)
 
                 now_tz = datetime.datetime.now(tz)
                 minute_key = now_tz.strftime("%Y-%m-%d %H:%M")
