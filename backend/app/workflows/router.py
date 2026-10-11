@@ -3490,12 +3490,54 @@ async def get_cron_scheduler_status():
 
 
 @router.post("/scheduler/tick")
-async def trigger_cron_scheduler_tick():
+async def trigger_cron_scheduler_tick(
+    force: bool = Query(False, description="Force execution immediately regardless of clock minute"),
+    workflow_id: Optional[str] = Query(None, description="Optional target workflow ID to evaluate or trigger")
+):
     """Manually triggers a schedule evaluation tick (for testing and manual triggering)."""
     from backend.app.workflows.scheduler import workflow_scheduler
-    triggered = await workflow_scheduler.tick()
+    triggered = await workflow_scheduler.tick(force=force, target_workflow_id=workflow_id)
     return {
         "status": "COMPLETED",
+        "force": force,
+        "target_workflow_id": workflow_id,
         "triggered_count": len(triggered),
         "triggered_workflow_ids": triggered
+    }
+
+
+@router.post("/{workflow_id}/trigger-cron")
+async def trigger_workflow_cron_immediately(
+    workflow_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Manually triggers the cron schedule node of a specific workflow workbook immediately,
+    bypassing clock minute matching.
+    """
+    from backend.app.workflows.scheduler import workflow_scheduler
+    res = await db.execute(select(Workflow).where(Workflow.id == workflow_id))
+    wf = res.scalar_one_or_none()
+    if not wf:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Workflow workbook '{workflow_id}' not found."
+        )
+
+    cron_cfg = workflow_scheduler._extract_cron_config(wf)
+    if not cron_cfg:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Workflow '{workflow_id}' does not have an active 'cron_trigger' node configured."
+        )
+
+    triggered = await workflow_scheduler.tick(force=True, target_workflow_id=workflow_id)
+    return {
+        "status": "TRIGGERED",
+        "workflow_id": workflow_id,
+        "workflow_name": wf.name,
+        "cron_expression": cron_cfg["cron_expression"],
+        "interval_preset": cron_cfg.get("interval_preset"),
+        "timezone": cron_cfg.get("timezone", "UTC"),
+        "message": f"Pipeline '{wf.name}' ({workflow_id}) scheduled execution started successfully."
     }

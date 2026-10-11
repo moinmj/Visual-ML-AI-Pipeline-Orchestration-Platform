@@ -114,15 +114,22 @@ class WorkflowCronScheduler:
                 logger.error(f"WorkflowCronScheduler: Error during schedule tick: {e}", exc_info=True)
             await asyncio.sleep(self.check_interval_seconds)
 
-    async def tick(self) -> List[str]:
+    async def tick(self, force: bool = False, target_workflow_id: Optional[str] = None) -> List[str]:
         """Runs a single schedule check cycle. Returns list of triggered workflow IDs."""
         triggered_ids: List[str] = []
         async with AsyncSessionLocal() as db:
-            stmt = (
-                select(Workflow)
-                .where(Workflow.is_active == True, Workflow.deleted_at.is_(None))
-                .execution_options(skip_tenant_filter=True)
-            )
+            if target_workflow_id:
+                stmt = (
+                    select(Workflow)
+                    .where(Workflow.id == target_workflow_id, Workflow.deleted_at.is_(None))
+                    .execution_options(skip_tenant_filter=True)
+                )
+            else:
+                stmt = (
+                    select(Workflow)
+                    .where(Workflow.is_active == True, Workflow.deleted_at.is_(None))
+                    .execution_options(skip_tenant_filter=True)
+                )
             result = await db.execute(stmt)
             workflows = result.scalars().all()
 
@@ -141,12 +148,13 @@ class WorkflowCronScheduler:
                 now_tz = datetime.datetime.now(tz)
                 minute_key = now_tz.strftime("%Y-%m-%d %H:%M")
 
-                if is_cron_due(cron_expr, now_tz):
-                    if self._last_triggered.get(wf.id) != minute_key:
+                is_due = force or is_cron_due(cron_expr, now_tz)
+                if is_due:
+                    if force or self._last_triggered.get(wf.id) != minute_key:
                         self._last_triggered[wf.id] = minute_key
                         logger.info(
                             f"WorkflowCronScheduler: Firing scheduled pipeline '{wf.name}' ({wf.id}) "
-                            f"on schedule '{cron_expr}' ({tz_name})."
+                            f"on schedule '{cron_expr}' ({tz_name}) [force={force}]."
                         )
                         asyncio.create_task(self._execute_scheduled_workflow(wf.id, wf.tenant_id, cron_expr))
                         triggered_ids.append(wf.id)
@@ -162,12 +170,29 @@ class WorkflowCronScheduler:
 
     def _extract_cron_config(self, wf: Workflow) -> Optional[Dict[str, Any]]:
         """Finds any active cron_trigger node in the workflow and returns its resolved schedule."""
+        import json
         saved_configs = wf.node_configs or {}
-        for node in wf.nodes or []:
-            recipe_id = node.get("recipe_id") or saved_configs.get(node.get("id"), {}).get("recipe_id")
+        if isinstance(saved_configs, str):
+            try:
+                saved_configs = json.loads(saved_configs)
+            except Exception:
+                saved_configs = {}
+
+        raw_nodes = wf.nodes or []
+        if isinstance(raw_nodes, str):
+            try:
+                raw_nodes = json.loads(raw_nodes)
+            except Exception:
+                raw_nodes = []
+
+        for node in raw_nodes:
+            if not isinstance(node, dict):
+                continue
+            recipe_id = node.get("recipe_id") or (saved_configs.get(node.get("id"), {}) if isinstance(saved_configs, dict) else {}).get("recipe_id")
             if recipe_id == "cron_trigger":
                 node_id = node.get("id")
-                cfg = dict(node.get("config") or saved_configs.get(node_id, {}).get("config") or {})
+                node_saved = saved_configs.get(node_id, {}) if isinstance(saved_configs, dict) else {}
+                cfg = dict(node.get("config") or node_saved.get("config") or {})
 
                 preset = cfg.get("interval_preset", "")
                 expr = cfg.get("cron_expression", "").strip()
