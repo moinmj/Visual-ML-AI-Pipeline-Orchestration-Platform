@@ -70,3 +70,35 @@ def test_cron_matcher_and_scheduler_evaluation():
     # 4. Scheduler instance check
     assert workflow_scheduler.check_interval_seconds == 30
 
+
+@pytest.mark.asyncio
+async def test_scheduler_force_tick_and_resilience():
+    from backend.app.workflows.models import Workflow
+    from backend.app.workflows.scheduler import workflow_scheduler
+    
+    # Test _extract_cron_config with dict nodes
+    wf = Workflow(
+        id="test_wf_cron_1",
+        name="Cron Test Pipeline",
+        is_active=True,
+        nodes=[{"id": "c1", "recipe_id": "cron_trigger"}],
+        node_configs={"c1": {"recipe_id": "cron_trigger", "config": {"interval_preset": "Every 15 Minutes"}}}
+    )
+    cfg = workflow_scheduler._extract_cron_config(wf)
+    assert cfg is not None
+    assert cfg["cron_expression"] == "*/15 * * * *"
+
+    # Test _extract_cron_config with stringified JSON (defensive parsing)
+    import json
+    wf_str = Workflow(
+        id="test_wf_cron_2",
+        name="Cron Test Pipeline Str",
+        is_active=True,
+        nodes=json.dumps([{"id": "c2", "recipe_id": "cron_trigger"}]),
+        node_configs=json.dumps({"c2": {"recipe_id": "cron_trigger", "config": {"cron_expression": "*/15 * * * *"}}})
+    )
+    cfg_str = workflow_scheduler._extract_cron_config(wf_str)
+    assert cfg_str is not None
+    assert cfg_str["cron_expression"] == "*/15 * * * *"
+
+
