@@ -1450,15 +1450,41 @@ def workflow_graph_to_db_payload(workflow: WorkflowGraph) -> tuple:
 
 def db_workflow_to_graph(wf: Workflow) -> WorkflowGraph:
     """Helper to convert a stored DB Workflow model into an executable WorkflowGraph."""
+    import json
     from backend.app.engine.dag.graph import WorkflowNode, WorkflowEdge
     nodes = []
     saved_configs = wf.node_configs or {}
-    for nd in wf.nodes or []:
-        nid = nd["id"]
-        n_cfg = saved_configs.get(nid, {})
-        recipe_id = nd.get("recipe_id") or n_cfg.get("recipe_id", "csv_loader")
-        config = nd.get("config") or n_cfg.get("config", {})
-        label = nd.get("label") or nd.get("content") or n_cfg.get("label", nid)
+    if isinstance(saved_configs, str):
+        try:
+            saved_configs = json.loads(saved_configs)
+        except Exception:
+            saved_configs = {}
+
+    raw_nodes = wf.nodes or []
+    if isinstance(raw_nodes, str):
+        try:
+            raw_nodes = json.loads(raw_nodes)
+        except Exception:
+            raw_nodes = []
+
+    for nd in raw_nodes:
+        if not isinstance(nd, dict):
+            continue
+        nid = nd.get("id", "")
+        n_cfg = saved_configs.get(nid, {}) if isinstance(saved_configs, dict) else {}
+        recipe_id = nd.get("recipe_id") or (n_cfg.get("recipe_id") if isinstance(n_cfg, dict) else None) or "csv_loader"
+
+        # Robust config extraction: handle nested {"config": {...}}, node's own config, or flat {...}
+        if isinstance(nd.get("config"), dict) and nd["config"]:
+            config = dict(nd["config"])
+        elif isinstance(n_cfg, dict) and isinstance(n_cfg.get("config"), dict) and n_cfg["config"]:
+            config = dict(n_cfg["config"])
+        elif isinstance(n_cfg, dict) and n_cfg:
+            config = {k: v for k, v in n_cfg.items() if k not in ("recipe_id", "label", "category", "position")}
+        else:
+            config = {}
+
+        label = nd.get("label") or nd.get("content") or (n_cfg.get("label", nid) if isinstance(n_cfg, dict) else nid)
         nodes.append(WorkflowNode(id=nid, recipe_id=recipe_id, config=config, label=label))
     edges = [
         WorkflowEdge(
