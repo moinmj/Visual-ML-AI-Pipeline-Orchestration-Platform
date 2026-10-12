@@ -217,9 +217,9 @@ class PivotRecipe(BaseRecipe):
 
         all_cols = list(df.columns)
         mode = str(config.get("mode", "pivot")).lower().strip()
-        raw_index_cols = self._normalize_col_list(config.get("index"))
+        raw_index_cols = self._normalize_col_list(config.get("index") if config.get("index") is not None else config.get("id_vars"))
         raw_pivot_cols = self._normalize_col_list(config.get("columns"))
-        raw_value_cols = self._normalize_col_list(config.get("values"))
+        raw_value_cols = self._normalize_col_list(config.get("values") if config.get("values") is not None else config.get("value_vars"))
 
         # Resolve columns with flexible matching
         index_cols = [self._match_column(c, all_cols) or c for c in raw_index_cols]

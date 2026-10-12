@@ -169,14 +169,7 @@ _PLANNED: List[Tuple[str, str, str, List[Tuple[str, str, str, str]]]] = [
         ("document_parsing", "Document Parsing", "transform", "Extracts text and tables from PDF, Word and other documents."),
     ]),
 
-    # ------------------------------------------------------------------ 3. Modeling (23)
-    ("Modeling", "Unsupervised & Dimensionality Reduction", "unsupervised", [
-        ("clustering", "Clustering (KMeans / DBSCAN)", "unsupervised", "Groups similar rows into clusters using KMeans or DBSCAN."),
-        ("pca", "PCA", "unsupervised", "Reduces many numeric features to a few principal components."),
-        ("umap", "UMAP", "unsupervised", "Non-linear dimensionality reduction for visualization and clustering."),
-        ("tsne", "t-SNE", "unsupervised", "Projects high-dimensional data to 2D/3D for visual exploration."),
-        ("association_rule_mining", "Association Rule Mining (Apriori / FP-Growth)", "unsupervised", "Finds items that frequently occur together (e.g. products bought together)."),
-    ]),
+    # ------------------------------------------------------------------ 3. Modeling
     ("Modeling", "Deep Learning / AutoML", "training", [
         ("neural_network_trainer", "Neural Network Trainer", "trainer", "Trains a feed-forward neural network for classification or regression."),
         ("automl_search", "AutoML / Hyperparameter Search", "trainer", "Automatically tries multiple algorithms and settings and picks the best model."),
