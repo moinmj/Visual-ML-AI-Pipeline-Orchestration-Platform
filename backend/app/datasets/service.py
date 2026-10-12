@@ -96,11 +96,16 @@ class DatasetService:
         from backend.app.core.config import settings
         from backend.app.infrastructure.storage.ozone_client import tenant_prefix
         folder_path = f"s3://{settings.OZONE_BUCKET}/{tenant_prefix(tenant_id)}"
+        local_prefix = f"t{int(tenant_id)}/"
 
         query = (
             select(Dataset)
             .where(Dataset.tenant_id == tenant_id)
-            .where(Dataset.storage_path.startswith(folder_path, autoescape=True))
+            .where(or_(
+                Dataset.storage_path.startswith(folder_path, autoescape=True),
+                Dataset.storage_path.startswith(local_prefix, autoescape=True),
+                ~Dataset.storage_path.startswith("s3://")
+            ))
         )
 
         for term in (search or "").split():
