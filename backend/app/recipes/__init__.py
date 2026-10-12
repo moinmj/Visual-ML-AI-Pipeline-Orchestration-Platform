@@ -14,6 +14,7 @@ from backend.app.recipes.preprocessing.duplicates import (
 from backend.app.recipes.preprocessing.class_imbalance import ClassImbalanceResamplerRecipe
 from backend.app.recipes.nlp.text_preprocessor import TextPreprocessorRecipe
 from backend.app.recipes.nlp.text_vectorizer import TextVectorizerRecipe
+from backend.app.recipes.nlp.sentiment_analysis import SentimentAnalysisRecipe
 from backend.app.recipes.splitting.train_test_split import TrainTestSplitRecipe
 from backend.app.recipes.splitting.stratified_split import StratifiedSplitRecipe
 from backend.app.recipes.splitting.time_series_split import TimeSeriesSplitRecipe
@@ -84,6 +85,7 @@ def register_all_recipes():
     recipe_registry.register(ClassImbalanceResamplerRecipe())
     recipe_registry.register(TextPreprocessorRecipe())
     recipe_registry.register(TextVectorizerRecipe())
+    recipe_registry.register(SentimentAnalysisRecipe())
     recipe_registry.register(TrainTestSplitRecipe())
     recipe_registry.register(StratifiedSplitRecipe())
     recipe_registry.register(TimeSeriesSplitRecipe())
