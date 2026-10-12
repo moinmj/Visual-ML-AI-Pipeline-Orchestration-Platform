@@ -1450,15 +1450,41 @@ def workflow_graph_to_db_payload(workflow: WorkflowGraph) -> tuple:
 
 def db_workflow_to_graph(wf: Workflow) -> WorkflowGraph:
     """Helper to convert a stored DB Workflow model into an executable WorkflowGraph."""
+    import json
     from backend.app.engine.dag.graph import WorkflowNode, WorkflowEdge
     nodes = []
     saved_configs = wf.node_configs or {}
-    for nd in wf.nodes or []:
-        nid = nd["id"]
-        n_cfg = saved_configs.get(nid, {})
-        recipe_id = nd.get("recipe_id") or n_cfg.get("recipe_id", "csv_loader")
-        config = nd.get("config") or n_cfg.get("config", {})
-        label = nd.get("label") or nd.get("content") or n_cfg.get("label", nid)
+    if isinstance(saved_configs, str):
+        try:
+            saved_configs = json.loads(saved_configs)
+        except Exception:
+            saved_configs = {}
+
+    raw_nodes = wf.nodes or []
+    if isinstance(raw_nodes, str):
+        try:
+            raw_nodes = json.loads(raw_nodes)
+        except Exception:
+            raw_nodes = []
+
+    for nd in raw_nodes:
+        if not isinstance(nd, dict):
+            continue
+        nid = nd.get("id", "")
+        n_cfg = saved_configs.get(nid, {}) if isinstance(saved_configs, dict) else {}
+        recipe_id = nd.get("recipe_id") or (n_cfg.get("recipe_id") if isinstance(n_cfg, dict) else None) or "csv_loader"
+
+        # Robust config extraction: handle nested {"config": {...}}, node's own config, or flat {...}
+        if isinstance(nd.get("config"), dict) and nd["config"]:
+            config = dict(nd["config"])
+        elif isinstance(n_cfg, dict) and isinstance(n_cfg.get("config"), dict) and n_cfg["config"]:
+            config = dict(n_cfg["config"])
+        elif isinstance(n_cfg, dict) and n_cfg:
+            config = {k: v for k, v in n_cfg.items() if k not in ("recipe_id", "label", "category", "position")}
+        else:
+            config = {}
+
+        label = nd.get("label") or nd.get("content") or (n_cfg.get("label", nid) if isinstance(n_cfg, dict) else nid)
         nodes.append(WorkflowNode(id=nid, recipe_id=recipe_id, config=config, label=label))
     edges = [
         WorkflowEdge(
@@ -1520,6 +1546,7 @@ async def validate_workflow(workflow: WorkflowGraph):
     """
     diag = workflow.get_diagnostics()
     return {
+        "execution_id": str(uuid.uuid4()),
         "valid": diag["is_valid"],
         "errors": diag["errors"],
         "warnings": diag["warnings"],
@@ -1550,6 +1577,7 @@ async def validate_workflow_by_id(
     graph = db_workflow_to_graph(wf)
     diag = graph.get_diagnostics()
     return {
+        "execution_id": str(uuid.uuid4()),
         "workflow_id": workflow_id,
         "name": wf.name,
         "valid": diag["is_valid"],
@@ -3475,3 +3503,69 @@ async def export_combined_dataset_csv(
             "Content-Disposition": f"attachment; filename=combined_dataset_{execution_id}.csv"
         }
     )
+
+
+@router.get("/scheduler/status")
+async def get_cron_scheduler_status():
+    """Returns the live status of the background workflow cron scheduler."""
+    from backend.app.workflows.scheduler import workflow_scheduler
+    return {
+        "running": workflow_scheduler._running,
+        "check_interval_seconds": workflow_scheduler.check_interval_seconds,
+        "recent_triggered_count": len(workflow_scheduler._last_triggered),
+        "recent_triggered": workflow_scheduler._last_triggered
+    }
+
+
+@router.post("/scheduler/tick")
+async def trigger_cron_scheduler_tick(
+    force: bool = Query(False, description="Force execution immediately regardless of clock minute"),
+    workflow_id: Optional[str] = Query(None, description="Optional target workflow ID to evaluate or trigger")
+):
+    """Manually triggers a schedule evaluation tick (for testing and manual triggering)."""
+    from backend.app.workflows.scheduler import workflow_scheduler
+    triggered = await workflow_scheduler.tick(force=force, target_workflow_id=workflow_id)
+    return {
+        "status": "COMPLETED",
+        "force": force,
+        "target_workflow_id": workflow_id,
+        "triggered_count": len(triggered),
+        "triggered_workflow_ids": triggered
+    }
+
+
+@router.post("/{workflow_id}/trigger-cron")
+async def trigger_workflow_cron_immediately(
+    workflow_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Manually triggers the cron schedule node of a specific workflow workbook immediately,
+    bypassing clock minute matching.
+    """
+    from backend.app.workflows.scheduler import workflow_scheduler
+    res = await db.execute(select(Workflow).where(Workflow.id == workflow_id))
+    wf = res.scalar_one_or_none()
+    if not wf:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Workflow workbook '{workflow_id}' not found."
+        )
+
+    cron_cfg = workflow_scheduler._extract_cron_config(wf)
+    if not cron_cfg:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Workflow '{workflow_id}' does not have an active 'cron_trigger' node configured."
+        )
+
+    triggered = await workflow_scheduler.tick(force=True, target_workflow_id=workflow_id)
+    return {
+        "status": "TRIGGERED",
+        "workflow_id": workflow_id,
+        "workflow_name": wf.name,
+        "cron_expression": cron_cfg["cron_expression"],
+        "interval_preset": cron_cfg.get("interval_preset"),
+        "timezone": cron_cfg.get("timezone", "UTC"),
+        "message": f"Pipeline '{wf.name}' ({workflow_id}) scheduled execution started successfully."
+    }

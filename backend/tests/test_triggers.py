@@ -28,11 +28,102 @@ def test_cron_trigger_recipe():
     assert recipe.recipe_id == "cron_trigger"
     assert recipe.category == "triggers"
     
+    # 1. Direct cron expression
     output = recipe.execute(
         inputs={},
         config={"cron_expression": "0 12 * * *", "timezone": "UTC"}
     )
-    
     assert "dataframe" in output
     assert len(output["dataframe"]) >= 1
     assert output["trigger_metadata"]["cron"] == "0 12 * * *"
+
+    # 2. Preset auto-mapping: Every 15 Minutes -> */15 * * * *
+    out_15 = recipe.execute(
+        inputs={},
+        config={"interval_preset": "Every 15 Minutes", "cron_expression": "0 0 * * *"}
+    )
+    assert out_15["trigger_metadata"]["cron"] == "*/15 * * * *"
+
+
+def test_cron_matcher_and_scheduler_evaluation():
+    from backend.app.workflows.scheduler import is_cron_due, match_cron_field, workflow_scheduler
+    import datetime
+
+    # 1. 15-minute cron check
+    dt_15 = datetime.datetime(2026, 10, 11, 12, 15, 0)
+    dt_16 = datetime.datetime(2026, 10, 11, 12, 16, 0)
+    assert is_cron_due("*/15 * * * *", dt_15) is True
+    assert is_cron_due("*/15 * * * *", dt_16) is False
+
+    # 2. Daily midnight check
+    dt_midnight = datetime.datetime(2026, 10, 11, 0, 0, 0)
+    assert is_cron_due("0 0 * * *", dt_midnight) is True
+    assert is_cron_due("0 0 * * *", dt_15) is False
+
+    # 3. Field matcher steps and ranges
+    assert match_cron_field("*/15", 30) is True
+    assert match_cron_field("*/15", 7) is False
+    assert match_cron_field("1-5", 3) is True
+    assert match_cron_field("1-5", 6) is False
+    assert match_cron_field("10,20,30", 20) is True
+
+    # 4. Scheduler instance check
+    assert workflow_scheduler.check_interval_seconds == 30
+
+
+@pytest.mark.asyncio
+async def test_scheduler_force_tick_and_resilience():
+    from backend.app.workflows.models import Workflow
+    from backend.app.workflows.scheduler import workflow_scheduler
+    
+    # Test _extract_cron_config with dict nodes
+    wf = Workflow(
+        id="test_wf_cron_1",
+        name="Cron Test Pipeline",
+        is_active=True,
+        nodes=[{"id": "c1", "recipe_id": "cron_trigger"}],
+        node_configs={"c1": {"recipe_id": "cron_trigger", "config": {"interval_preset": "Every 15 Minutes"}}}
+    )
+    cfg = workflow_scheduler._extract_cron_config(wf)
+    assert cfg is not None
+    assert cfg["cron_expression"] == "*/15 * * * *"
+
+    # Test _extract_cron_config with stringified JSON (defensive parsing)
+    import json
+    wf_str = Workflow(
+        id="test_wf_cron_2",
+        name="Cron Test Pipeline Str",
+        is_active=True,
+        nodes=json.dumps([{"id": "c2", "recipe_id": "cron_trigger"}]),
+        node_configs=json.dumps({"c2": {"recipe_id": "cron_trigger", "config": {"cron_expression": "*/15 * * * *"}}})
+    )
+    # Test _extract_cron_config with flat node_configs (Format A from canvas)
+    wf_flat = Workflow(
+        id="test_wf_cron_flat",
+        name="Cron Flat Config Test",
+        is_active=True,
+        nodes=[{"id": "processor_cron_trigger_3", "recipe_id": "cron_trigger"}],
+        node_configs={
+            "processor_cron_trigger_3": {
+                "cron_expression": "*/15 * * * *",
+                "interval_preset": "Every 15 Minutes",
+                "timezone": "Asia/Kolkata"
+            }
+        }
+    )
+    cfg_flat = workflow_scheduler._extract_cron_config(wf_flat)
+    assert cfg_flat is not None
+    assert cfg_flat["cron_expression"] == "*/15 * * * *"
+    assert cfg_flat["interval_preset"] == "Every 15 Minutes"
+    assert cfg_flat["timezone"] == "Asia/Kolkata"
+
+    # Test db_workflow_to_graph with flat node_configs
+    from backend.app.workflows.router import db_workflow_to_graph
+    graph = db_workflow_to_graph(wf_flat)
+    node_graph = next((n for n in graph.nodes if n.id == "processor_cron_trigger_3"), None)
+    assert node_graph is not None
+    assert node_graph.config["cron_expression"] == "*/15 * * * *"
+    assert node_graph.config["timezone"] == "Asia/Kolkata"
+
+
+

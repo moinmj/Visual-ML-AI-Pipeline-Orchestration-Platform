@@ -45,8 +45,17 @@ async def lifespan(app: FastAPI):
         logger.info("Initializing tenant metadata database...")
         await init_tenant_db()
         logger.info("Tenant metadata database initialized successfully.")
+
+    # Start automated background Cron Scheduler daemon
+    import asyncio
+    from backend.app.workflows.scheduler import workflow_scheduler
+    scheduler_task = asyncio.create_task(workflow_scheduler.start())
+    logger.info("Workflow Cron Scheduler background daemon started.")
+
     yield
     # Shutdown
+    workflow_scheduler.stop()
+    scheduler_task.cancel()
     logger.info("Platform shutting down.")
 
 
