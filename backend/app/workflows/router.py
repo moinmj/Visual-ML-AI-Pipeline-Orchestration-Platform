@@ -1546,6 +1546,7 @@ async def validate_workflow(workflow: WorkflowGraph):
     """
     diag = workflow.get_diagnostics()
     return {
+        "execution_id": str(uuid.uuid4()),
         "valid": diag["is_valid"],
         "errors": diag["errors"],
         "warnings": diag["warnings"],
@@ -1576,6 +1577,7 @@ async def validate_workflow_by_id(
     graph = db_workflow_to_graph(wf)
     diag = graph.get_diagnostics()
     return {
+        "execution_id": str(uuid.uuid4()),
         "workflow_id": workflow_id,
         "name": wf.name,
         "valid": diag["is_valid"],
