@@ -18,6 +18,10 @@ def test_sentiment_recipe_registration():
     assert "positive_threshold" in schema["properties"]
     assert "negative_threshold" in schema["properties"]
 
+    meta = recipe_registry.get_metadata("sentiment_analysis")
+    assert meta.group == "Data Preparation & Transformation"
+    assert meta.subgroup == "NLP/Text"
+
 
 def test_analyze_text_sentiment_lexicon():
     """Tests valence scoring on positive, negative, neutral, and negated phrases."""

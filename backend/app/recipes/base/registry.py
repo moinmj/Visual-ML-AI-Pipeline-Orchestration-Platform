@@ -25,6 +25,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "class_imbalance_resampler": ("Data Preparation & Transformation", "Feature Engineering"),
     "text_preprocessor": ("Data Preparation & Transformation", "NLP/Text"),
     "text_vectorizer": ("Data Preparation & Transformation", "NLP/Text"),
+    "sentiment_analysis": ("Data Preparation & Transformation", "NLP/Text"),
     "train_test_split": ("Data Preparation & Transformation", "Splitting"),
     "stratified_split": ("Data Preparation & Transformation", "Splitting"),
     "time_series_split": ("Data Preparation & Transformation", "Splitting"),
