@@ -63,6 +63,13 @@ from backend.app.recipes.integrations.google_sheets import GoogleSheetsRecipe
 from backend.app.recipes.integrations.google_drive import GoogleDriveRecipe
 from backend.app.recipes.integrations.openweathermap import OpenWeatherMapRecipe
 
+# Unsupervised & Dimensionality Reduction Recipes
+from backend.app.recipes.unsupervised.clustering import ClusteringRecipe
+from backend.app.recipes.unsupervised.pca import PCARecipe
+from backend.app.recipes.unsupervised.umap import UMAPRecipe
+from backend.app.recipes.unsupervised.tsne import TSNERecipe
+from backend.app.recipes.unsupervised.association_rules import AssociationRuleMiningRecipe
+
 
 def register_all_recipes():
     recipe_registry.register(CSVLoaderRecipe())
@@ -126,6 +133,13 @@ def register_all_recipes():
     recipe_registry.register(GoogleSheetsRecipe())
     recipe_registry.register(GoogleDriveRecipe())
     recipe_registry.register(OpenWeatherMapRecipe())
+
+    # Unsupervised & Dimensionality Reduction
+    recipe_registry.register(ClusteringRecipe())
+    recipe_registry.register(PCARecipe())
+    recipe_registry.register(UMAPRecipe())
+    recipe_registry.register(TSNERecipe())
+    recipe_registry.register(AssociationRuleMiningRecipe())
 
 
 # Automatically register upon module load
