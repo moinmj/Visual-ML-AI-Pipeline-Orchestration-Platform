@@ -198,6 +198,7 @@ async def autowire_nodes(payload: AutoWireRequest):
 
         # NLP Text Processing & Vectorization
         "text_preprocessor": 1.8,
+        "sentiment_analysis": 1.82,
         "text_vectorizer": 1.85,
 
         # Feature Encoders & Scalers
