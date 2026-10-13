@@ -682,7 +682,7 @@ async def record_workflow_execution_history(
     await db.commit()
     await db.refresh(exec_record)
 
-    # Auto-prune older versions if exceeding MAX_SAVED_VERSIONS (keep last 50 runs to preserve user history)
+    # Auto-prune older versions if exceeding MAX_SAVED_VERSIONS (keep last 5 runs to prevent DB bloat)
     try:
         all_vers_stmt = (
             select(WorkflowExecution)
@@ -691,7 +691,7 @@ async def record_workflow_execution_history(
         )
         all_vers_res = await db.execute(all_vers_stmt)
         all_vers = all_vers_res.scalars().all()
-        MAX_SAVED_VERSIONS = 50
+        MAX_SAVED_VERSIONS = 5
         if len(all_vers) > MAX_SAVED_VERSIONS:
             for old_ver in all_vers[MAX_SAVED_VERSIONS:]:
                 await db.delete(old_ver)
