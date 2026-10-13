@@ -71,6 +71,11 @@ from backend.app.recipes.unsupervised.tsne import TSNERecipe
 from backend.app.recipes.unsupervised.association_rules import AssociationRuleMiningRecipe
 
 
+#computer vision recipes
+from backend.app.recipes.vision.object_detection import ObjectDetectionRecipe
+...
+recipe_registry.register(ObjectDetectionRecipe())
+
 def register_all_recipes():
     recipe_registry.register(CSVLoaderRecipe())
     recipe_registry.register(ExportWriterRecipe())

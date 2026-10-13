@@ -49,3 +49,9 @@ pytest-asyncio>=0.23.7
 
 #ozone 
 boto3
+
+
+#computer vision
+
+ultralytics 
+pillow
