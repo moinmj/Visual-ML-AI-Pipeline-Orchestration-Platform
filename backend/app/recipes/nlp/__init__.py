@@ -2,11 +2,13 @@ from backend.app.recipes.nlp.text_preprocessor import TextPreprocessorRecipe
 from backend.app.recipes.nlp.text_vectorizer import TextVectorizerRecipe
 from backend.app.recipes.nlp.sentiment_analysis import SentimentAnalysisRecipe
 from backend.app.recipes.nlp.translation import TranslationRecipe
+from backend.app.recipes.nlp.summarization import SummarizationRecipe
 
 __all__ = [
     "TextPreprocessorRecipe",
     "TextVectorizerRecipe",
     "SentimentAnalysisRecipe",
-    "TranslationRecipe"
+    "TranslationRecipe",
+    "SummarizationRecipe"
 ]
 
