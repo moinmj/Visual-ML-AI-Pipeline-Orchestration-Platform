@@ -129,8 +129,8 @@ class PCARecipe(BaseRecipe):
                 "output_summary": {"message": "Input DataFrame is empty. No PCA performed."}
             }
 
-        # Resolve columns
-        cols_cfg = config.get("columns")
+        # Resolve columns with fallback to feature_columns alias
+        cols_cfg = config.get("columns") or config.get("feature_columns")
         feature_cols: List[str] = []
         if isinstance(cols_cfg, list) and cols_cfg:
             feature_cols = [str(c) for c in cols_cfg if str(c) in df.columns]
@@ -164,11 +164,11 @@ class PCARecipe(BaseRecipe):
         # PCA requires n_components <= min(n_samples, n_features)
         n_components = max(1, min(n_comp_req, len(matrix_df), len(feature_cols)))
 
-        scale_features = bool(config.get("scale_features", True))
+        scale_features = bool(config.get("scale_features", config.get("standardize", True)))
         whiten = bool(config.get("whiten", False))
         random_state = int(config.get("random_state", 42))
         prefix = str(config.get("prefix", "PCA_") or "PCA_")
-        append_components = bool(config.get("append_components", True))
+        append_components = bool(config.get("append_components", config.get("append_to_input", True)))
 
         X = matrix_df.to_numpy(dtype=float)
         scaler = None

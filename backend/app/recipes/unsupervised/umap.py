@@ -146,8 +146,8 @@ class UMAPRecipe(BaseRecipe):
                 "output_summary": {"message": "Input DataFrame is empty. No UMAP performed."}
             }
 
-        # Resolve columns
-        cols_cfg = config.get("columns")
+        # Resolve columns with fallback to feature_columns alias
+        cols_cfg = config.get("columns") or config.get("feature_columns")
         feature_cols: List[str] = []
         if isinstance(cols_cfg, list) and cols_cfg:
             feature_cols = [str(c) for c in cols_cfg if str(c) in df.columns]
@@ -185,9 +185,9 @@ class UMAPRecipe(BaseRecipe):
         min_dist = float(config.get("min_dist", 0.1))
         metric = str(config.get("metric", "euclidean"))
         random_state = int(config.get("random_state", 42))
-        scale_features = bool(config.get("scale_features", True))
+        scale_features = bool(config.get("scale_features", config.get("standardize", True)))
         prefix = str(config.get("prefix", "UMAP_") or "UMAP_")
-        append_components = bool(config.get("append_components", True))
+        append_components = bool(config.get("append_components", config.get("append_to_input", True)))
 
         X = matrix_df.to_numpy(dtype=float)
         scaler = None
