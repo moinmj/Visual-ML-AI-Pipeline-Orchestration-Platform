@@ -98,11 +98,6 @@ class CSVLoaderRecipe(BaseRecipe):
 
         # 4. Load from storage_path
         if storage_path:
-            if not str(storage_path).startswith("s3://"):
-                raise RuntimeError(
-                    f"Dataset '{dataset_id}' is not stored in Ozone ('{storage_path}'). "
-                    "Re-upload it so it is stored under the ml-workflow prefix."
-                )
             try:
                 from backend.app.infrastructure.storage.storage_manager import storage_manager
                 read_tenant = tenant_id if tenant_id is not None else dataset_tenant_id

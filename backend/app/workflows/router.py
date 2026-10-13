@@ -1545,8 +1545,10 @@ async def validate_workflow(workflow: WorkflowGraph):
     Validate a workflow graph for cycle detection, valid node connectivity, schema requirements, and best-practice recommendations.
     """
     diag = workflow.get_diagnostics()
+    next_execution_id = str(uuid.uuid4())
+    job_manager.reserve_job(next_execution_id)
     return {
-        "execution_id": str(uuid.uuid4()),
+        "execution_id": next_execution_id,
         "valid": diag["is_valid"],
         "errors": diag["errors"],
         "warnings": diag["warnings"],
@@ -1576,8 +1578,10 @@ async def validate_workflow_by_id(
 
     graph = db_workflow_to_graph(wf)
     diag = graph.get_diagnostics()
+    next_execution_id = str(uuid.uuid4())
+    job_manager.reserve_job(next_execution_id)
     return {
-        "execution_id": str(uuid.uuid4()),
+        "execution_id": next_execution_id,
         "workflow_id": workflow_id,
         "name": wf.name,
         "valid": diag["is_valid"],
@@ -1971,33 +1975,73 @@ async def submit_async_workflow(
     contains "result" (exactly what /execute returns) and, if it failed, "resume_info".
     A run linked to a workflow is saved to its last execution and history like /execute.
     """
-    target_id = (
-        workflow_id
-        or getattr(workflow, "workflow_id", None)
-        or getattr(workflow, "id", None)
-        or getattr(workflow, "pipeline_id", None)
-    )
-    if not target_id:
-        target_id = extract_workflow_id_from_context(request)
-    if auto_save:
-        target_id = await _autosave_workflow(db, workflow, target_id, workflow_name)
+    # target_id = (
+    #     workflow_id
+    #     or getattr(workflow, "workflow_id", None)
+    #     or getattr(workflow, "id", None)
+    #     or getattr(workflow, "pipeline_id", None)
+    # )
+    # if not target_id:
+    #     target_id = extract_workflow_id_from_context(request)
+    # if auto_save:
+    #     target_id = await _autosave_workflow(db, workflow, target_id, workflow_name)
 
-    _require_resumable(resume_from)
+    # _require_resumable(resume_from)
+    # if execution_id is not None and not re.fullmatch(r"[A-Za-z0-9_-]{8,64}", execution_id):
+    #     raise HTTPException(status_code=400, detail="execution_id must be 8-64 characters: letters, digits, '-' or '_'.")
+    # # Same dataset preloading as the synchronous /execute (loads the caller's own datasets)
+    # await preload_workflow_datasets(workflow=workflow, db=db, tenant_id=get_current_tenant_id())
+    # try:
+    #     job_id = job_manager.submit_job(
+    #         workflow=workflow,
+    #         trigger_type="api_async",
+    #         include_node_outputs=include_node_outputs,
+    #         resume_from=resume_from,
+    #         workflow_id=target_id,
+    #         job_id=execution_id,
+    #     )
+    # except ValueError as e:
+    #     raise HTTPException(status_code=409, detail=str(e))
+
     if execution_id is not None and not re.fullmatch(r"[A-Za-z0-9_-]{8,64}", execution_id):
         raise HTTPException(status_code=400, detail="execution_id must be 8-64 characters: letters, digits, '-' or '_'.")
-    # Same dataset preloading as the synchronous /execute (loads the caller's own datasets)
-    await preload_workflow_datasets(workflow=workflow, db=db, tenant_id=get_current_tenant_id())
+    reserved_here = False
+    if execution_id is not None:
+        try:
+            job_manager.reserve_job(execution_id)
+            reserved_here = True
+        except ValueError as e:
+            raise HTTPException(status_code=409, detail=str(e))
     try:
-        job_id = job_manager.submit_job(
-            workflow=workflow,
-            trigger_type="api_async",
-            include_node_outputs=include_node_outputs,
-            resume_from=resume_from,
-            workflow_id=target_id,
-            job_id=execution_id,
+        target_id = (
+            workflow_id
+            or getattr(workflow, "workflow_id", None)
+            or getattr(workflow, "id", None)
+            or getattr(workflow, "pipeline_id", None)
         )
-    except ValueError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        if not target_id:
+            target_id = extract_workflow_id_from_context(request)
+        if auto_save:
+            target_id = await _autosave_workflow(db, workflow, target_id, workflow_name)
+
+        _require_resumable(resume_from)
+        await preload_workflow_datasets(workflow=workflow, db=db, tenant_id=get_current_tenant_id())
+        try:
+            job_id = job_manager.submit_job(
+                workflow=workflow,
+                trigger_type="api_async",
+                include_node_outputs=include_node_outputs,
+                resume_from=resume_from,
+                workflow_id=target_id,
+                job_id=execution_id,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=409, detail=str(e))
+    except Exception:
+        if reserved_here:
+            job_manager.release_reservation(execution_id)
+        raise
+
     if target_id:
         _persist_when_finished(job_id, workflow, target_id)
 

@@ -172,6 +172,7 @@ RECIPE_CATEGORY_MAP = {
     ],
     "🔤 NLP & Text Processing": [
         {"id": "text_preprocessor", "name": "Text Preprocessor (Stemming/Lemmatization)", "icon": "🧹", "default_config": {"lowercase": True, "strip_html_urls": True, "remove_stopwords": True, "normalization": "lemmatization"}},
+        {"id": "sentiment_analysis", "name": "Sentiment Analysis (Positive / Negative / Neutral)", "icon": "🎭", "default_config": {"columns": [], "output_mode": "Label and Score", "positive_threshold": 0.05, "negative_threshold": -0.05}},
         {"id": "text_vectorizer", "name": "Text Vectorizer (TF-IDF / Word2Vec / Count)", "icon": "🔤", "default_config": {"method": "tfidf", "max_features": 50, "drop_original": True}}
     ],
     "✂️ Splitting": [
@@ -1775,7 +1776,7 @@ if app_mode == "🎨 Pipeline Whiteboard":
                         return 1.4
                     if r_id in ["missing_value_imputer", "missing_values", "outlier_handler", "statistical_guardrail"]:
                         return 1.6
-                    if r_id in ["text_preprocessor", "text_vectorizer"]:
+                    if r_id in ["text_preprocessor", "sentiment_analysis", "text_vectorizer"]:
                         return 1.8
                     if r_id in ["category_sanitizer", "categorical_encoder", "feature_scaler", "lag_feature_engineering", "lag_features"]:
                         return 2.0

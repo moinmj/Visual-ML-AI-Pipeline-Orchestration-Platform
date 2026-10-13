@@ -62,9 +62,9 @@ def _client_config() -> Config:
     base = dict(
         signature_version="s3v4",
         s3={"addressing_style": "path"},
-        connect_timeout=5,
-        read_timeout=30,
-        retries={"max_attempts": 2},
+        connect_timeout=3,
+        read_timeout=8,
+        retries={"max_attempts": 1},
     )
     try:
         return Config(

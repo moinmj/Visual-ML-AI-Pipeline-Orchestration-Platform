@@ -27,14 +27,33 @@ class StorageManager:
 
     async def save_file(self, file_content: bytes, destination_rel_path: str, tenant_id: int) -> str:
         """
-        Saves raw bytes to the Ozone datalake, inside the tenant's folder
-        (ml-workflow/t<tenant_id>/...), and returns the "s3://bucket/key" path.
-        Dataset uploads never touch local disk. tenant_id is required on purpose:
-        there is no default folder to fall back to.
+        Saves raw bytes to storage. If STORAGE_BACKEND is "ozone", attempts to save to Ozone.
+        If Ozone is unreachable or returns an error (e.g. 502 Bad Gateway), or if STORAGE_BACKEND
+        is "local", safely falls back to local tenant storage so uploads never fail.
         """
-        from backend.app.infrastructure.storage.ozone_client import upload_file_to_ozone
-        content_type = mimetypes.guess_type(destination_rel_path)[0] or "application/octet-stream"
-        return upload_file_to_ozone(file_content, destination_rel_path, tenant_id, content_type)
+        backend = (getattr(settings, "STORAGE_BACKEND", "") or "ozone").lower()
+        if backend == "ozone" and settings.OZONE_BUCKET and settings.OZONE_ENDPOINT:
+            try:
+                from backend.app.infrastructure.storage.ozone_client import upload_file_to_ozone
+                content_type = mimetypes.guess_type(destination_rel_path)[0] or "application/octet-stream"
+                return upload_file_to_ozone(file_content, destination_rel_path, tenant_id, content_type)
+            except Exception as e:
+                logger.warning(
+                    f"[StorageManager] Datalake (Ozone) upload failed for '{destination_rel_path}' ({e}). "
+                    f"Falling back to local tenant storage."
+                )
+
+        local_rel = f"t{int(tenant_id)}/{destination_rel_path.lstrip('/')}"
+        dest_path = self.base_dir / local_rel
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        if AIOFILES_AVAILABLE:
+            async with aiofiles.open(dest_path, "wb") as f:
+                await f.write(file_content)
+        else:
+            with open(dest_path, "wb") as f:
+                f.write(file_content)
+        logger.info(f"[StorageManager] Saved file locally: {local_rel}")
+        return local_rel
 
     def get_absolute_path(self, relative_path: str) -> Path:
         """
@@ -113,32 +132,51 @@ class StorageManager:
 
     def save_dataframe(self, df: pd.DataFrame, destination_rel_path: str, tenant_id: int, file_format: str = "parquet") -> str:
         """
-        Saves a Pandas DataFrame to the Ozone datalake, inside the tenant's folder
-        (ml-workflow/t<tenant_id>/...), as Parquet or CSV, and returns the
-        "s3://bucket/key" path. Nothing is written to local disk.
-        tenant_id is required on purpose: there is no default folder to fall back to.
+        Saves a Pandas DataFrame to storage. Attempts Ozone if configured, otherwise
+        falls back to local storage inside the tenant's folder.
         """
         if tenant_id is None:
-            raise ValueError("tenant_id is required to save a dataframe to Ozone")
+            raise ValueError("tenant_id is required to save a dataframe")
 
-        from backend.app.infrastructure.storage.ozone_client import upload_file_to_ozone
-        buf = BytesIO()
+        backend = (getattr(settings, "STORAGE_BACKEND", "") or "ozone").lower()
+        if backend == "ozone" and settings.OZONE_BUCKET and settings.OZONE_ENDPOINT:
+            try:
+                from backend.app.infrastructure.storage.ozone_client import upload_file_to_ozone
+                buf = BytesIO()
+                if destination_rel_path.endswith(".csv") or (file_format == "csv" and not destination_rel_path.endswith(".parquet")):
+                    df.to_csv(buf, index=False)
+                    content_type = "text/csv"
+                else:
+                    df.to_parquet(buf, index=False)
+                    content_type = "application/octet-stream"
+                return upload_file_to_ozone(buf.getvalue(), destination_rel_path, tenant_id, content_type)
+            except Exception as e:
+                logger.warning(
+                    f"[StorageManager] Ozone dataframe upload failed ({e}). Falling back to local storage."
+                )
+
+        local_rel = f"t{int(tenant_id)}/{destination_rel_path.lstrip('/')}"
+        dest_path = self.base_dir / local_rel
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
         if destination_rel_path.endswith(".csv") or (file_format == "csv" and not destination_rel_path.endswith(".parquet")):
-            df.to_csv(buf, index=False)
-            content_type = "text/csv"
+            df.to_csv(dest_path, index=False)
         else:
-            df.to_parquet(buf, index=False)
-            content_type = "application/octet-stream"
-        return upload_file_to_ozone(buf.getvalue(), destination_rel_path, tenant_id, content_type)
+            self.safe_to_parquet(df, dest_path)
+        logger.info(f"[StorageManager] Saved dataframe locally: {local_rel}")
+        return local_rel
 
     def delete_file(self, relative_path: str, tenant_id: Optional[int] = None) -> bool:
         """
         Deletes a file from storage (local or Ozone, based on the path form).
         """
         if relative_path.startswith("s3://"):
-            from backend.app.infrastructure.storage.ozone_client import delete_file_from_ozone
-            key = relative_path.split("/", 3)[-1]
-            return delete_file_from_ozone(key, tenant_id)
+            try:
+                from backend.app.infrastructure.storage.ozone_client import delete_file_from_ozone
+                key = relative_path.split("/", 3)[-1]
+                return delete_file_from_ozone(key, tenant_id)
+            except Exception as e:
+                logger.warning(f"[StorageManager] Error deleting Ozone file '{relative_path}': {e}")
+                return False
 
         full_path = self.base_dir / relative_path
         if full_path.exists():

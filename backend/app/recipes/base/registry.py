@@ -25,6 +25,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "class_imbalance_resampler": ("Data Preparation & Transformation", "Feature Engineering"),
     "text_preprocessor": ("Data Preparation & Transformation", "NLP/Text"),
     "text_vectorizer": ("Data Preparation & Transformation", "NLP/Text"),
+    "sentiment_analysis": ("Data Preparation & Transformation", "NLP/Text"),
     "train_test_split": ("Data Preparation & Transformation", "Splitting"),
     "stratified_split": ("Data Preparation & Transformation", "Splitting"),
     "time_series_split": ("Data Preparation & Transformation", "Splitting"),
@@ -40,6 +41,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "isolation_forest": ("Modeling", "Anomaly Detection"),
     "statistical_guardrail": ("Modeling", "Anomaly Detection"),
     "model_evaluator": ("Evaluation & Governance", "Evaluation"),
+    "object_detection": ("Modeling", "Computer Vision & Audio"),
     "mlflow_tracker": ("Evaluation & Governance", "Tracking & Registry"),
 
     # Flow Control

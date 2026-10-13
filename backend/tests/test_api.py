@@ -5,7 +5,15 @@ from backend.app.main import app
 from backend.app.infrastructure.database.session import init_db
 from backend.app.core.security import get_current_user, TokenData, create_access_token
 
-app.dependency_overrides[get_current_user] = lambda: TokenData("test", 1, ["Tenant Admin", "Data Scientist", "ML Engineer"], ["*"])
+from backend.app.core.tenant_context import set_current_tenant_id
+
+async def _override_user():
+    set_current_tenant_id(1)
+    from backend.app.core.tenant_context import set_current_user_id
+    set_current_user_id("test")
+    return TokenData("test", 1, ["Tenant Admin", "Data Scientist", "ML Engineer"], ["*"])
+
+app.dependency_overrides[get_current_user] = _override_user
 
 
 def auth_headers():

@@ -51,3 +51,6 @@ catboost_info/
 scratch/
 *.png
 
+# Object detection
+*.pt
+test_images/
