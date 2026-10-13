@@ -25,7 +25,7 @@ def test_translation_recipe_registration():
     schema = recipe.get_schema()
     props = schema["properties"]
     assert "columns" in props
-    assert "target_language" in props
+    assert "destination_language" in props
     assert "source_language" in props
     assert "engine" in props
     assert "append_columns" in props
