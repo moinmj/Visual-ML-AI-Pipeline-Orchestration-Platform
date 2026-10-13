@@ -17,15 +17,17 @@ class CSVLoaderRecipe(BaseRecipe):
             "type": "object",
             "properties": {
                 "dataset_id": {
-                    "type": "dataset",
+                    "type": "string",
                     "title": "Dataset ID",
+                    "input_type": "dataset_select",
                     "description": "ID of the dataset previously uploaded to the platform."
                 },
                 "delimiter": {
-                    "type": "select",
+                    "type": "string",
                     "title": "Delimiter",
                     "default": ",",
-                    "enum": [",", ";", "\t", "|"]
+                    "enum": [",", ";", "\t", "|"],
+                    "input_type": "dropdown"
                 }
             },
             "required": ["dataset_id"]
