@@ -71,6 +71,20 @@ from backend.app.recipes.unsupervised.umap import UMAPRecipe
 from backend.app.recipes.unsupervised.tsne import TSNERecipe
 from backend.app.recipes.unsupervised.association_rules import AssociationRuleMiningRecipe
 
+# Deployment & Monitoring Recipes
+from backend.app.recipes.monitoring import (
+    ModelServingEndpointRecipe,
+    ModelDriftMonitorRecipe,
+    DataDriftDetectorRecipe,
+    RollbackTriggerRecipe,
+    CostLatencyMonitorRecipe,
+    CostAttributionReportRecipe,
+)
+
+#computer vision recipes
+from backend.app.recipes.vision.object_detection import ObjectDetectionRecipe
+...
+recipe_registry.register(ObjectDetectionRecipe())
 
 def register_all_recipes():
     recipe_registry.register(CSVLoaderRecipe())
@@ -142,6 +156,14 @@ def register_all_recipes():
     recipe_registry.register(UMAPRecipe())
     recipe_registry.register(TSNERecipe())
     recipe_registry.register(AssociationRuleMiningRecipe())
+
+    # Deployment & Monitoring
+    recipe_registry.register(ModelServingEndpointRecipe())
+    recipe_registry.register(ModelDriftMonitorRecipe())
+    recipe_registry.register(DataDriftDetectorRecipe())
+    recipe_registry.register(RollbackTriggerRecipe())
+    recipe_registry.register(CostLatencyMonitorRecipe())
+    recipe_registry.register(CostAttributionReportRecipe())
 
 
 # Automatically register upon module load

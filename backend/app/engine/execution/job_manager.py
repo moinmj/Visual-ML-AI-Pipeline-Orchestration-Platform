@@ -68,7 +68,8 @@ class PipelineJobManager:
         created_at = datetime.now(timezone.utc).isoformat()
 
         with self.lock:
-            if job_id in self.jobs:
+            existing = self.jobs.get(job_id)
+            if existing is not None and not (existing.get("reserved") and self._visible(existing.get("tenant_id"))):
                 raise ValueError(f"Execution id '{job_id}' is already in use.")
             self.jobs[job_id] = {
                 "job_id": job_id,
@@ -110,6 +111,58 @@ class PipelineJobManager:
         )
         self.job_futures[job_id] = future
         return job_id
+
+    _RESERVATION_TTL_SECONDS = 900  # an id reserved by /validate that is never run is dropped after 15 minutes
+
+    def reserve_job(self, job_id: str) -> None:
+        """
+        Registers `job_id` as a PENDING placeholder for the current tenant, so
+        GET /jobs/{id}/logs answers (status PENDING, done false) from the moment the id is
+        handed out - before the run itself has been dispatched. submit_job() later turns the
+        placeholder into the real job. Reserving an id this tenant already reserved is fine;
+        an id used by a real job (of anyone) raises ValueError.
+        """
+        now = datetime.now(timezone.utc)
+        with self.lock:
+            # drop placeholders nobody ran
+            for jid, j in list(self.jobs.items()):
+                if j.get("reserved") and (now - datetime.fromisoformat(j["created_at"])).total_seconds() > self._RESERVATION_TTL_SECONDS:
+                    del self.jobs[jid]
+            existing = self.jobs.get(job_id)
+            if existing is not None:
+                if existing.get("reserved") and self._visible(existing.get("tenant_id")):
+                    return
+                raise ValueError(f"Execution id '{job_id}' is already in use.")
+            self.jobs[job_id] = {
+                "job_id": job_id,
+                "status": "PENDING",
+                "reserved": True,
+                "created_at": now.isoformat(),
+                "started_at": None,
+                "completed_at": None,
+                "duration_ms": 0.0,
+                "tenant_id": get_current_tenant_id(),
+                "trigger_type": "reserved",
+                "trigger_id": None,
+                "node_count": 0,
+                "resumed_from": None,
+                "workflow_id": None,
+                "needs_persist": False,
+                "persisted": None,
+                "logs": [],
+                "node_status": {},
+                "current_node": None,
+                "progress": {"completed": 0, "total": 0},
+                "result": None,
+                "error": None,
+            }
+
+    def release_reservation(self, job_id: str) -> None:
+        """Removes a placeholder again (e.g. the request that reserved it failed before the run started)."""
+        with self.lock:
+            existing = self.jobs.get(job_id)
+            if existing is not None and existing.get("reserved") and self._visible(existing.get("tenant_id")):
+                del self.jobs[job_id]
 
     def _on_progress(self, job_id: str, event: Dict[str, Any]) -> None:
         """Applies a live executor event to the job, so pollers see it immediately."""
@@ -242,7 +295,7 @@ class PipelineJobManager:
         """Lists the current tenant's recent execution jobs, newest first."""
         with self.lock:
             sorted_jobs = sorted(
-                (j for j in self.jobs.values() if self._visible(j.get("tenant_id"))),
+                (j for j in self.jobs.values() if self._visible(j.get("tenant_id")) and not j.get("reserved")),
                 key=lambda j: j["created_at"],
                 reverse=True
             )

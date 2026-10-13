@@ -143,8 +143,8 @@ class ClusteringRecipe(BaseRecipe):
 
         out_df = df.copy()
 
-        # Resolve columns
-        cols_cfg = config.get("columns")
+        # Resolve columns with fallback to feature_columns alias
+        cols_cfg = config.get("columns") or config.get("feature_columns")
         feature_cols: List[str] = []
         if isinstance(cols_cfg, list) and cols_cfg:
             feature_cols = [str(c) for c in cols_cfg if str(c) in out_df.columns]
@@ -177,7 +177,7 @@ class ClusteringRecipe(BaseRecipe):
         # Impute missing values with column median or 0
         matrix_df = matrix_df.fillna(matrix_df.median(numeric_only=True)).fillna(0)
 
-        scale_features = bool(config.get("scale_features", True))
+        scale_features = bool(config.get("scale_features", config.get("standardize", True)))
         X = matrix_df.to_numpy(dtype=float)
 
         scaler = None
@@ -186,17 +186,18 @@ class ClusteringRecipe(BaseRecipe):
             scaler = StandardScaler()
             X = scaler.fit_transform(X)
 
-        algorithm = config.get("algorithm", "KMeans")
-        n_clusters = int(config.get("n_clusters", 3))
+        raw_alg = str(config.get("algorithm", "KMeans")).strip().lower()
+        n_clusters = int(config.get("n_clusters") or config.get("k") or 3)
         # Clamp n_clusters to row count
         n_clusters = max(1, min(n_clusters, len(out_df)))
         random_state = int(config.get("random_state", 42))
-        cluster_col = str(config.get("cluster_column_name", "cluster") or "cluster")
+        cluster_col = str(config.get("cluster_column_name") or config.get("cluster_column") or "cluster")
 
         fitted_model = None
         labels: np.ndarray
 
-        if algorithm == "DBSCAN":
+        if "dbscan" in raw_alg:
+            algorithm = "DBSCAN"
             from sklearn.cluster import DBSCAN
             eps = float(config.get("eps", 0.5))
             min_samples = int(config.get("min_samples", 5))
@@ -204,7 +205,8 @@ class ClusteringRecipe(BaseRecipe):
             labels = dbscan.fit_predict(X)
             fitted_model = dbscan
 
-        elif algorithm == "MiniBatchKMeans":
+        elif "mini" in raw_alg:
+            algorithm = "MiniBatchKMeans"
             from sklearn.cluster import MiniBatchKMeans
             mb_kmeans = MiniBatchKMeans(
                 n_clusters=n_clusters,
@@ -214,13 +216,15 @@ class ClusteringRecipe(BaseRecipe):
             labels = mb_kmeans.fit_predict(X)
             fitted_model = mb_kmeans
 
-        elif algorithm == "Agglomerative":
+        elif "agg" in raw_alg or "hierarch" in raw_alg:
+            algorithm = "Agglomerative"
             from sklearn.cluster import AgglomerativeClustering
             agg = AgglomerativeClustering(n_clusters=n_clusters)
             labels = agg.fit_predict(X)
             fitted_model = agg
 
         else:  # Default to KMeans
+            algorithm = "KMeans"
             from sklearn.cluster import KMeans
             kmeans = KMeans(
                 n_clusters=n_clusters,

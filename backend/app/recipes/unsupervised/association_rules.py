@@ -171,28 +171,29 @@ class AssociationRuleMiningRecipe(BaseRecipe):
                 "output_summary": {"message": "Input DataFrame is empty. No association rules mined."}
             }
 
-        input_format = config.get("input_format", "Delimited Item String")
-        item_col = str(config.get("item_column", "items") or "items")
-        tid_col = str(config.get("transaction_id_column", "transaction_id") or "transaction_id")
+        raw_fmt = str(config.get("input_format") or config.get("format") or "Delimited Item String").strip().lower()
+        item_col = str(config.get("item_column") or config.get("items_column") or "items")
+        tid_col = str(config.get("transaction_id_column") or config.get("transaction_id") or "transaction_id")
         delim = str(config.get("delimiter", ",") or ",")
         min_support = float(config.get("min_support", 0.05))
         min_confidence = float(config.get("min_confidence", 0.2))
         min_lift = float(config.get("min_lift", 1.0))
         max_len = int(config.get("max_len", 3))
-        sort_by = str(config.get("sort_by", "lift"))
-        algorithm = str(config.get("algorithm", "FP-Growth"))
+        sort_by = str(config.get("sort_by", "lift")).lower()
+        raw_alg = str(config.get("algorithm", "FP-Growth")).strip().lower()
+        algorithm = "Apriori" if "apriori" in raw_alg else "FP-Growth"
 
         # Extract transactions list
         transactions: List[List[str]] = []
 
-        if input_format == "One-Hot / Boolean Matrix":
+        if "one-hot" in raw_fmt or "matrix" in raw_fmt or "boolean" in raw_fmt:
             # Each column is an item; truthy/1 rows indicate presence
             for _, row in df.iterrows():
                 tx = [str(col) for col, val in row.items() if bool(val) and val not in [0, "0", False, "false", None, ""]]
                 if tx:
                     transactions.append(tx)
 
-        elif input_format == "Grouped (TransactionID + Item)":
+        elif "grouped" in raw_fmt or "transaction" in raw_fmt:
             if tid_col in df.columns and item_col in df.columns:
                 grouped = df.groupby(tid_col)[item_col].apply(lambda s: [str(x).strip() for x in s.dropna() if str(x).strip()])
                 transactions = [tx for tx in grouped.tolist() if tx]

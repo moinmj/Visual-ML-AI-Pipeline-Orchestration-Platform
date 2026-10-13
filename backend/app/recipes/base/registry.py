@@ -43,6 +43,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "isolation_forest": ("Modeling", "Anomaly Detection"),
     "statistical_guardrail": ("Modeling", "Anomaly Detection"),
     "model_evaluator": ("Evaluation & Governance", "Evaluation"),
+    "object_detection": ("Modeling", "Computer Vision & Audio"),
     "mlflow_tracker": ("Evaluation & Governance", "Tracking & Registry"),
 
     # Flow Control
@@ -75,6 +76,14 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "umap": ("Modeling", "Unsupervised & Dimensionality Reduction"),
     "tsne": ("Modeling", "Unsupervised & Dimensionality Reduction"),
     "association_rule_mining": ("Modeling", "Unsupervised & Dimensionality Reduction"),
+
+    # Deployment & Monitoring
+    "model_serving_endpoint": ("Evaluation & Governance", "Deployment & Monitoring"),
+    "model_drift_monitor": ("Evaluation & Governance", "Deployment & Monitoring"),
+    "data_drift_detector": ("Evaluation & Governance", "Deployment & Monitoring"),
+    "rollback_trigger": ("Evaluation & Governance", "Deployment & Monitoring"),
+    "cost_latency_monitor": ("Evaluation & Governance", "Deployment & Monitoring"),
+    "cost_attribution_report": ("Evaluation & Governance", "Deployment & Monitoring"),
 }
 
 
@@ -96,6 +105,19 @@ class RecipeRegistry:
             "imap": "email_trigger_imap",
             "imap_trigger": "email_trigger_imap",
             "email_trigger": "email_trigger_imap",
+            "drift_monitoring_operator": "model_drift_monitor",
+            "drift_operator": "model_drift_monitor",
+            "model_drift_operator": "model_drift_monitor",
+            "drift_monitor": "model_drift_monitor",
+            "performance_drift_operator": "model_drift_monitor",
+            "model_serving": "model_serving_endpoint",
+            "serving_endpoint": "model_serving_endpoint",
+            "input_drift_detector": "data_drift_detector",
+            "data_drift": "data_drift_detector",
+            "cost_latency": "cost_latency_monitor",
+            "latency_monitor": "cost_latency_monitor",
+            "cost_attribution": "cost_attribution_report",
+            "finops_report": "cost_attribution_report",
         }
 
     def register(self, recipe: BaseRecipe):
