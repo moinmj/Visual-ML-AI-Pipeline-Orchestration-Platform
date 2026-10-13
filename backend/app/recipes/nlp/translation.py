@@ -616,7 +616,7 @@ class TranslationRecipe(BaseRecipe):
                     "title": "Target Text Columns",
                     "description": "Text columns to translate into another language. If left empty, all detected text/object columns will be translated."
                 },
-                "target_language": {
+                "destination_language": {
                     "type": "select",
                     "input_type": "dropdown",
                     "title": "Target Language",
@@ -715,7 +715,7 @@ class TranslationRecipe(BaseRecipe):
         out_df = df.copy()
 
         # Parse configuration
-        target_lang_raw = config.get("target_language", "Spanish (es)")
+        target_lang_raw = config.get("destination_language") or config.get("target_language") or "Spanish (es)"
         target_lang = normalize_lang_code(str(target_lang_raw))
 
         src_lang_raw = config.get("source_language", "Auto-Detect (auto)")
