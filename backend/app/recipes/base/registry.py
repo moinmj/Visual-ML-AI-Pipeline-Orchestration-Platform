@@ -26,6 +26,8 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "text_preprocessor": ("Data Preparation & Transformation", "NLP/Text"),
     "text_vectorizer": ("Data Preparation & Transformation", "NLP/Text"),
     "sentiment_analysis": ("Data Preparation & Transformation", "NLP/Text"),
+    "text_translation": ("Data Preparation & Transformation", "NLP/Text"),
+    "translation": ("Data Preparation & Transformation", "NLP/Text"),
     "train_test_split": ("Data Preparation & Transformation", "Splitting"),
     "stratified_split": ("Data Preparation & Transformation", "Splitting"),
     "time_series_split": ("Data Preparation & Transformation", "Splitting"),
@@ -73,7 +75,6 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "umap": ("Modeling", "Unsupervised & Dimensionality Reduction"),
     "tsne": ("Modeling", "Unsupervised & Dimensionality Reduction"),
     "association_rule_mining": ("Modeling", "Unsupervised & Dimensionality Reduction"),
-    "sentiment_analysis": ("Data Preparation & Transformation", "NLP/Text"),
 }
 
 
@@ -81,6 +82,7 @@ class RecipeRegistry:
     def __init__(self):
         self._recipes: Dict[str, BaseRecipe] = {}
         self._aliases: Dict[str, str] = {
+            "translation": "text_translation",
             "classification_evaluator": "model_evaluator",
             "regression_evaluator": "model_evaluator",
             "model_governance_card": "mlflow_tracker",
