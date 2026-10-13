@@ -611,15 +611,14 @@ class TranslationRecipe(BaseRecipe):
             "type": "object",
             "properties": {
                 "columns": {
-                    "type": "array",
-                    "items": {"type": "string"},
+                    "type": "column",
+                    "input_type": "column_select",
                     "title": "Target Text Columns",
-                    "description": "Text columns to translate into another language. If left empty, all detected text/object columns will be translated.",
-                    "format": "column",
-                    "ui:widget": "column_select"
+                    "description": "Text columns to translate into another language. If left empty, all detected text/object columns will be translated."
                 },
                 "target_language": {
-                    "type": "string",
+                    "type": "select",
+                    "input_type": "dropdown",
                     "title": "Target Language",
                     "enum": [
                         "Spanish (es)",
@@ -641,7 +640,8 @@ class TranslationRecipe(BaseRecipe):
                     "description": "Destination language for the translation."
                 },
                 "source_language": {
-                    "type": "string",
+                    "type": "select",
+                    "input_type": "dropdown",
                     "title": "Source Language",
                     "enum": [
                         "Auto-Detect (auto)",
@@ -661,7 +661,8 @@ class TranslationRecipe(BaseRecipe):
                     "description": "Source language code or 'auto' for automatic detection."
                 },
                 "engine": {
-                    "type": "string",
+                    "type": "select",
+                    "input_type": "dropdown",
                     "title": "Translation Engine",
                     "enum": [
                         "Offline Dictionary (Fast & Deterministic)",
@@ -673,12 +674,14 @@ class TranslationRecipe(BaseRecipe):
                 },
                 "append_columns": {
                     "type": "boolean",
+                    "input_type": "boolean",
                     "title": "Append Output Columns",
                     "default": True,
                     "description": "When true, appends new translated columns alongside existing columns. When false, replaces original text columns."
                 },
                 "output_suffix": {
-                    "type": "string",
+                    "type": "text",
+                    "input_type": "text",
                     "title": "Output Column Suffix",
                     "default": "_translated",
                     "description": "Suffix for newly appended translated columns (e.g. '_translated' or '_es')."
