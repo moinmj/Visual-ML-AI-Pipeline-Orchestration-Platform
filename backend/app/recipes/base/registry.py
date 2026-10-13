@@ -40,6 +40,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "isolation_forest": ("Modeling", "Anomaly Detection"),
     "statistical_guardrail": ("Modeling", "Anomaly Detection"),
     "model_evaluator": ("Evaluation & Governance", "Evaluation"),
+    "object_detection": ("Modeling", "Computer Vision & Audio"),
     "mlflow_tracker": ("Evaluation & Governance", "Tracking & Registry"),
 
     # Flow Control

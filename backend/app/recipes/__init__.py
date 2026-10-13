@@ -63,6 +63,11 @@ from backend.app.recipes.integrations.google_drive import GoogleDriveRecipe
 from backend.app.recipes.integrations.openweathermap import OpenWeatherMapRecipe
 
 
+#computer vision recipes
+from backend.app.recipes.vision.object_detection import ObjectDetectionRecipe
+...
+recipe_registry.register(ObjectDetectionRecipe())
+
 def register_all_recipes():
     recipe_registry.register(CSVLoaderRecipe())
     recipe_registry.register(ExportWriterRecipe())
