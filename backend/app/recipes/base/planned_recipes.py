@@ -206,14 +206,6 @@ _PLANNED: List[Tuple[str, str, str, List[Tuple[str, str, str, str]]]] = [
         ("audit_log_exporter", "Audit Log / Compliance Trail Exporter", "sink", "Exports a compliance audit trail of pipeline runs, data and model versions."),
         ("model_card_generator", "Model Card Generator", "model_report", "Generates a model card documenting purpose, data, metrics and limitations."),
     ]),
-    ("Evaluation & Governance", "Deployment & Monitoring", "monitoring", [
-        ("model_serving_endpoint", "Model Serving / Deployment Endpoint", "serve", "Deploys a trained model as a live prediction endpoint."),
-        ("model_drift_monitor", "Drift / Monitoring Operator (model performance)", "monitor", "Tracks model performance over time and alerts when it degrades."),
-        ("data_drift_detector", "Data Drift Detector (input distribution)", "monitor", "Detects when incoming data no longer matches the training data distribution."),
-        ("rollback_trigger", "Rollback Trigger", "serve", "Automatically rolls back to the previous model version when checks fail."),
-        ("cost_latency_monitor", "Cost/Latency Monitor", "monitor", "Monitors prediction latency and compute cost per run or request."),
-        ("cost_attribution_report", "Cost Attribution Report", "report", "Breaks down platform and compute costs by pipeline, team or project."),
-    ]),
 
     # ------------------------------------------------------------------ 5. Canvas Tools (10)
     ("Canvas Tools", "Documentation & Layout", "canvas", [
