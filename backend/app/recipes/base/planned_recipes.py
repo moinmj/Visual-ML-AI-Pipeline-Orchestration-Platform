@@ -165,7 +165,6 @@ _PLANNED: List[Tuple[str, str, str, List[Tuple[str, str, str, str]]]] = [
         ("sentiment_analysis", "Sentiment Analysis", "transform", "Scores text columns as positive, negative or neutral."),
         ("text_translation", "Translation", "transform", "Translates text columns into another language."),
         ("text_summarization", "Summarization", "transform", "Generates short summaries of long text columns."),
-        ("pii_entity_masking", "PII / Entity Masking", "transform", "Detects names, emails, phone numbers and other entities in text and masks them."),
         ("document_parsing", "Document Parsing", "transform", "Extracts text and tables from PDF, Word and other documents."),
     ]),
 

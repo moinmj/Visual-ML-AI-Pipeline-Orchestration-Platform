@@ -30,6 +30,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "translation": ("Data Preparation & Transformation", "NLP/Text"),
     "text_summarization": ("Data Preparation & Transformation", "NLP/Text"),
     "summarization": ("Data Preparation & Transformation", "NLP/Text"),
+    "pii_entity_masking": ("Data Preparation & Transformation", "NLP/Text"),
     "train_test_split": ("Data Preparation & Transformation", "Splitting"),
     "stratified_split": ("Data Preparation & Transformation", "Splitting"),
     "time_series_split": ("Data Preparation & Transformation", "Splitting"),
