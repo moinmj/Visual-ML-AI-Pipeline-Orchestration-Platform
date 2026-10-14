@@ -152,60 +152,127 @@ class ChampionChallengerRecipe(BaseRecipe):
         max_lat_reg = float(config.get("max_latency_regression_pct") or 20.0)
         champ_base_cfg = config.get("champion_baseline_score")
 
-        # 2. Resolve Test DataFrame
-        df = None
-        for candidate in [inputs.get("dataframe"), inputs.get("test_data"), inputs.get("test_df"), inputs.get("input"), inputs.get("left_dataframe")]:
-            if candidate is not None and isinstance(candidate, pd.DataFrame):
-                df = candidate
-                break
+        # 2. Resolve Models First (to know expected feature structure)
+        champ_model = inputs.get("champion_model") or inputs.get("production_model")
+        chall_model = inputs.get("challenger_model") or inputs.get("candidate_model")
 
-        if df is None and context and isinstance(context, dict):
-            for candidate in [context.get("test_data"), context.get("test_df"), context.get("X_test"), context.get("dataframe")]:
+        if inputs.get("model_1") and inputs.get("model_2"):
+            champ_model = inputs.get("model_1")
+            chall_model = inputs.get("model_2")
+        elif chall_model is None and inputs.get("model"):
+            # Upstream pipeline trained model is candidate challenger
+            chall_model = inputs.get("model")
+        elif champ_model is None and inputs.get("model"):
+            champ_model = inputs.get("model")
+
+        if chall_model is None and context and isinstance(context, dict):
+            chall_model = context.get("candidate_model") or context.get("challenger_model")
+            if chall_model is None and champ_model != context.get("model"):
+                chall_model = context.get("model")
+
+        if champ_model is None and context and isinstance(context, dict):
+            champ_model = context.get("champion_model")
+
+        # 3. Resolve Test Data & Features
+        X_eval = None
+        y_true = None
+        out_df = None
+
+        # Check for pre-split X_test and y_test from upstream trainer or split node
+        candidate_X_test = None
+        for cand in [inputs.get("X_test"), inputs.get("test_data"), inputs.get("test_df")]:
+            if cand is not None:
+                if isinstance(cand, pd.DataFrame):
+                    candidate_X_test = cand
+                    break
+                elif isinstance(cand, dict) and "X_test" in cand and isinstance(cand["X_test"], pd.DataFrame):
+                    candidate_X_test = cand["X_test"]
+                    break
+
+        if candidate_X_test is None and context and isinstance(context, dict):
+            for cand in [context.get("X_test"), context.get("test_data"), context.get("test_df")]:
+                if cand is not None:
+                    if isinstance(cand, pd.DataFrame):
+                        candidate_X_test = cand
+                        break
+                    elif isinstance(cand, dict) and "X_test" in cand and isinstance(cand["X_test"], pd.DataFrame):
+                        candidate_X_test = cand["X_test"]
+                        break
+
+        candidate_y_test = None
+        for cand in [inputs.get("y_test"), inputs.get("test_data"), inputs.get("test_df")]:
+            if cand is not None:
+                if isinstance(cand, (pd.Series, np.ndarray, list)):
+                    candidate_y_test = cand
+                    break
+                elif isinstance(cand, dict) and "y_test" in cand:
+                    candidate_y_test = cand["y_test"]
+                    break
+
+        if candidate_y_test is None and context and isinstance(context, dict):
+            for cand in [context.get("y_test"), context.get("test_data"), context.get("test_df")]:
+                if cand is not None:
+                    if isinstance(cand, (pd.Series, np.ndarray, list)):
+                        candidate_y_test = cand
+                        break
+                    elif isinstance(cand, dict) and "y_test" in cand:
+                        candidate_y_test = cand["y_test"]
+                        break
+
+        if candidate_X_test is not None and candidate_y_test is not None:
+            X_eval = candidate_X_test.copy()
+            y_s = pd.Series(candidate_y_test) if not isinstance(candidate_y_test, pd.Series) else candidate_y_test
+            y_true = pd.to_numeric(y_s, errors="coerce").fillna(0).to_numpy()
+            out_df = X_eval.copy()
+            out_df[target_col] = y_true
+        else:
+            df = None
+            for candidate in [inputs.get("dataframe"), inputs.get("input"), inputs.get("left_dataframe"), inputs.get("test_data")]:
                 if candidate is not None and isinstance(candidate, pd.DataFrame):
                     df = candidate
                     break
 
-        # Standalone mock generation if executed in isolation
-        if df is None or not isinstance(df, pd.DataFrame) or df.empty:
-            np.random.seed(42)
-            n_eval = 500
-            x1 = np.random.randn(n_eval)
-            x2 = np.random.randn(n_eval)
-            if task_type == "regression":
-                y = 2.5 * x1 - 1.2 * x2 + np.random.randn(n_eval) * 0.5
-            else:
-                p = 1.0 / (1.0 + np.exp(-(1.8 * x1 - 1.5 * x2)))
-                y = np.random.binomial(1, p, n_eval)
-            df = pd.DataFrame({"feature_1": x1, "feature_2": x2, "target": y})
-            target_col = "target"
+            if df is None and context and isinstance(context, dict):
+                for candidate in [context.get("dataframe"), context.get("test_data"), context.get("X_test")]:
+                    if candidate is not None and isinstance(candidate, pd.DataFrame):
+                        df = candidate
+                        break
 
-        out_df = df.copy()
-
-        # Resolve ground truth target
-        if target_col not in out_df.columns:
-            if context and isinstance(context, dict) and context.get("target_column") in out_df.columns:
-                target_col = context.get("target_column")
-            else:
-                candidates = ["target", "label", "churn", "converted", "y", "actual", "class"]
-                found_target = next((c for c in candidates if c in out_df.columns), None)
-                if found_target:
-                    target_col = found_target
+            # Standalone mock generation if executed in isolation
+            if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+                np.random.seed(42)
+                n_eval = 500
+                x1 = np.random.randn(n_eval)
+                x2 = np.random.randn(n_eval)
+                if task_type == "regression":
+                    y = 2.5 * x1 - 1.2 * x2 + np.random.randn(n_eval) * 0.5
                 else:
-                    # Pick last column
-                    target_col = out_df.columns[-1]
+                    p = 1.0 / (1.0 + np.exp(-(1.8 * x1 - 1.5 * x2)))
+                    y = np.random.binomial(1, p, n_eval)
+                df = pd.DataFrame({"feature_1": x1, "feature_2": x2, "target": y})
+                target_col = "target"
 
-        y_true = pd.to_numeric(out_df[target_col], errors="coerce").fillna(0).values
-        feature_cols = [c for c in out_df.columns if c != target_col and pd.api.types.is_numeric_dtype(out_df[c])]
-        if not feature_cols:
-            feature_cols = [c for c in out_df.columns if c != target_col]
-        X_eval = out_df[feature_cols].copy().fillna(0).to_numpy(dtype=float)
+            out_df = df.copy()
 
-        # 3. Resolve Models
-        champ_model = inputs.get("champion_model") or inputs.get("model") or inputs.get("model_1")
-        chall_model = inputs.get("challenger_model") or inputs.get("candidate_model") or inputs.get("model_2")
+            # Resolve ground truth target
+            if target_col not in out_df.columns:
+                if context and isinstance(context, dict) and context.get("target_column") in out_df.columns:
+                    target_col = context.get("target_column")
+                else:
+                    candidates = ["target", "label", "churn", "converted", "y", "actual", "class"]
+                    found_target = next((c for c in candidates if c in out_df.columns), None)
+                    if found_target:
+                        target_col = found_target
+                    else:
+                        target_col = out_df.columns[-1]
 
-        if champ_model is None and context and isinstance(context, dict):
-            champ_model = context.get("model")
+            y_true = pd.to_numeric(out_df[target_col], errors="coerce").fillna(0).values
+
+            # Determine feature columns
+            feature_cols = [c for c in out_df.columns if c != target_col and pd.api.types.is_numeric_dtype(out_df[c])]
+            if not feature_cols:
+                feature_cols = [c for c in out_df.columns if c != target_col]
+            X_eval = out_df[feature_cols].copy().fillna(0)
 
         # Mock fallback models if testing in isolation without pre-trained model artifacts
         if chall_model is None:
@@ -221,18 +288,53 @@ class ChampionChallengerRecipe(BaseRecipe):
             if task_type == "regression":
                 champ_model = Ridge()
             else:
-                champ_model = LogisticRegression()
-            champ_model.fit(X_eval, y_true)
+                champ_model = LogisticRegression(max_iter=500)
+            try:
+                champ_model.fit(X_eval, y_true)
+            except Exception:
+                X_mat = X_eval.to_numpy(dtype=float) if isinstance(X_eval, pd.DataFrame) else np.asarray(X_eval, dtype=float)
+                champ_model.fit(X_mat, y_true)
 
         # 4. Benchmarking Inference Latency
         def _benchmark_model(m, X) -> Tuple[np.ndarray, Optional[np.ndarray], float]:
             t0 = time.perf_counter()
-            preds = m.predict(X)
+            X_in = X
+            if hasattr(m, "feature_names_in_") and isinstance(X, pd.DataFrame):
+                missing = [c for c in m.feature_names_in_ if c not in X.columns]
+                if missing:
+                    X_df = X.copy()
+                    for col in missing:
+                        X_df[col] = 0.0
+                    X_in = X_df[list(m.feature_names_in_)]
+                else:
+                    X_in = X[list(m.feature_names_in_)]
+            elif hasattr(m, "n_features_in_"):
+                if isinstance(X, pd.DataFrame):
+                    if X.shape[1] != m.n_features_in_:
+                        X_num = X.select_dtypes(include=[np.number])
+                        if X_num.shape[1] == m.n_features_in_:
+                            X_in = X_num
+                        else:
+                            arr = X_num.to_numpy(dtype=float) if not X_num.empty else X.to_numpy()
+                            if arr.shape[1] < m.n_features_in_:
+                                pad = np.zeros((arr.shape[0], m.n_features_in_ - arr.shape[1]))
+                                X_in = np.hstack([arr, pad])
+                            else:
+                                X_in = arr[:, :m.n_features_in_]
+                elif hasattr(X, "shape") and X.shape[1] != m.n_features_in_:
+                    arr = np.asarray(X)
+                    if arr.shape[1] < m.n_features_in_:
+                        pad = np.zeros((arr.shape[0], m.n_features_in_ - arr.shape[1]))
+                        X_in = np.hstack([arr, pad])
+                    else:
+                        X_in = arr[:, :m.n_features_in_]
+
+            preds = m.predict(X_in)
             t_ms = (time.perf_counter() - t0) * 1000.0
             probs = None
             if hasattr(m, "predict_proba"):
                 try:
-                    probs_all = m.predict_proba(X)
+                    probs_all = m.predict_proba(X_in)
                     probs = probs_all[:, 1] if probs_all.shape[1] > 1 else probs_all[:, 0]
                 except Exception:
                     pass
@@ -444,13 +546,26 @@ class ChampionChallengerRecipe(BaseRecipe):
             "status": "SUCCESS"
         }
 
-        return {
+        promoted_model = chall_model if "PROMOTE" in decision or "CHALLENGER" in decision else champ_model
+        output_res = {
             "dataframe": out_df,
+            "model": promoted_model,
+            "champion_model": champ_model,
+            "challenger_model": chall_model,
+            "promoted_model": promoted_model,
+            "task_type": task_type,
             "report": report_text,
             "metrics": metrics_payload,
             "output_summary": summary_payload,
             "comparison_summary": metrics_payload
         }
+        for k in ["feature_names", "X_test", "y_test", "target_classes", "target_encoder"]:
+            if inputs.get(k) is not None:
+                output_res[k] = inputs[k]
+            elif context and isinstance(context, dict) and context.get(k) is not None:
+                output_res[k] = context[k]
+
+        return output_res
 
     def to_code(self, config: Dict[str, Any]) -> str:
         metric = repr(config.get("comparison_metric", "f1"))

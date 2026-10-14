@@ -436,13 +436,20 @@ class ABTestingFrameworkRecipe(BaseRecipe):
         out_df["experiment_analyzed"] = True
         out_df["is_treatment"] = treat_mask.astype(int)
 
-        return {
+        ret = {
             "dataframe": out_df,
             "report": report_text,
             "metrics": metrics_payload,
             "output_summary": summary_payload,
             "experiment_summary": metrics_payload
         }
+        for k in ["model", "feature_names", "champion_model", "challenger_model", "promoted_model", "task_type", "X_test", "y_test", "target_classes"]:
+            if inputs.get(k) is not None:
+                ret[k] = inputs[k]
+            elif context and isinstance(context, dict) and context.get(k) is not None:
+                ret[k] = context[k]
+
+        return ret
 
     def to_code(self, config: Dict[str, Any]) -> str:
         v_col = repr(config.get("variant_column", "variant"))
