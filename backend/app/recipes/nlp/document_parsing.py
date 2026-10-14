@@ -431,12 +431,12 @@ class DocumentParsingRecipe(BaseRecipe):
                     "input_type": "dataset_select",
                     "description": "Optional ID of an uploaded document file or dataset to parse."
                 },
-                "file_path_column": {
+                "file_path_field": {
                     "type": "string",
-                    "title": "File Path Column",
+                    "title": "File Path Column (Optional)",
                     "default": "",
                     "input_type": "column_select",
-                    "description": "Column in upstream DataFrame containing file paths or filenames (auto-detected if blank)."
+                    "description": "Optional column in upstream DataFrame containing file paths or filenames."
                 },
                 "text_column": {
                     "type": "string",
@@ -478,7 +478,7 @@ class DocumentParsingRecipe(BaseRecipe):
         output_format = config.get("output_format", "Per Page / Section")
         doc_path = config.get("document_path") or config.get("file_path") or ""
         dataset_id = config.get("dataset_id")
-        file_path_col = config.get("file_path_column") or ""
+        file_path_col = config.get("file_path_field") or config.get("file_path_column") or ""
         text_col = config.get("text_column") or ""
         clean_ws = config.get("clean_whitespace", True)
         max_pages = config.get("max_pages") or 100
