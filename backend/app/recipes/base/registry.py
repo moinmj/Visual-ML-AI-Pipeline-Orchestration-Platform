@@ -47,6 +47,8 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "isolation_forest": ("Modeling", "Anomaly Detection"),
     "statistical_guardrail": ("Modeling", "Anomaly Detection"),
     "model_evaluator": ("Evaluation & Governance", "Evaluation"),
+    "ab_testing_framework": ("Evaluation & Governance", "Evaluation"),
+    "champion_challenger": ("Evaluation & Governance", "Evaluation"),
     "object_detection": ("Modeling", "Computer Vision & Audio"),
     "mlflow_tracker": ("Evaluation & Governance", "Tracking & Registry"),
 
@@ -123,6 +125,11 @@ class RecipeRegistry:
             "latency_monitor": "cost_latency_monitor",
             "cost_attribution": "cost_attribution_report",
             "finops_report": "cost_attribution_report",
+            "ab_testing": "ab_testing_framework",
+            "ab_test": "ab_testing_framework",
+            "experiment_framework": "ab_testing_framework",
+            "champion_challenger_comparison": "champion_challenger",
+            "champion_vs_challenger": "champion_challenger",
         }
 
     def register(self, recipe: BaseRecipe):

@@ -29,6 +29,8 @@ from backend.app.recipes.training.logistic_regression_trainer import LogisticReg
 from backend.app.recipes.training.lightgbm_trainer import LightGBMTrainerRecipe
 from backend.app.recipes.training.catboost_trainer import CatBoostTrainerRecipe
 from backend.app.recipes.evaluation.model_evaluator import ModelEvaluatorRecipe
+from backend.app.recipes.evaluation.ab_testing_framework import ABTestingFrameworkRecipe
+from backend.app.recipes.evaluation.champion_challenger import ChampionChallengerRecipe
 from backend.app.recipes.anomaly.isolation_forest import IsolationForestRecipe
 from backend.app.recipes.anomaly.statistical_guardrail import StatisticalGuardrailRecipe
 from backend.app.recipes.forecasting.lag_features import LagFeatureEngineeringRecipe
@@ -125,6 +127,8 @@ def register_all_recipes():
     recipe_registry.register(LightGBMTrainerRecipe())
     recipe_registry.register(CatBoostTrainerRecipe())
     recipe_registry.register(ModelEvaluatorRecipe())
+    recipe_registry.register(ABTestingFrameworkRecipe())
+    recipe_registry.register(ChampionChallengerRecipe())
     recipe_registry.register(IsolationForestRecipe())
     recipe_registry.register(StatisticalGuardrailRecipe())
     recipe_registry.register(LagFeatureEngineeringRecipe())

@@ -194,11 +194,7 @@ _PLANNED: List[Tuple[str, str, str, List[Tuple[str, str, str, str]]]] = [
         ("video_object_tracking", "Video Frame Extractor + Object Tracking", "transform", "Extracts frames from video and tracks objects across them."),
     ]),
 
-    # ------------------------------------------------------------------ 4. Evaluation & Governance (12)
-    ("Evaluation & Governance", "Evaluation", "evaluation", [
-        ("ab_testing_framework", "A/B Testing / Experiment Framework", "monitor", "Analyses experiment results and tests whether differences are significant."),
-        ("champion_challenger", "Champion / Challenger Comparison", "evaluate", "Compares a new model against the current production model on the same data."),
-    ]),
+    # ------------------------------------------------------------------ 4. Evaluation & Governance (10)
     ("Evaluation & Governance", "Fairness & Compliance", "governance", [
         ("bias_fairness_audit", "Bias & Fairness Audit", "evaluate", "Measures model bias across groups using standard fairness metrics."),
         ("fairness_slicing_report", "Fairness Slicing Report (by protected group)", "evaluate", "Breaks down model performance by protected attributes (e.g. gender, age band)."),
