@@ -239,11 +239,87 @@ class ClusteringRecipe(BaseRecipe):
         # Metrics computation
         unique_labels = sorted(list(set(labels)))
         cluster_dist: Dict[str, Any] = {}
+        cluster_sizes: List[Dict[str, Any]] = []
         for lbl in unique_labels:
             cnt = int((labels == lbl).sum())
             pct = round((cnt / len(labels)) * 100.0, 2)
             name = f"Cluster {lbl}" if lbl != -1 else "Noise (-1)"
             cluster_dist[name] = {"count": cnt, "percentage": pct}
+            cluster_sizes.append({
+                "cluster": name,
+                "name": name,
+                "label": name,
+                "cluster_id": int(lbl),
+                "count": cnt,
+                "percentage": pct
+            })
+
+        # 2D Scatter plot & preview coordinates
+        scatter_points: List[Dict[str, Any]] = []
+        centroids: List[Dict[str, Any]] = []
+
+        x_col = feature_cols[0] if len(feature_cols) >= 1 else "x"
+        y_col = feature_cols[1] if len(feature_cols) >= 2 else (feature_cols[0] if len(feature_cols) == 1 else "y")
+
+        # Downsample points for responsive UI rendering (up to 300 points)
+        sample_size = min(300, len(out_df))
+        if len(out_df) > sample_size:
+            sample_indices = np.random.RandomState(random_state).choice(len(out_df), sample_size, replace=False)
+        else:
+            sample_indices = np.arange(len(out_df))
+
+        for idx in sample_indices:
+            row = out_df.iloc[idx]
+            lbl = int(row[cluster_col])
+            name = f"Cluster {lbl}" if lbl != -1 else "Noise (-1)"
+            val_x = float(row[x_col]) if x_col in row and pd.notna(row[x_col]) else 0.0
+            val_y = float(row[y_col]) if y_col in row and pd.notna(row[y_col]) else 0.0
+
+            point_dict: Dict[str, Any] = {
+                "x": round(val_x, 4),
+                "y": round(val_y, 4),
+                "cluster": lbl,
+                "cluster_id": lbl,
+                "cluster_name": name,
+                "label": name,
+            }
+            if x_col:
+                point_dict[x_col] = round(val_x, 4)
+            if y_col and y_col != x_col:
+                point_dict[y_col] = round(val_y, 4)
+            point_dict[cluster_col] = lbl
+            scatter_points.append(point_dict)
+
+        # Centroids calculation (for KMeans / MiniBatchKMeans)
+        if hasattr(fitted_model, "cluster_centers_") and fitted_model.cluster_centers_ is not None:
+            centers = fitted_model.cluster_centers_
+            if scaler is not None and hasattr(scaler, "inverse_transform"):
+                try:
+                    centers_orig = scaler.inverse_transform(centers)
+                except Exception:
+                    centers_orig = centers
+            else:
+                centers_orig = centers
+
+            for c_idx, center in enumerate(centers_orig):
+                cx = float(center[0]) if len(center) > 0 else 0.0
+                cy = float(center[1]) if len(center) > 1 else cx
+                centroids.append({
+                    "cluster": f"Cluster {c_idx}",
+                    "cluster_id": int(c_idx),
+                    "name": f"Centroid {c_idx}",
+                    "x": round(cx, 4),
+                    "y": round(cy, 4)
+                })
+
+        scatter_plot: Dict[str, Any] = {
+            "x_axis": x_col,
+            "y_axis": y_col,
+            "features": [x_col, y_col] if x_col != y_col else [x_col],
+            "points": scatter_points,
+            "centroids": centroids,
+            "total_points": len(scatter_points)
+        }
 
         metrics: Dict[str, Any] = {
             "algorithm": algorithm,
@@ -251,6 +327,12 @@ class ClusteringRecipe(BaseRecipe):
             "features_used": feature_cols,
             "n_clusters_found": len([l for l in unique_labels if l != -1]),
             "cluster_distribution": cluster_dist,
+            "cluster_sizes": cluster_sizes,
+            "cluster_counts": {item["cluster"]: item["count"] for item in cluster_sizes},
+            "bar_chart": cluster_sizes,
+            "bar_chart_data": cluster_sizes,
+            "scatter_plot": scatter_plot,
+            "scatter_preview": scatter_points[:150],
             "noise_count": int((labels == -1).sum()) if -1 in unique_labels else 0
         }
 
@@ -274,18 +356,17 @@ class ClusteringRecipe(BaseRecipe):
             except Exception:
                 pass
 
-        # 2D Scatter preview (first two features + cluster)
-        scatter_sample = []
-        if len(feature_cols) >= 2:
-            sub_df = out_df[[feature_cols[0], feature_cols[1], cluster_col]].head(150)
-            scatter_sample = sub_df.to_dict(orient="records")
-        metrics["scatter_preview"] = scatter_sample
-
         summary = {
             "title": "Clustering Completed",
             "algorithm": algorithm,
             "n_clusters": metrics["n_clusters_found"],
             "features": feature_cols,
+            "total_rows": len(out_df),
+            "cluster_distribution": cluster_dist,
+            "cluster_sizes": cluster_sizes,
+            "cluster_counts": {item["cluster"]: item["count"] for item in cluster_sizes},
+            "bar_chart": cluster_sizes,
+            "scatter_plot": scatter_plot,
             "status": "SUCCESS"
         }
 

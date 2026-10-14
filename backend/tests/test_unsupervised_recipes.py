@@ -49,6 +49,14 @@ def test_clustering_kmeans_execution():
     assert result["metrics"]["n_clusters_found"] == 2
     assert "silhouette_score" in result["metrics"]
     assert "scatter_preview" in result["metrics"]
+    assert "cluster_sizes" in result["metrics"]
+    assert len(result["metrics"]["cluster_sizes"]) == 2
+    assert "scatter_plot" in result["metrics"]
+    assert "centroids" in result["metrics"]["scatter_plot"]
+    assert len(result["metrics"]["scatter_plot"]["centroids"]) == 2
+    assert "cluster_sizes" in result["output_summary"]
+    assert "bar_chart" in result["output_summary"]
+    assert "scatter_plot" in result["output_summary"]
 
 
 def test_clustering_dbscan_and_agglomerative():
