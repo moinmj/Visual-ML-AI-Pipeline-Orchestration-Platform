@@ -4,6 +4,7 @@ from backend.app.recipes.nlp.sentiment_analysis import SentimentAnalysisRecipe
 from backend.app.recipes.nlp.translation import TranslationRecipe
 from backend.app.recipes.nlp.summarization import SummarizationRecipe
 from backend.app.recipes.nlp.pii_masking import PIIEntityMaskingRecipe
+from backend.app.recipes.nlp.document_parsing import DocumentParsingRecipe
 
 __all__ = [
     "TextPreprocessorRecipe",
@@ -11,6 +12,7 @@ __all__ = [
     "SentimentAnalysisRecipe",
     "TranslationRecipe",
     "SummarizationRecipe",
-    "PIIEntityMaskingRecipe"
+    "PIIEntityMaskingRecipe",
+    "DocumentParsingRecipe"
 ]
 
