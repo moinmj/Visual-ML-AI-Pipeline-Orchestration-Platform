@@ -51,6 +51,7 @@ async def get_recipe_schema(recipe_id: str):
     return {
         "recipe_id": meta.recipe_id,
         "name": meta.name,
+        "media_type": meta.media_type,
         "parameters_schema": meta.parameters_schema,
         "enabled": meta.enabled,
     }

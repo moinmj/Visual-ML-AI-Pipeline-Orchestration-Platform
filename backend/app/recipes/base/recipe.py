@@ -19,6 +19,9 @@ class RecipeMetadata(BaseModel):
     category: str
     group: Optional[str] = None
     subgroup: Optional[str] = None
+    # Kind of unstructured file the recipe works on: "image", "audio" or "video".
+    # None for ordinary table recipes. The frontend uses it to filter the file picker.
+    media_type: Optional[str] = None
     description: str
     input_types: List[str]
     output_types: List[str]
@@ -39,6 +42,7 @@ class BaseRecipe(ABC):
     name: str
     version: str = "1.0.0"
     category: str
+    media_type: Optional[str] = None  # "image" | "audio" | "video" for media recipes, else None
     description: str
     input_types: List[str]
     output_types: List[str]
@@ -112,6 +116,7 @@ class BaseRecipe(ABC):
             name=self.name,
             version=self.version,
             category=self.category,
+            media_type=self.media_type,
             description=self.description,
             input_types=self.input_types,
             output_types=self.output_types,

@@ -134,6 +134,7 @@ class ObjectDetectionRecipe(BaseRecipe):
     name = "Object Detection"
     version = "1.1.0"
     category = "vision_audio"
+    media_type = "image"
     description = "Detects and locates objects in images with bounding boxes."
     input_types = ["dataframe"]
     output_types = ["dataframe"]
@@ -146,6 +147,7 @@ class ObjectDetectionRecipe(BaseRecipe):
                     "type": "array",
                     "items": {"type": "string"},
                     "title": "Image Files",
+                    "widget": "file_picker",
                     "file_kind": "image",
                     "maxItems": MAX_IMAGES_PER_RUN,
                     "description": (
@@ -156,11 +158,13 @@ class ObjectDetectionRecipe(BaseRecipe):
                 "image_column": {
                     "type": "string",
                     "title": "Image Column",
+                    "widget": "column_picker",
                     "description": "Only when a table is connected: the column holding the Ozone path of each image (s3://... or a path inside your folder).",
                 },
                 "model": {
                     "type": "select",
                     "title": "Detection Model",
+                    "widget": "select",
                     "enum": SUPPORTED_MODELS,
                     "default": DEFAULT_MODEL,
                     "description": "Pretrained YOLO model (80 COCO classes). Bigger models are more accurate but slower.",
@@ -168,6 +172,7 @@ class ObjectDetectionRecipe(BaseRecipe):
                 "confidence_threshold": {
                     "type": "number",
                     "title": "Confidence Threshold",
+                    "widget": "slider",
                     "default": 0.25,
                     "minimum": 0.01,
                     "maximum": 1.0,
@@ -176,6 +181,7 @@ class ObjectDetectionRecipe(BaseRecipe):
                 "iou_threshold": {
                     "type": "number",
                     "title": "Overlap (NMS IoU) Threshold",
+                    "widget": "slider",
                     "default": 0.7,
                     "minimum": 0.1,
                     "maximum": 1.0,
@@ -184,6 +190,7 @@ class ObjectDetectionRecipe(BaseRecipe):
                 "max_detections": {
                     "type": "integer",
                     "title": "Max Objects per Image",
+                    "widget": "number",
                     "default": 100,
                     "minimum": 1,
                     "maximum": 1000,
@@ -191,6 +198,7 @@ class ObjectDetectionRecipe(BaseRecipe):
                 "image_size": {
                     "type": "integer",
                     "title": "Inference Image Size (px)",
+                    "widget": "number",
                     "default": 640,
                     "minimum": 32,
                     "maximum": 1920,
@@ -199,11 +207,13 @@ class ObjectDetectionRecipe(BaseRecipe):
                     "type": "array",
                     "items": {"type": "string"},
                     "title": "Only These Classes",
+                    "widget": "tags",
                     "description": "Optional. Keep only these labels, e.g. person, car. Empty = all classes.",
                 },
                 "output_format": {
                     "type": "select",
                     "title": "Output Format",
+                    "widget": "select",
                     "enum": ["one_row_per_image", "one_row_per_detection"],
                     "default": "one_row_per_image",
                     "description": "One row per image (detections as JSON) or one row per detected object.",
@@ -211,6 +221,7 @@ class ObjectDetectionRecipe(BaseRecipe):
                 "save_annotated_images": {
                     "type": "boolean",
                     "title": "Save Annotated Images",
+                    "widget": "toggle",
                     "default": False,
                     "description": f"Saves a copy of each image with boxes drawn into your Ozone folder ({OUTPUT_FOLDER}/<model>_<time>/).",
                 },
