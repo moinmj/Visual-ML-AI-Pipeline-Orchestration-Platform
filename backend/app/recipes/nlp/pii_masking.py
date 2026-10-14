@@ -252,38 +252,39 @@ def mask_text_pii(
             for m in REGEX_EMAIL.finditer(text):
                 candidates.append((m.start(), m.end(), 4, "EMAIL", m.group()))
 
-        # 5. IP Addresses (Priority 5)
+        # 5. IBAN & Account Numbers (Priority 5 - before phone)
+        if include_all or include_financial:
+            for m in REGEX_IBAN.finditer(text):
+                candidates.append((m.start(), m.end(), 5, "IBAN", m.group()))
+            for m in REGEX_ACCOUNT_NUM.finditer(text):
+                candidates.append((m.start(1), m.end(1), 5, "ACCOUNT_NUM", m.group(1)))
+
+        # 6. IP Addresses (Priority 6)
         if include_all:
             for m in REGEX_IPV4.finditer(text):
-                candidates.append((m.start(), m.end(), 5, "IP_ADDRESS", m.group()))
+                candidates.append((m.start(), m.end(), 6, "IP_ADDRESS", m.group()))
             for m in REGEX_IPV6.finditer(text):
-                candidates.append((m.start(), m.end(), 5, "IP_ADDRESS", m.group()))
+                candidates.append((m.start(), m.end(), 6, "IP_ADDRESS", m.group()))
 
-        # 6. Phone Numbers (Priority 6)
+        # 7. Phone Numbers (Priority 7)
         if include_all or include_contact:
             for m in REGEX_PHONE.finditer(text):
                 p_text = m.group()
                 digits = sum(c.isdigit() for c in p_text)
                 # Ensure plausible phone length (7 to 15 digits) and avoids plain numbers like '2024'
                 if 7 <= digits <= 15 and ("-" in p_text or "(" in p_text or "+" in p_text or " " in p_text or digits >= 10):
-                    candidates.append((m.start(), m.end(), 6, "PHONE", p_text))
+                    candidates.append((m.start(), m.end(), 7, "PHONE", p_text))
 
-        # 7. DOB & Financial (Priority 7)
+        # 8. DOB (Priority 8)
         if include_all or include_personal:
             for m in REGEX_DOB.finditer(text):
                 # Mask the date value itself
-                candidates.append((m.start(1), m.end(1), 7, "DOB", m.group(1)))
+                candidates.append((m.start(1), m.end(1), 8, "DOB", m.group(1)))
 
-        if include_all or include_financial:
-            for m in REGEX_IBAN.finditer(text):
-                candidates.append((m.start(), m.end(), 7, "IBAN", m.group()))
-            for m in REGEX_ACCOUNT_NUM.finditer(text):
-                candidates.append((m.start(1), m.end(1), 7, "ACCOUNT_NUM", m.group(1)))
-
-        # 8. Person Names (Priority 8)
+        # 9. Person Names (Priority 9)
         if include_all or include_personal:
             for start, end, name_val in detect_names_in_text(text):
-                candidates.append((start, end, 8, "NAME", name_val))
+                candidates.append((start, end, 9, "NAME", name_val))
 
     if not candidates:
         return (text, {})
