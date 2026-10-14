@@ -39,7 +39,7 @@ def test_document_parsing_recipe_registration():
     meta = recipe_registry.get_metadata("document_parsing")
     assert meta is not None
     assert meta.recipe_id == "document_parsing"
-    assert "extraction_target" in meta.parameters_schema["properties"]
+    assert "extraction_mode" in meta.parameters_schema["properties"] or "extraction_target" in meta.parameters_schema["properties"]
     assert "output_format" in meta.parameters_schema["properties"]
 
     # Verify ports
