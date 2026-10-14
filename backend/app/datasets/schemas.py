@@ -32,6 +32,14 @@ class DatasetResponse(DatasetBase):
     }
 
 
+class OzoneObjectResponse(DatasetResponse):
+    media_type: Optional[str] = Field(None, description="Inferred media category: image, audio, video, tabular, other")
+    preview_url: Optional[str] = Field(None, description="Direct URL to preview/stream image or media file")
+    key: Optional[str] = Field(None, description="Full Ozone key")
+    relative_path: Optional[str] = Field(None, description="Path relative to tenant root or ml-workflow root")
+    scope: Optional[str] = Field(None, description="all_tenant_data or ml_workflow")
+
+
 class ColumnSchemaItem(BaseModel):
     name: str = Field(..., description="Column name")
     data_type: str = Field(..., description="Inferred semantic data type: numeric, categorical, text, datetime, boolean")

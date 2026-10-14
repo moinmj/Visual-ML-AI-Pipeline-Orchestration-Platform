@@ -27,9 +27,19 @@ def get_prefix() -> str:
     return f"{raw}/" if raw else ""
 
 
-def tenant_prefix(tenant_id: int) -> str:
-    """Folder for one tenant, e.g. 'ml-workflow/t1/'. The trailing slash matters: it keeps t1 from matching t10."""
+def tenant_ml_workflow_prefix(tenant_id: int) -> str:
+    """Folder for platform workflow files: 'ml-workflow/t<tenant_id>/'."""
     return f"{get_prefix()}t{int(tenant_id)}/"
+
+
+def tenant_root_prefix(tenant_id: int) -> str:
+    """Root folder for all tenant data in Ozone: 't<tenant_id>/'."""
+    return f"t{int(tenant_id)}/"
+
+
+def tenant_prefix(tenant_id: int) -> str:
+    """Folder for one tenant inside ml-workflow (default, backwards compatible)."""
+    return tenant_ml_workflow_prefix(tenant_id)
 
 
 def _clean_relative_key(key: str) -> str:
@@ -40,16 +50,29 @@ def _clean_relative_key(key: str) -> str:
 
 
 def with_prefix(key: str, tenant_id: int) -> str:
-    """Puts a key under the tenant's folder. Idempotent: a key already inside it is unchanged."""
+    """Puts a key under the tenant's workflow folder. Idempotent: a key already inside it is unchanged."""
     key = _clean_relative_key(key)
     prefix = tenant_prefix(tenant_id)
     return key if key.startswith(prefix) else prefix + key
 
 
-def is_in_tenant_prefix(key: str, tenant_id: int) -> bool:
-    """True only if the full object key lives inside THIS tenant's folder."""
-    key = key or ""
-    return key.startswith(tenant_prefix(tenant_id)) and ".." not in key.split("/")
+def is_in_tenant_prefix(key: str, tenant_id: int, scope: str = "any") -> bool:
+    """
+    True only if the full object key lives inside THIS tenant's folders.
+    If scope is 'ml_workflow': checks 'ml-workflow/t<tenant_id>/'.
+    If scope is 'all_tenant_data': checks 't<tenant_id>/'.
+    If scope is 'any': checks either 'ml-workflow/t<tenant_id>/' or 't<tenant_id>/'.
+    """
+    key = (key or "").strip()
+    if not key or any(part == ".." for part in key.split("/")):
+        return False
+    ml_prefix = tenant_ml_workflow_prefix(tenant_id)
+    root_prefix = tenant_root_prefix(tenant_id)
+    if scope == "ml_workflow":
+        return key.startswith(ml_prefix)
+    if scope == "all_tenant_data":
+        return key.startswith(root_prefix)
+    return key.startswith(ml_prefix) or key.startswith(root_prefix)
 
 
 def _client_config() -> Config:
@@ -152,16 +175,39 @@ def delete_file_from_ozone(ozone_key: str, tenant_id: Optional[int] = None) -> b
         return False
 
 
-def list_ozone_objects(tenant_id: int, prefix: str = "", max_keys: int = 1000):
+def list_ozone_objects(
+    tenant_id: int,
+    prefix: str = "",
+    scope: str = "ml_workflow",
+    folder: str = "all",
+    media_type: Optional[str] = None,
+    max_keys: int = 1000,
+):
     """
-    Lists objects inside the CALLER'S tenant folder only (the datalake browse option),
-    so a dataset can be registered against one without re-uploading it.
-    `prefix` narrows further within that folder ('' = the whole tenant folder).
-    Returns a list of {"key": <full key>, "size_bytes": int, "last_modified": iso-str}.
-    The returned key is the FULL key, which is what /ozone/register expects.
+    Lists objects inside the caller's tenant space in Ozone.
+    - scope="all_tenant_data": lists under 't<tenant_id>/' (entire tenant space).
+    - scope="ml_workflow": lists under 'ml-workflow/t<tenant_id>/', with optional
+      folder='datasets' (structured data) or folder='unstructured' (unstructured media).
+    - media_type: optional filter by 'image', 'audio', 'video', 'tabular', or 'all'.
     """
+    from backend.app.core import media_types as mt
+
     bucket = settings.OZONE_BUCKET
-    full_prefix = with_prefix(prefix, tenant_id) if prefix else tenant_prefix(tenant_id)
+    clean_prefix = (prefix or "").strip().lstrip("/")
+
+    if scope == "all_tenant_data":
+        base_prefix = tenant_root_prefix(tenant_id)
+        full_prefix = f"{base_prefix}{clean_prefix}"
+    else:
+        base_prefix = tenant_ml_workflow_prefix(tenant_id)
+        if folder == "datasets":
+            folder_part = "datasets/"
+        elif folder == "unstructured":
+            folder_part = "unstructured/"
+        else:
+            folder_part = ""
+        full_prefix = f"{base_prefix}{folder_part}{clean_prefix}"
+
     s3 = get_s3_client()
     items = []
     continuation_token = None
@@ -171,11 +217,33 @@ def list_ozone_objects(tenant_id: int, prefix: str = "", max_keys: int = 1000):
             kwargs["ContinuationToken"] = continuation_token
         response = s3.list_objects_v2(**kwargs)
         for obj in response.get("Contents", []):
-            if obj["Key"].endswith("/"):
+            key = obj["Key"]
+            if key.endswith("/"):
                 continue  # skip 'folder' placeholder objects
+
+            ext = mt.extension_of(key)
+            kind = mt.kind_for_extension(ext)
+            if ext in ("csv", "tsv", "xlsx", "xls", "json", "parquet"):
+                detected_kind = "tabular"
+            elif kind:
+                detected_kind = kind
+            else:
+                detected_kind = "other"
+
+            if media_type:
+                m_lower = media_type.lower().strip()
+                if m_lower not in ("", "all") and detected_kind != m_lower:
+                    continue
+
+            rel_path = key[len(base_prefix):] if key.startswith(base_prefix) else key
+            file_name = key.rsplit("/", 1)[-1]
             items.append({
-                "key": obj["Key"],
+                "key": key,
+                "relative_path": rel_path,
+                "file_name": file_name,
+                "file_format": ext or "unknown",
                 "size_bytes": obj["Size"],
+                "media_type": detected_kind,
                 "last_modified": obj["LastModified"].isoformat() if obj.get("LastModified") else None,
             })
         if not response.get("IsTruncated") or len(items) >= max_keys:

@@ -66,7 +66,7 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url=f"{settings.API_V1_STR}/openapi.json",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 # CORS configuration for future frontend integration
@@ -80,6 +80,32 @@ app.add_middleware(
     expose_headers=["X-Total-Count"],
 )
 
+
+def _custom_openapi():
+    """Injects the global Bearer security scheme so Swagger's Authorize button
+    auto-sends 'Authorization: Bearer <token>' on every protected endpoint."""
+    if app.openapi_schema:
+        return app.openapi_schema
+    from fastapi.openapi.utils import get_openapi
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+    schema.setdefault("components", {}).setdefault("securitySchemes", {})["bearerAuth"] = {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Paste your JWT token (get one from POST /api/v1/auth/login).",
+    }
+    # Apply globally — Swagger will include the Authorization header on every call.
+    schema["security"] = [{"bearerAuth": []}]
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = _custom_openapi  # type: ignore[method-assign]
 
 # Global Exception Handler
 @app.exception_handler(PlatformException)
