@@ -153,11 +153,17 @@ class ChampionChallengerRecipe(BaseRecipe):
         champ_base_cfg = config.get("champion_baseline_score")
 
         # 2. Resolve Test DataFrame
-        df = inputs.get("dataframe")
-        if df is None:
-            df = inputs.get("input") or inputs.get("test_data") or inputs.get("left_dataframe")
-            if df is None and context and isinstance(context, dict):
-                df = context.get("X_test") or context.get("test_data") or context.get("dataframe")
+        df = None
+        for candidate in [inputs.get("dataframe"), inputs.get("test_data"), inputs.get("test_df"), inputs.get("input"), inputs.get("left_dataframe")]:
+            if candidate is not None and isinstance(candidate, pd.DataFrame):
+                df = candidate
+                break
+
+        if df is None and context and isinstance(context, dict):
+            for candidate in [context.get("test_data"), context.get("test_df"), context.get("X_test"), context.get("dataframe")]:
+                if candidate is not None and isinstance(candidate, pd.DataFrame):
+                    df = candidate
+                    break
 
         # Standalone mock generation if executed in isolation
         if df is None or not isinstance(df, pd.DataFrame) or df.empty:

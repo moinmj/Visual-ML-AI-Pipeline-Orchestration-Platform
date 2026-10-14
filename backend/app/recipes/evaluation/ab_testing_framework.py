@@ -137,11 +137,17 @@ class ABTestingFrameworkRecipe(BaseRecipe):
         context: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         # 1. Resolve Input Data
-        df = inputs.get("dataframe")
-        if df is None:
-            df = inputs.get("input") or inputs.get("left_dataframe")
-            if df is None and context and isinstance(context, dict):
-                df = context.get("dataframe")
+        df = None
+        for candidate in [inputs.get("dataframe"), inputs.get("input"), inputs.get("left_dataframe"), inputs.get("test_data")]:
+            if candidate is not None and isinstance(candidate, pd.DataFrame):
+                df = candidate
+                break
+
+        if df is None and context and isinstance(context, dict):
+            for candidate in [context.get("dataframe"), context.get("test_data"), context.get("X_test")]:
+                if candidate is not None and isinstance(candidate, pd.DataFrame):
+                    df = candidate
+                    break
 
         ctrl_df = inputs.get("control")
         treat_df = inputs.get("treatment")
