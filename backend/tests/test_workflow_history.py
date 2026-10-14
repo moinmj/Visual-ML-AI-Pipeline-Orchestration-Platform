@@ -755,6 +755,84 @@ async def test_workflow_save_without_execution_id_adopts_latest_job():
         assert hist[1]["run_label"] == "Run #1"
 
 
+@pytest.mark.asyncio
+async def test_get_workflow_with_execution_id_query_parameter():
+    """
+    Verifies that GET /api/v1/workflows/{workflow_id}?execution_id={id} returns
+    the exact frozen historical execution snapshot for that execution ID, and returns
+    404 when querying an invalid/non-existent execution ID.
+    """
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        dataset_id = str(uuid.uuid4())
+        wf_id = f"wf_qparam_{uuid.uuid4().hex[:8]}"
+
+        # Setup dataset
+        csv_bytes = b"feature1,target\n1.0,0\n2.0,1\n3.0,0\n4.0,1\n"
+        files = {"file": ("qparam_test_data.csv", csv_bytes, "text/csv")}
+        up_resp = await client.post("/api/v1/datasets/upload", files=files, data={"name": "QParam Test Data"})
+        assert up_resp.status_code == 201
+        dataset_id = up_resp.json()["id"]
+
+        dag_v1 = {
+            "id": wf_id,
+            "name": "QParam Pipeline",
+            "dataset_id": dataset_id,
+            "nodes": [
+                {"id": "node_csv", "recipe_id": "csv_loader", "config": {"dataset_id": dataset_id, "step": "first"}}
+            ],
+            "edges": []
+        }
+
+        # Run 1
+        r1 = await client.post(f"/api/v1/workflows/execute?workflow_id={wf_id}&auto_save=true", json=dag_v1)
+        assert r1.status_code == 200
+        exec1_id = r1.json()["execution_id"]
+
+        # Run 2 with modified config
+        dag_v2 = {
+            "id": wf_id,
+            "name": "QParam Pipeline",
+            "dataset_id": dataset_id,
+            "nodes": [
+                {"id": "node_csv", "recipe_id": "csv_loader", "config": {"dataset_id": dataset_id, "step": "second"}}
+            ],
+            "edges": []
+        }
+        r2 = await client.post(f"/api/v1/workflows/execute?workflow_id={wf_id}&auto_save=true", json=dag_v2)
+        assert r2.status_code == 200
+        exec2_id = r2.json()["execution_id"]
+
+        # 1. Default GET /workflows/{wf_id} -> returns latest (Run 2)
+        resp_default = await client.get(f"/api/v1/workflows/{wf_id}")
+        assert resp_default.status_code == 200
+        assert resp_default.json()["last_execution"]["execution_id"] == exec2_id
+
+        # 2. Query param GET /workflows/{wf_id}?execution_id={exec1_id} -> returns Run 1
+        resp_exec1 = await client.get(f"/api/v1/workflows/{wf_id}?execution_id={exec1_id}")
+        assert resp_exec1.status_code == 200
+        assert resp_exec1.json()["last_execution"]["execution_id"] == exec1_id
+        cfg1 = resp_exec1.json()["node_configs"]["node_csv"]
+        assert (cfg1.get("config", {}).get("step") or cfg1.get("step")) == "first"
+
+        # 3. Query param GET /workflows/{wf_id}?execution_id={exec2_id} -> returns Run 2
+        resp_exec2 = await client.get(f"/api/v1/workflows/{wf_id}?execution_id={exec2_id}")
+        assert resp_exec2.status_code == 200
+        assert resp_exec2.json()["last_execution"]["execution_id"] == exec2_id
+        cfg2 = resp_exec2.json()["node_configs"]["node_csv"]
+        assert (cfg2.get("config", {}).get("step") or cfg2.get("step")) == "second"
+
+        # 4. Query param with camelCase ?executionId={exec1_id}
+        resp_exec1_camel = await client.get(f"/api/v1/workflows/{wf_id}?executionId={exec1_id}")
+        assert resp_exec1_camel.status_code == 200
+        assert resp_exec1_camel.json()["last_execution"]["execution_id"] == exec1_id
+
+        # 5. Non-existent execution_id returns 404
+        resp_404 = await client.get(f"/api/v1/workflows/{wf_id}?execution_id=non_existent_uuid_12345")
+        assert resp_404.status_code == 404
+        assert "not found" in resp_404.json()["detail"].lower()
+
+
+
 
 
 

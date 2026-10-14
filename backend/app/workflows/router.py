@@ -1107,7 +1107,8 @@ async def get_resume_info(execution_id: str):
 async def get_workflow(
     workflow_id: str,
     execution_id: Optional[str] = Query(None, description="Optional execution/run ID to load frozen snapshot topology"),
-    version: Optional[int] = Query(None, description="Optional version number to load frozen snapshot topology"),
+    version: Optional[Any] = Query(None, description="Optional version number to load frozen snapshot topology"),
+    request: Request = None,
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -1137,22 +1138,72 @@ async def get_workflow(
             await db.commit()
             await db.refresh(wf)
 
+    # Resolve execution_id and version with query param aliases
+    resolved_exec_id = execution_id
+    resolved_version = version
+
+    if request:
+        qp = request.query_params
+        if not resolved_exec_id:
+            resolved_exec_id = (
+                qp.get("execution_id")
+                or qp.get("executionId")
+                or qp.get("run_id")
+                or qp.get("runId")
+                or qp.get("exec_id")
+                or qp.get("execId")
+            )
+        if resolved_version is None:
+            resolved_version = (
+                qp.get("version")
+                or qp.get("version_number")
+                or qp.get("versionNumber")
+                or qp.get("v")
+                or qp.get("run")
+            )
+
+    parsed_version: Optional[int] = None
+    if resolved_version is not None:
+        try:
+            if isinstance(resolved_version, int):
+                parsed_version = resolved_version
+            else:
+                num_match = re.search(r"\d+", str(resolved_version))
+                if num_match:
+                    parsed_version = int(num_match.group())
+        except Exception:
+            pass
+
     # If caller specifically requested a historical run or version snapshot:
     exec_rec = None
-    if execution_id:
+    if resolved_exec_id:
         exec_stmt = select(WorkflowExecution).where(
-            WorkflowExecution.workflow_id == workflow_id,
-            WorkflowExecution.id == execution_id
+            (WorkflowExecution.workflow_id == workflow_id) | (WorkflowExecution.workflow_id.is_(None)),
+            WorkflowExecution.id == resolved_exec_id
         )
         exec_res = await db.execute(exec_stmt)
         exec_rec = exec_res.scalar_one_or_none()
-    elif version is not None:
+        if not exec_rec:
+            # Fallback lookup across executions
+            alt_res = await db.execute(select(WorkflowExecution).where(WorkflowExecution.id == resolved_exec_id))
+            exec_rec = alt_res.scalar_one_or_none()
+        if not exec_rec:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Execution snapshot '{resolved_exec_id}' not found for workflow '{workflow_id}'."
+            )
+    elif parsed_version is not None:
         exec_stmt = select(WorkflowExecution).where(
             WorkflowExecution.workflow_id == workflow_id,
-            WorkflowExecution.version_number == version
+            WorkflowExecution.version_number == parsed_version
         )
         exec_res = await db.execute(exec_stmt)
         exec_rec = exec_res.scalar_one_or_none()
+        if not exec_rec:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Version {parsed_version} not found in execution history for workflow '{workflow_id}'."
+            )
 
     if exec_rec:
         hist_exec_dict = {
