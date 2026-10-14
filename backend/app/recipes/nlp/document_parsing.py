@@ -397,9 +397,9 @@ class DocumentParsingRecipe(BaseRecipe):
         return {
             "type": "object",
             "properties": {
-                "extraction_target": {
+                "extraction_mode": {
                     "type": "string",
-                    "title": "Extraction Target",
+                    "title": "Extraction Mode",
                     "default": "Text & Tables",
                     "enum": ["Text & Tables", "Text Only", "Tables Only"],
                     "input_type": "dropdown",
@@ -474,7 +474,7 @@ class DocumentParsingRecipe(BaseRecipe):
         if in_df is None and context and isinstance(context, dict):
             in_df = context.get("dataframe")
 
-        extraction_target = config.get("extraction_target", "Text & Tables")
+        extraction_target = config.get("extraction_mode") or config.get("extraction_target", "Text & Tables")
         output_format = config.get("output_format", "Per Page / Section")
         doc_path = config.get("document_path") or config.get("file_path") or ""
         dataset_id = config.get("dataset_id")
