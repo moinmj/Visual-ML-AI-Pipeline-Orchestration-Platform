@@ -184,14 +184,28 @@ class StorageManager:
             return True
         return False
 
-    def list_ozone_objects(self, tenant_id: int, prefix: str = ""):
+    def list_ozone_objects(
+        self,
+        tenant_id: int,
+        prefix: str = "",
+        scope: str = "ml_workflow",
+        folder: str = "all",
+        media_type: Optional[str] = None,
+        max_keys: int = 1000,
+    ):
         """
-        Lists objects in the caller's tenant folder in Ozone (the datalake "browse
-        existing data" option), so one can be registered as a dataset without
-        re-uploading it.
+        Lists objects in the caller's tenant space in Ozone.
+        Supports scope ('all_tenant_data' or 'ml_workflow') and folder filtering.
         """
         from backend.app.infrastructure.storage.ozone_client import list_ozone_objects
-        return list_ozone_objects(tenant_id=tenant_id, prefix=prefix)
+        return list_ozone_objects(
+            tenant_id=tenant_id,
+            prefix=prefix,
+            scope=scope,
+            folder=folder,
+            media_type=media_type,
+            max_keys=max_keys,
+        )
 
 
 storage_manager = StorageManager()

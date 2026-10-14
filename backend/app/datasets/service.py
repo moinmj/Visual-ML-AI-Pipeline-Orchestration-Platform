@@ -141,15 +141,74 @@ class DatasetService:
         return list(result.scalars().all()), total
 
     @staticmethod
-    def browse_ozone(tenant_id: int, prefix: str = "") -> List[Dict[str, Any]]:
+    def browse_ozone(
+        tenant_id: int,
+        scope: str = "ml_workflow",
+        folder: str = "all",
+        media_type: Optional[str] = None,
+        prefix: str = "",
+    ) -> List[Dict[str, Any]]:
         """
-        Lists objects in the caller's tenant folder in Ozone, so the user can pick
-        an existing file instead of uploading a new one.
+        Lists objects in the caller's tenant space in Ozone, formatted identically
+        to DatasetResponse so frontend dataset list components can render them.
         """
+        from datetime import datetime, timezone
+        from backend.app.core.config import settings
+
         try:
-            return storage_manager.list_ozone_objects(tenant_id=tenant_id, prefix=prefix)
+            raw_objects = storage_manager.list_ozone_objects(
+                tenant_id=tenant_id,
+                prefix=prefix,
+                scope=scope,
+                folder=folder,
+                media_type=media_type,
+            )
         except ValueError as e:
             raise ValidationException(str(e))
+
+        now_utc = datetime.now(timezone.utc)
+        results = []
+        for obj in raw_objects:
+            key = obj["key"]
+            file_name = obj["file_name"]
+            ext = obj["file_format"]
+            stem = file_name.rsplit(".", 1)[0] if "." in file_name else file_name
+            m_type = obj.get("media_type")
+
+            preview_url = None
+            if m_type == "image":
+                preview_url = f"/api/v1/datasets/media/preview?key={key}"
+
+            last_mod = obj.get("last_modified")
+            if last_mod:
+                try:
+                    dt = datetime.fromisoformat(last_mod.replace("Z", "+00:00"))
+                except Exception:
+                    dt = now_utc
+            else:
+                dt = now_utc
+
+            folder_label = f"ml-workflow/{folder}" if scope == "ml_workflow" else "all_tenant_data"
+            results.append({
+                "id": key,
+                "name": stem,
+                "description": f"Ozone object [{folder_label}]",
+                "file_name": file_name,
+                "file_format": ext,
+                "file_size_bytes": obj.get("size_bytes", 0),
+                "storage_path": f"s3://{settings.OZONE_BUCKET}/{key}",
+                "row_count": 0,
+                "column_count": 0,
+                "quality_score": 100.0,
+                "created_at": dt,
+                "updated_at": dt,
+                "media_type": m_type,
+                "preview_url": preview_url,
+                "key": key,
+                "relative_path": obj.get("relative_path", key),
+                "scope": scope,
+            })
+        return results
 
     @staticmethod
     async def register_from_ozone(
