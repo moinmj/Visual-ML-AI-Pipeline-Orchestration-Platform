@@ -29,6 +29,8 @@ class RollbackTriggerRecipe(BaseRecipe):
     def get_schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
+            "x-no-column-validation": True,
+            "validate_columns": False,
             "properties": {
                 "target_model_name": {
                     "type": "string",
@@ -39,14 +41,24 @@ class RollbackTriggerRecipe(BaseRecipe):
                 "current_version": {
                     "type": "string",
                     "title": "Current Deployed Version",
+                    "enum": ["v2", "v2.0", "v2.5", "v3.0", "challenger", "candidate", "latest"],
                     "default": "v2",
-                    "description": "Currently active model version under evaluation."
+                    "description": "Currently active candidate model version under evaluation.",
+                    "format": "select",
+                    "ui:widget": "select",
+                    "is_column": False,
+                    "validate_as_column": False
                 },
                 "fallback_version": {
                     "type": "string",
                     "title": "Fallback / Rollback Version",
+                    "enum": ["v1", "v1.0", "v1.5", "v2.0", "champion", "stable_baseline"],
                     "default": "v1",
-                    "description": "Previous known-good model version to restore upon failure."
+                    "description": "Previous known-good champion version to restore upon circuit break.",
+                    "format": "select",
+                    "ui:widget": "select",
+                    "is_column": False,
+                    "validate_as_column": False
                 },
                 "rollback_condition": {
                     "type": "string",
@@ -64,8 +76,25 @@ class RollbackTriggerRecipe(BaseRecipe):
                 "metric_to_check": {
                     "type": "string",
                     "title": "Monitored Metric Key",
+                    "enum": [
+                        "f1_score",
+                        "accuracy",
+                        "precision",
+                        "recall",
+                        "mae",
+                        "rmse",
+                        "r2",
+                        "latency_p95_ms",
+                        "error_rate",
+                        "drift_score"
+                    ],
                     "default": "f1_score",
-                    "description": "Metric name to inspect from upstream node (e.g. f1_score, accuracy, latency_p95_ms)."
+                    "description": "Dedicated evaluation metric identifier (independent of tabular dataset column names).",
+                    "format": "select",
+                    "ui:widget": "select",
+                    "is_column": False,
+                    "validate_as_column": False,
+                    "column_selector": False
                 },
                 "threshold_operator": {
                     "type": "string",
@@ -239,9 +268,22 @@ class RollbackTriggerRecipe(BaseRecipe):
             "incident_id": incident_id
         }
 
+        output_summary = {
+            "status": "ALERT (Rollback Triggered)" if trigger_activated else "PASS (Healthy)",
+            "rollback_triggered": trigger_activated,
+            "active_version": active_version,
+            "incident_ticket": incident_id,
+            "action_executed": action_taken,
+            "monitored_condition": condition_type,
+            "observed_value": str(actual_val),
+            "threshold": f"{operator} {threshold_val}",
+            "current_traffic_split": f"{current_v}: {traffic_current}% | {fallback_v}: {traffic_fallback}%"
+        }
+
         ret = {
             "governance_record": governance_record,
             "metrics": metrics,
+            "output_summary": output_summary,
             "dataframe": audit_df,
             "output_table": audit_df
         }
@@ -252,3 +294,17 @@ class RollbackTriggerRecipe(BaseRecipe):
         if isinstance(incoming_df, pd.DataFrame):
             ret["input_dataframe"] = incoming_df
         return ret
+
+    def to_code(self, config: Dict[str, Any]) -> str:
+        cond = config.get("rollback_condition", "Metrics Threshold Failure")
+        metric = config.get("metric_to_check", "f1_score")
+        op = config.get("threshold_operator", "less_than")
+        val = config.get("threshold_value", 0.75)
+        v_cur = config.get("current_version", "v2")
+        v_fb = config.get("fallback_version", "v1")
+        return (
+            f"# Rollback Trigger & Circuit Breaker\n"
+            f"# Condition: {cond} ({metric} {op} {val})\n"
+            f"# Candidate: {v_cur} -> Fallback: {v_fb}\n"
+            f"# Continuous Model Governance & Safety Circuit Breaker\n"
+        )

@@ -88,18 +88,17 @@ class CostLatencyMonitorRecipe(BaseRecipe):
         instance_type = config.get("compute_instance_type", "CPU (2 vCPU, 4GB RAM - $0.04/hr)")
         monthly_requests = int(config.get("estimated_monthly_requests", 1000000))
         
-        # Parse batch sizes
-        raw_batches = str(config.get("batch_sizes_to_benchmark", "1, 10, 50, 100")).split(",")
+        # Robust batch size parser (handles malformed strings, trailing commas, letters, negative numbers, zeros)
         batch_sizes: List[int] = []
-        for b in raw_batches:
-            try:
-                b_int = int(b.strip())
-                if b_int > 0:
-                    batch_sizes.append(b_int)
-            except ValueError:
-                pass
+        for token in str(config.get("batch_sizes_to_benchmark", "1, 10, 50, 100")).split(","):
+            cleaned = token.strip()
+            if cleaned.isdigit():
+                val = int(cleaned)
+                if 1 <= val <= 10000 and val not in batch_sizes:
+                    batch_sizes.append(val)
         if not batch_sizes:
             batch_sizes = [1, 10, 50, 100]
+        batch_sizes.sort()
 
         # 1. Run Empirical Micro-Benchmarks
         benchmark_results = []
@@ -116,7 +115,7 @@ class CostLatencyMonitorRecipe(BaseRecipe):
             latencies_by_batch = []
             for b_size in batch_sizes:
                 # Prepare batch slice (repeating if necessary)
-                repeats = (b_size // len(sample_data)) + 1
+                repeats = (b_size // max(1, len(sample_data))) + 1
                 batch_df = pd.concat([sample_data] * repeats, ignore_index=True).iloc[:b_size]
 
                 # Warmup run
@@ -144,7 +143,6 @@ class CostLatencyMonitorRecipe(BaseRecipe):
                 throughput = round(1000.0 / max(avg_lat, 0.001), 1)
 
                 # Cost modeling per 1k requests
-                # Cost per hour = hourly_cost. In 1 hour, capacity = throughput * 3600 queries
                 queries_per_hour = throughput * 3600.0
                 cost_per_1k = (hourly_cost / queries_per_hour) * 1000.0 if queries_per_hour > 0 else 0.0001
 
@@ -193,7 +191,63 @@ class CostLatencyMonitorRecipe(BaseRecipe):
             p99_overall = benchmark_results[0]["p99_latency_ms"]
             throughput_overall = benchmark_results[0]["throughput_rps"]
 
-        # 2. Compute Financial & SLA Metrics
+        # 2. Identify "Golden Ratio" Optimal Batch Size
+        within_sla = [r for r in benchmark_results if r["p95_latency_ms"] <= sla_ms]
+        if within_sla:
+            optimal_entry = max(within_sla, key=lambda r: r["throughput_rps"])
+        else:
+            optimal_entry = min(benchmark_results, key=lambda r: r["p95_latency_ms"])
+        optimal_batch = optimal_entry["batch_size"]
+
+        golden_ratio_callout = (
+            f"Golden Ratio: Batch size {optimal_batch} achieves optimal throughput "
+            f"({optimal_entry['throughput_rps']:,} RPS at {optimal_entry['p95_latency_ms']}ms P95 latency) "
+            f"while remaining within the {sla_ms}ms SLA target."
+        )
+
+        # 3. Interactive Latency vs Throughput Capacity Curve
+        latency_vs_throughput_curve = {
+            "type": "scatter_chart",
+            "title": "Latency vs. Throughput Capacity Curve (P95 Latency vs Throughput RPS)",
+            "x_axis": "Throughput (RPS)",
+            "y_axis": "P95 Latency (ms)",
+            "sla_threshold_ms": sla_ms,
+            "optimal_batch_size": optimal_batch,
+            "points": [
+                {
+                    "batch_size": r["batch_size"],
+                    "x": r["throughput_rps"],
+                    "y": r["p95_latency_ms"],
+                    "cost_per_1k": r["cost_per_1k_req_usd"],
+                    "sla_status": r["sla_status"],
+                    "is_optimal": (r["batch_size"] == optimal_batch)
+                }
+                for r in benchmark_results
+            ],
+            "chart_data": {
+                "datasets": [
+                    {
+                        "label": "Observed Inference Profile",
+                        "data": [{"x": r["throughput_rps"], "y": r["p95_latency_ms"]} for r in benchmark_results],
+                        "borderColor": "#3b82f6",
+                        "backgroundColor": "#3b82f6",
+                        "showLine": True
+                    },
+                    {
+                        "label": f"SLA Threshold ({sla_ms} ms)",
+                        "data": [
+                            {"x": min(r["throughput_rps"] for r in benchmark_results) * 0.9, "y": sla_ms},
+                            {"x": max(r["throughput_rps"] for r in benchmark_results) * 1.1, "y": sla_ms}
+                        ],
+                        "borderColor": "#ef4444",
+                        "borderDash": [6, 6],
+                        "showLine": True
+                    }
+                ]
+            }
+        }
+
+        # 4. Compute Financial & SLA Metrics
         sla_met = p95_overall <= sla_ms
         cost_per_1m_req = max(0.0001, (benchmark_results[0]["cost_per_1k_req_usd"]) * 1000.0)
         projected_monthly_cost = round(max(0.01, (monthly_requests / 1000000.0) * cost_per_1m_req), 4)
@@ -213,7 +267,9 @@ class CostLatencyMonitorRecipe(BaseRecipe):
             "cost_per_1k_req_usd": round(benchmark_results[0]["cost_per_1k_req_usd"], 6),
             "cost_per_1m_req_usd": round(cost_per_1m_req, 4),
             "projected_monthly_cost_usd": projected_monthly_cost,
-            "efficiency_score": efficiency_score
+            "efficiency_score": efficiency_score,
+            "optimal_batch_size": optimal_batch,
+            "latency_vs_throughput_curve": latency_vs_throughput_curve
         }
 
         report = {
@@ -225,17 +281,43 @@ class CostLatencyMonitorRecipe(BaseRecipe):
             "cost_per_1m_requests": f"${round(cost_per_1m_req, 4)}",
             "projected_monthly_spend": f"${projected_monthly_cost} (based on {monthly_requests:,} reqs)",
             "single_query_p95_latency": f"{p95_overall} ms",
-            "peak_throughput": f"{throughput_overall} req/sec"
+            "peak_throughput": f"{throughput_overall} req/sec",
+            "optimal_batch_size": optimal_batch,
+            "optimal_batch_callout": golden_ratio_callout,
+            "latency_vs_throughput_curve": latency_vs_throughput_curve
+        }
+
+        output_summary = {
+            "status": "PASS" if sla_met else "SLA_BREACH",
+            "sla_met": sla_met,
+            "hardware_instance": instance_type,
+            "latency_p95_ms": round(p95_overall, 2),
+            "throughput_rps": throughput_overall,
+            "efficiency_score": efficiency_score,
+            "optimal_batch_size": optimal_batch,
+            "optimal_batch_callout": golden_ratio_callout,
+            "latency_vs_throughput_curve": latency_vs_throughput_curve
         }
 
         ret = {
             "metrics": metrics,
+            "report": report,
+            "output_summary": output_summary,
             "dataframe": benchmark_df,
-            "output_table": benchmark_df,
-            "report": report
+            "output_table": benchmark_df
         }
         if isinstance(df, pd.DataFrame):
             ret["input_dataframe"] = df
         if model is not None:
             ret["model"] = model
         return ret
+
+    def to_code(self, config: Dict[str, Any]) -> str:
+        sla = config.get("latency_sla_ms", 50.0)
+        inst = config.get("compute_instance_type", "CPU (2 vCPU, 4GB RAM)")
+        batches = config.get("batch_sizes_to_benchmark", "1, 10, 50, 100")
+        return (
+            f"# Cost & Latency Performance Monitor\n"
+            f"# Instance: {inst} | SLA Ceiling: {sla}ms (P95) | Batches: {batches}\n"
+            f"# FinOps & Inference Capacity Planning Engine\n"
+        )

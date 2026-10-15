@@ -250,7 +250,50 @@ class ModelDriftMonitorRecipe(BaseRecipe):
 
         drift_df = pd.DataFrame(window_records)
 
-        # 3. Report & Metrics
+        # 3. Construct Interactive Trendline Chart
+        threshold_line = round(baseline_val + tolerance if is_error_metric else baseline_val - tolerance, 4)
+        trendline_chart = {
+            "type": "line_chart",
+            "title": f"Performance Drift Trendline ({metric_name.upper()})",
+            "x_axis": "Monitoring Window",
+            "y_axis": "Score",
+            "metric": metric_name.upper(),
+            "baseline": round(baseline_val, 4),
+            "threshold": threshold_line,
+            "labels": [str(r["window"]) for r in window_records],
+            "series": [
+                {
+                    "name": f"Observed {metric_name.upper()}",
+                    "color": "#3b82f6",
+                    "data": [round(float(r["score"]), 4) for r in window_records]
+                },
+                {
+                    "name": "Baseline Benchmark",
+                    "color": "#10b981",
+                    "stroke_dash": "5 5",
+                    "data": [round(baseline_val, 4)] * len(window_records)
+                },
+                {
+                    "name": "Alert Threshold",
+                    "color": "#ef4444",
+                    "stroke_dash": "3 3",
+                    "data": [threshold_line] * len(window_records)
+                }
+            ],
+            "points": [
+                {
+                    "window": r["window"],
+                    "window_index": r["window_index"],
+                    "score": round(float(r["score"]), 4),
+                    "baseline": round(baseline_val, 4),
+                    "diff": round(float(r["diff_from_baseline"]), 4),
+                    "status": r["status"]
+                }
+                for r in window_records
+            ]
+        }
+
+        # 4. Report & Metrics
         report = {
             "title": "Model Performance Drift Analysis",
             "status": status,
@@ -264,7 +307,8 @@ class ModelDriftMonitorRecipe(BaseRecipe):
             "tolerance": tolerance,
             "is_degraded": is_degraded,
             "alert_channel": alert_channel,
-            "evaluation_summary": status_desc
+            "evaluation_summary": status_desc,
+            "trendline_chart": trendline_chart
         }
 
         metrics = {
@@ -275,13 +319,42 @@ class ModelDriftMonitorRecipe(BaseRecipe):
             "current_value": round(current_val, 4),
             "drift_amount": round(drift_delta, 4),
             "drift_percentage": round(drift_pct, 2),
-            "alert_triggered": is_degraded
+            "alert_triggered": is_degraded,
+            "trendline_chart": trendline_chart
+        }
+
+        output_summary = {
+            "status": status,
+            "metric": metric_name.upper(),
+            "baseline_benchmark": round(baseline_val, 4),
+            "current_score": round(current_val, 4),
+            "drift_delta": round(drift_delta, 4),
+            "drift_percentage": f"{round(drift_pct, 2)}%",
+            "alert_triggered": is_degraded,
+            "alert_channel": alert_channel,
+            "trendline_chart": trendline_chart,
+            "line_chart": trendline_chart,
+            "windows_summary": [
+                {"window": r["window"], "score": round(float(r["score"]), 4), "status": r["status"]}
+                for r in window_records
+            ]
         }
 
         return {
             "metrics": metrics,
             "report": report,
+            "output_summary": output_summary,
             "dataframe": drift_df,
             "output_table": drift_df,
             "input_dataframe": df
         }
+
+    def to_code(self, config: Dict[str, Any]) -> str:
+        metric = config.get("metric", "f1_score")
+        tol = config.get("degradation_tolerance", 0.05)
+        windows = config.get("window_count", 4)
+        return (
+            f"# Drift / Monitoring Operator (model performance)\n"
+            f"# Metric: {metric} | Degradation Tolerance: {tol} | Windows: {windows}\n"
+            f"# Monitored via Visual MLAI Performance Surveillance Engine\n"
+        )

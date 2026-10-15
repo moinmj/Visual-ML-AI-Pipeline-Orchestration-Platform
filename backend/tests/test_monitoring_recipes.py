@@ -119,6 +119,14 @@ class TestModelServingEndpoint:
         assert "metrics" in result
         assert result["metrics"]["status"] == "ACTIVE"
         assert result["metrics"]["warmup_latency_ms"] > 0
+        assert "curl_snippet" in result["metrics"]
+        assert "curl" in result["governance_record"]["snippets"]
+        assert "output_summary" in result
+        assert "python_sdk_snippet" in result["output_summary"]
+        
+        schema = recipe.get_schema()
+        assert schema["properties"]["compute_target"]["enum_type"] == "infrastructure"
+        assert schema["properties"]["compute_target"]["is_column"] is False
 
     def test_serving_endpoint_standalone_unparented(self, sample_classification_df):
         recipe = ModelServingEndpointRecipe()
@@ -151,6 +159,11 @@ class TestModelDriftMonitor:
         assert result["metrics"]["status"] == "HEALTHY"
         assert result["metrics"]["is_degraded"] is False
         assert result["metrics"]["alert_triggered"] is False
+        assert "trendline_chart" in result["metrics"]
+        assert "output_summary" in result
+        assert "trendline_chart" in result["output_summary"]
+        assert result["output_summary"]["trendline_chart"]["type"] == "line_chart"
+        assert len(result["output_summary"]["trendline_chart"]["labels"]) == 4
         assert isinstance(result["dataframe"], pd.DataFrame)
         assert len(result["dataframe"]) == 4
 
@@ -194,6 +207,9 @@ class TestDataDriftDetector:
         assert "drift_score" in drift_df.columns
         assert "status" in drift_df.columns
         assert result["metrics"]["total_features_monitored"] >= 3
+        assert "output_summary" in result
+        assert "feature_distributions" in result["output_summary"]
+        assert len(result["output_summary"]["feature_distributions"]) >= 1
 
     def test_data_drift_psi_shifted(self, sample_classification_df):
         recipe = DataDriftDetectorRecipe()
@@ -249,6 +265,13 @@ class TestRollbackTrigger:
         assert result["governance_record"]["action_taken"] == "NO_ACTION_HEALTHY"
         assert result["governance_record"]["traffic_split"]["v2"] == 100
         assert result["governance_record"]["traffic_split"]["v1"] == 0
+        assert "output_summary" in result
+        assert result["output_summary"]["rollback_triggered"] is False
+        
+        schema = recipe.get_schema()
+        assert "enum" in schema["properties"]["metric_to_check"]
+        assert "f1_score" in schema["properties"]["metric_to_check"]["enum"]
+        assert schema["properties"]["metric_to_check"]["is_column"] is False
 
     def test_rollback_triggered_on_metric_drop(self):
         recipe = RollbackTriggerRecipe()
@@ -320,6 +343,14 @@ class TestCostLatencyMonitor:
         assert "dataframe" in result
         df = result["dataframe"]
         assert len(df) == 3
+        assert "optimal_batch_size" in m
+        assert "latency_vs_throughput_curve" in m
+        assert "output_summary" in result
+        assert "optimal_batch_callout" in result["output_summary"]
+        
+        # Test malformed batch size string resilience
+        res_malformed = recipe.execute({}, {"batch_sizes_to_benchmark": "1, 10, invalid, 0, , -2, 50,"})
+        assert len(res_malformed["dataframe"]) == 3
         assert "batch_size" in df.columns
         assert "p95_latency_ms" in df.columns
         assert "throughput_rps" in df.columns
@@ -364,6 +395,29 @@ class TestCostAttributionReport:
         assert "Pipeline" in df.columns
         assert "Total_Cost" in df.columns
         assert "Budget_Status" in df.columns
+        assert df["Total_Cost"].iloc[0].startswith("$")
+        assert "output_summary" in result
+        assert "Total Spend (USD)" in result["output_summary"]
+
+    def test_cost_attribution_currency_switching(self):
+        recipe = CostAttributionReportRecipe()
+        # Test EUR
+        res_eur = recipe.execute({}, {"currency": "EUR (€)", "monthly_budget_usd": 6000.0})
+        df_eur = res_eur["dataframe"]
+        assert df_eur["Total_Cost"].iloc[0].startswith("€")
+        assert "total_spend_eur" in res_eur["metrics"]
+        assert "Total Spend (EUR)" in res_eur["output_summary"]
+        assert res_eur["metrics"]["currency"] == "EUR"
+        assert res_eur["metrics"]["currency_symbol"] == "€"
+
+        # Test INR
+        res_inr = recipe.execute({}, {"currency": "INR (₹)", "monthly_budget_usd": 500000.0})
+        df_inr = res_inr["dataframe"]
+        assert df_inr["Total_Cost"].iloc[0].startswith("₹")
+        assert "total_spend_inr" in res_inr["metrics"]
+        assert "Total Spend (INR)" in res_inr["output_summary"]
+        assert res_inr["metrics"]["currency"] == "INR"
+        assert res_inr["metrics"]["currency_symbol"] == "₹"
 
     def test_cost_attribution_custom_dataframe(self):
         recipe = CostAttributionReportRecipe()
