@@ -54,6 +54,17 @@ from backend.app.recipes.preprocessing.parse_date import ParseDateRecipe
 from backend.app.recipes.preprocessing.geocode_distance import GeocodeDistanceCalculatorRecipe
 from backend.app.recipes.preprocessing.timezone_converter import TimezoneConverterRecipe
 from backend.app.recipes.preprocessing.business_day_holiday import BusinessDayHolidayCalculatorRecipe
+from backend.app.recipes.preprocessing.currency_unit_normalizer import CurrencyUnitNormalizerRecipe
+from backend.app.recipes.preprocessing.address_parser_standardizer import AddressParserStandardizerRecipe
+from backend.app.recipes.preprocessing.phone_number_validator import PhoneNumberValidatorRecipe
+from backend.app.recipes.preprocessing.email_domain_validator import EmailDomainValidatorRecipe
+from backend.app.recipes.preprocessing.json_xml_flattener import JsonXmlFlattenerNesterRecipe
+from backend.app.recipes.preprocessing.hierarchical_tree_flattener import HierarchicalTreeFlattenerRecipe
+from backend.app.recipes.preprocessing.cross_tab_generator import CrossTabGeneratorRecipe
+from backend.app.recipes.preprocessing.date_range_expander import DateRangeExpanderRecipe
+from backend.app.recipes.preprocessing.differential_privacy import DifferentialPrivacyAnonymizerRecipe
+from backend.app.recipes.preprocessing.compliance_tokenization import ComplianceTokenizationRecipe
+from backend.app.recipes.preprocessing.sampling_operator import SamplingOperatorRecipe
 from backend.app.recipes.governance.mlflow_tracker import MLflowTrackerRecipe
 from backend.app.recipes.triggers.webhook_trigger import WebhookTriggerRecipe
 from backend.app.recipes.triggers.cron_trigger import CronScheduleTriggerRecipe
@@ -133,6 +144,17 @@ def register_all_recipes():
     recipe_registry.register(GeocodeDistanceCalculatorRecipe())
     recipe_registry.register(TimezoneConverterRecipe())
     recipe_registry.register(BusinessDayHolidayCalculatorRecipe())
+    recipe_registry.register(CurrencyUnitNormalizerRecipe())
+    recipe_registry.register(AddressParserStandardizerRecipe())
+    recipe_registry.register(PhoneNumberValidatorRecipe())
+    recipe_registry.register(EmailDomainValidatorRecipe())
+    recipe_registry.register(JsonXmlFlattenerNesterRecipe())
+    recipe_registry.register(HierarchicalTreeFlattenerRecipe())
+    recipe_registry.register(CrossTabGeneratorRecipe())
+    recipe_registry.register(DateRangeExpanderRecipe())
+    recipe_registry.register(DifferentialPrivacyAnonymizerRecipe())
+    recipe_registry.register(ComplianceTokenizationRecipe())
+    recipe_registry.register(SamplingOperatorRecipe())
     recipe_registry.register(CorrelationFilterRecipe())
     recipe_registry.register(VarianceFilterRecipe())
     recipe_registry.register(MissingValueImputerRecipe())
