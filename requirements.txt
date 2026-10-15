@@ -54,6 +54,8 @@ boto3
 #computer vision
 ultralytics 
 pillow
+easyocr
+lapx
 
 # Document Parsing & NLP
 pypdf>=5.0.0
