@@ -364,3 +364,91 @@ def test_data_guardrails_stop_and_error():
 
     with pytest.raises(ValueError, match="Guardrail Check Failure"):
         recipe.execute({"dataframe": df}, config)
+
+
+# =========================================================================
+# 7. END-TO-END DAG PIPELINE TEST
+# =========================================================================
+
+def test_dag_execution_with_new_data_prep_recipes():
+    """Verify that all new data preparation recipes chain cleanly in the DAG execution engine."""
+    from backend.app.engine.dag.graph import WorkflowGraph, WorkflowNode, WorkflowEdge
+    from backend.app.engine.execution.executor import DAGExecutor
+
+    nodes = [
+        WorkflowNode(
+            id="node_select",
+            recipe_id="select_rename_reorder",
+            config={
+                "rename_mapping": {"raw_name": "company", "raw_city": "city"},
+                "column_order": ["company", "city", "score"],
+                "mode": "keep_all"
+            }
+        ),
+        WorkflowNode(
+            id="node_fuzzy",
+            recipe_id="fuzzy_match_deduplication",
+            config={
+                "subset_columns": ["company"],
+                "similarity_threshold": 0.85,
+                "action": "merge_keep_first"
+            }
+        ),
+        WorkflowNode(
+            id="node_guardrail",
+            recipe_id="data_guardrails",
+            config={
+                "rules": [
+                    {"column": "score", "check_type": "between", "min_value": 0, "max_value": 100}
+                ],
+                "on_failure": "quarantine_invalid_rows"
+            }
+        ),
+        WorkflowNode(
+            id="node_schema",
+            recipe_id="schema_contract_validation",
+            config={
+                "schema_contract": {
+                    "company": {"type": "string", "nullable": False},
+                    "city": {"type": "string", "nullable": True},
+                    "score": {"type": "numeric", "nullable": False}
+                },
+                "on_violation": "flag_only"
+            }
+        ),
+        WorkflowNode(
+            id="node_profile",
+            recipe_id="data_profiling_report",
+            config={
+                "compute_correlations": True,
+                "health_threshold": 70.0
+            }
+        )
+    ]
+
+    edges = [
+        WorkflowEdge(source="node_select", target="node_fuzzy"),
+        WorkflowEdge(source="node_fuzzy", target="node_guardrail"),
+        WorkflowEdge(source="node_guardrail", target="node_schema"),
+        WorkflowEdge(source="node_schema", target="node_profile"),
+    ]
+
+    graph = WorkflowGraph(nodes=nodes, edges=edges)
+
+    df = pd.DataFrame({
+        "raw_name": ["Microsoft Corp", "Micro soft Corp", "Apple Inc", "Google LLC", "Bad Score Co"],
+        "raw_city": ["Redmond", "Redmond", "Cupertino", "Mountain View", "Nowhere"],
+        "score": [95, 95, 98, 92, -50]  # Bad Score Co will be quarantined by guardrail
+    })
+
+    res = DAGExecutor.execute_workflow(
+        execution_id="test_data_prep_dag",
+        workflow=graph,
+        initial_df=df
+    )
+
+    assert res.status == "SUCCESS"
+    assert len(res.node_results) == 5
+    for nr in res.node_results:
+        assert nr.status == "SUCCESS"
+

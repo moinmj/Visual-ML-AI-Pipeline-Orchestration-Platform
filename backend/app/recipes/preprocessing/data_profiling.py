@@ -148,12 +148,13 @@ class DataProfilingReportRecipe(BaseRecipe):
                 col_alerts.append(f"Near-unique identifier ({unique_pct}%)")
                 quality_alerts.append({"column": col, "issue": "High Cardinality ID", "severity": "INFO", "detail": "Column appears to be a unique ID or hash key."})
 
-            # Check if numeric
-            is_numeric = pd.api.types.is_numeric_dtype(s)
+            # Check if boolean or numeric
+            is_bool = pd.api.types.is_bool_dtype(s)
+            is_numeric = pd.api.types.is_numeric_dtype(s) and not is_bool
             p_row: Dict[str, Any] = {
                 "column": col,
                 "data_type": dtype_str,
-                "inferred_type": "Numeric" if is_numeric else ("Datetime" if pd.api.types.is_datetime64_any_dtype(s) else "Categorical"),
+                "inferred_type": "Boolean" if is_bool else ("Numeric" if is_numeric else ("Datetime" if pd.api.types.is_datetime64_any_dtype(s) else "Categorical")),
                 "total_count": orig_rows,
                 "missing_count": missing_count,
                 "missing_pct": f"{missing_pct}%",
@@ -162,7 +163,7 @@ class DataProfilingReportRecipe(BaseRecipe):
             }
 
             if is_numeric and s.dropna().shape[0] > 0:
-                clean_num = s.dropna()
+                clean_num = pd.to_numeric(s.dropna(), errors="coerce").dropna().astype(float)
                 mean_val = round(float(clean_num.mean()), 3)
                 std_val = round(float(clean_num.std()), 3) if len(clean_num) > 1 else 0.0
                 min_val = round(float(clean_num.min()), 3)
