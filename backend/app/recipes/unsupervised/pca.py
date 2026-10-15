@@ -203,26 +203,68 @@ class PCARecipe(BaseRecipe):
             }
             loadings_dict[comp_name] = top_weights
 
+        # Variance breakdown per component
+        variance_bar_chart = [
+            {
+                "component": comp,
+                "name": comp,
+                "label": comp,
+                "explained_variance_pct": round(r * 100.0, 2),
+                "ratio": round(r, 4),
+                "value": round(r * 100.0, 2)
+            }
+            for comp, r in zip(component_col_names, var_ratios)
+        ]
+        variance_breakdown_str = ", ".join([f"{comp}: {round(r * 100.0, 1)}%" for comp, r in zip(component_col_names, var_ratios)])
+
+        # 2D Scatter plot preview if >= 2 components
+        scatter_points = []
+        if n_components >= 2:
+            sample_size = min(300, len(pca_df))
+            sample_indices = np.random.RandomState(random_state).choice(len(pca_df), sample_size, replace=False) if len(pca_df) > sample_size else np.arange(len(pca_df))
+            for idx in sample_indices:
+                row = pca_df.iloc[idx]
+                p_dict = {
+                    "x": round(float(row[component_col_names[0]]), 4),
+                    "y": round(float(row[component_col_names[1]]), 4),
+                    component_col_names[0]: round(float(row[component_col_names[0]]), 4),
+                    component_col_names[1]: round(float(row[component_col_names[1]]), 4),
+                }
+                scatter_points.append(p_dict)
+
+        scatter_plot = {
+            "x_axis": component_col_names[0] if n_components >= 1 else "PCA_1",
+            "y_axis": component_col_names[1] if n_components >= 2 else (component_col_names[0] if n_components == 1 else "PCA_2"),
+            "points": scatter_points,
+            "total_points": len(scatter_points)
+        }
+
         metrics: Dict[str, Any] = {
             "n_components": n_components,
             "features_reduced": feature_cols,
             "explained_variance_ratio": var_ratios,
             "cumulative_variance_ratio": [round(float(v), 4) for v in np.cumsum(pca.explained_variance_ratio_)],
             "total_explained_variance_pct": total_var_pct,
+            "explained_variance": f"{total_var_pct}%",
+            "explained_variance_breakdown": variance_breakdown_str,
             "singular_values": [round(float(s), 4) for s in pca.singular_values_],
-            "feature_loadings": loadings_dict
+            "feature_loadings": loadings_dict,
+            "bar_chart": variance_bar_chart,
+            "variance_bar_chart": variance_bar_chart,
+            "scatter_plot": scatter_plot,
+            "scatter_preview": scatter_points[:150]
         }
-
-        # Scatter preview if >= 2 components
-        scatter_sample = []
-        if n_components >= 2:
-            scatter_sample = pca_df[[component_col_names[0], component_col_names[1]]].head(150).to_dict(orient="records")
-        metrics["scatter_preview"] = scatter_sample
 
         summary = {
             "title": "PCA Completed",
             "n_components": n_components,
             "total_variance_explained": f"{total_var_pct}%",
+            "explained_variance_ratio": f"{total_var_pct}%",
+            "explained_variance": f"{total_var_pct}%",
+            "total_explained_variance_pct": total_var_pct,
+            "variance_breakdown": variance_breakdown_str,
+            "bar_chart": variance_bar_chart,
+            "scatter_plot": scatter_plot,
             "status": "SUCCESS"
         }
 
