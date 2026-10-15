@@ -63,10 +63,10 @@ from backend.app.recipes.integrations.google_drive import GoogleDriveRecipe
 from backend.app.recipes.integrations.openweathermap import OpenWeatherMapRecipe
 
 
-#computer vision recipes
+# Computer vision recipes
 from backend.app.recipes.vision.object_detection import ObjectDetectionRecipe
-...
-recipe_registry.register(ObjectDetectionRecipe())
+from backend.app.recipes.vision.image_classifier import ImageClassifierRecipe
+from backend.app.recipes.vision.ocr import OCRRecipe
 
 def register_all_recipes():
     recipe_registry.register(CSVLoaderRecipe())
@@ -129,6 +129,11 @@ def register_all_recipes():
     recipe_registry.register(GoogleSheetsRecipe())
     recipe_registry.register(GoogleDriveRecipe())
     recipe_registry.register(OpenWeatherMapRecipe())
+
+    # Computer Vision
+    recipe_registry.register(ObjectDetectionRecipe())
+    recipe_registry.register(ImageClassifierRecipe())
+    recipe_registry.register(OCRRecipe())
 
 
 # Automatically register upon module load
