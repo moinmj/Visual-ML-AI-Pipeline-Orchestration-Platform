@@ -47,6 +47,13 @@ from backend.app.recipes.preprocessing.semantic_deduplication import SemanticDed
 from backend.app.recipes.preprocessing.data_profiling import DataProfilingReportRecipe
 from backend.app.recipes.preprocessing.schema_validation import SchemaContractValidationRecipe
 from backend.app.recipes.preprocessing.data_guardrails import DataGuardrailsRecipe
+from backend.app.recipes.preprocessing.formula_calculator import FormulaCalculatorRecipe
+from backend.app.recipes.preprocessing.replace_value import ReplaceValueRecipe
+from backend.app.recipes.preprocessing.regex_replace_extract import RegexReplaceExtractRecipe
+from backend.app.recipes.preprocessing.parse_date import ParseDateRecipe
+from backend.app.recipes.preprocessing.geocode_distance import GeocodeDistanceCalculatorRecipe
+from backend.app.recipes.preprocessing.timezone_converter import TimezoneConverterRecipe
+from backend.app.recipes.preprocessing.business_day_holiday import BusinessDayHolidayCalculatorRecipe
 from backend.app.recipes.governance.mlflow_tracker import MLflowTrackerRecipe
 from backend.app.recipes.triggers.webhook_trigger import WebhookTriggerRecipe
 from backend.app.recipes.triggers.cron_trigger import CronScheduleTriggerRecipe
@@ -119,6 +126,13 @@ def register_all_recipes():
     recipe_registry.register(DataProfilingReportRecipe())
     recipe_registry.register(SchemaContractValidationRecipe())
     recipe_registry.register(DataGuardrailsRecipe())
+    recipe_registry.register(FormulaCalculatorRecipe())
+    recipe_registry.register(ReplaceValueRecipe())
+    recipe_registry.register(RegexReplaceExtractRecipe())
+    recipe_registry.register(ParseDateRecipe())
+    recipe_registry.register(GeocodeDistanceCalculatorRecipe())
+    recipe_registry.register(TimezoneConverterRecipe())
+    recipe_registry.register(BusinessDayHolidayCalculatorRecipe())
     recipe_registry.register(CorrelationFilterRecipe())
     recipe_registry.register(VarianceFilterRecipe())
     recipe_registry.register(MissingValueImputerRecipe())
