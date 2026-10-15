@@ -87,10 +87,10 @@ from backend.app.recipes.monitoring import (
     CostAttributionReportRecipe,
 )
 
-#computer vision recipes
+# Computer vision recipes
 from backend.app.recipes.vision.object_detection import ObjectDetectionRecipe
-...
-recipe_registry.register(ObjectDetectionRecipe())
+from backend.app.recipes.vision.image_classifier import ImageClassifierRecipe
+from backend.app.recipes.vision.ocr import OCRRecipe
 
 def register_all_recipes():
     recipe_registry.register(CSVLoaderRecipe())
@@ -176,6 +176,11 @@ def register_all_recipes():
     recipe_registry.register(RollbackTriggerRecipe())
     recipe_registry.register(CostLatencyMonitorRecipe())
     recipe_registry.register(CostAttributionReportRecipe())
+
+    # Computer Vision
+    recipe_registry.register(ObjectDetectionRecipe())
+    recipe_registry.register(ImageClassifierRecipe())
+    recipe_registry.register(OCRRecipe())
 
 
 # Automatically register upon module load

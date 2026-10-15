@@ -50,6 +50,8 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "ab_testing_framework": ("Evaluation & Governance", "Evaluation"),
     "champion_challenger": ("Evaluation & Governance", "Evaluation"),
     "object_detection": ("Modeling", "Computer Vision & Audio"),
+    "image_classifier": ("Modeling", "Computer Vision & Audio"),
+    "ocr": ("Modeling", "Computer Vision & Audio"),
     "mlflow_tracker": ("Evaluation & Governance", "Tracking & Registry"),
 
     # Flow Control
