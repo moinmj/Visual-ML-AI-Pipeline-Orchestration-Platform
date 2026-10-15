@@ -116,6 +116,8 @@ class BaseRecipe(ABC):
             name=self.name,
             version=self.version,
             category=self.category,
+            group=getattr(self, "group", None),
+            subgroup=getattr(self, "subgroup", None),
             media_type=self.media_type,
             description=self.description,
             input_types=self.input_types,

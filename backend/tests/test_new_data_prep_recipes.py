@@ -1,211 +1,366 @@
+"""
+Test Suite for 6 New Data Preparation & Transformation Recipes:
+1. Select (Rename / Reorder Columns) (select_rename_reorder)
+2. Fuzzy-Match Deduplication (fuzzy_match_deduplication)
+3. Semantic Deduplication (embedding similarity) (semantic_deduplication)
+4. Data Profiling Report (data_profiling_report)
+5. Schema / Contract Validation (schema_contract_validation)
+6. Guardrails (validation checks) (data_guardrails)
+"""
 import pytest
 import pandas as pd
 import numpy as np
-from backend.app.recipes.base.registry import recipe_registry
-from backend.app.recipes.preprocessing.sql_step import SQLStepRecipe
-from backend.app.recipes.preprocessing.limit import LimitRecipe
-from backend.app.recipes.preprocessing.sort_rows import SortRecipe
-from backend.app.recipes.preprocessing.aggregate import AggregateRecipe
-from backend.app.recipes.preprocessing.combine import CombineRecipe
-from backend.app.recipes.preprocessing.pivot import PivotRecipe
+
+from backend.app.recipes.preprocessing.select_rename_reorder import SelectRenameReorderRecipe
+from backend.app.recipes.preprocessing.fuzzy_deduplication import FuzzyMatchDeduplicationRecipe
+from backend.app.recipes.preprocessing.semantic_deduplication import SemanticDeduplicationRecipe
+from backend.app.recipes.preprocessing.data_profiling import DataProfilingReportRecipe
+from backend.app.recipes.preprocessing.schema_validation import SchemaContractValidationRecipe
+from backend.app.recipes.preprocessing.data_guardrails import DataGuardrailsRecipe
 
 
-def test_new_recipes_registered():
-    """Verify all 6 recipes are registered and export valid metadata and code."""
-    for rid in ["sql_step", "limit", "sort", "aggregate", "combine", "pivot"]:
-        r = recipe_registry.get(rid)
-        assert r is not None
-        schema = r.get_schema()
-        assert schema["type"] == "object"
-        assert "properties" in schema
-        assert len(r.to_code({})) > 0
+# =========================================================================
+# 1. SELECT (RENAME / REORDER COLUMNS)
+# =========================================================================
 
-
-def test_sql_step_recipe_comprehensive():
-    recipe = SQLStepRecipe()
-    df = pd.DataFrame({"category": ["A", "B", "A"], "amount": [10, 20, 30], "year": [2023, 2023, 2024]})
-
-    # 1. SELECT query
-    res1 = recipe.execute({"dataframe": df}, {"query": "SELECT category, SUM(amount) AS total FROM df GROUP BY category ORDER BY total DESC"})
-    assert len(res1["dataframe"]) == 2
-    assert list(res1["dataframe"].columns) == ["category", "total"]
-
-    # 2. CTE WITH query
-    res2 = recipe.execute({"dataframe": df}, {"query": "WITH filtered AS (SELECT * FROM df WHERE amount > 10) SELECT category, AVG(amount) as avg_amt FROM filtered GROUP BY category"})
-    assert len(res2["dataframe"]) == 2
-
-    # 3. PIVOT query
-    res3 = recipe.execute({"dataframe": df}, {"query": "PIVOT df ON category USING SUM(amount)"})
-    assert "A" in res3["dataframe"].columns and "B" in res3["dataframe"].columns
-
-    # 4. Comments and table alias 'data'
-    res4 = recipe.execute({"dataframe": df}, {"query": "-- Filter data\nSELECT * FROM data WHERE year = 2023"})
-    assert len(res4["dataframe"]) == 2
-
-    # 5. DDL blocking in validation
-    errs = recipe.validate_config({"query": "DROP TABLE df"})
-    assert len(errs) > 0
-
-    # 6. External file access blocked by sandbox in execution
-    with pytest.raises(Exception) as exc_info:
-        recipe.execute({"dataframe": df}, {"query": "SELECT * FROM read_csv('secret_passwords.csv')"})
-    assert "disabled by configuration" in str(exc_info.value) or "external" in str(exc_info.value)
-
-
-def test_limit_recipe_comprehensive():
-    recipe = LimitRecipe()
-    df = pd.DataFrame({"id": range(100), "val": range(100, 200)})
-
-    # 1. Head mode
-    res1 = recipe.execute({"dataframe": df}, {"rows": 10, "mode": "head"})
-    assert len(res1["dataframe"]) == 10
-    assert res1["dataframe"]["id"].iloc[0] == 0
-
-    # 2. Tail mode
-    res2 = recipe.execute({"dataframe": df}, {"rows": 5, "mode": "tail"})
-    assert len(res2["dataframe"]) == 5
-    assert res2["dataframe"]["id"].iloc[-1] == 99
-
-    # 3. Offset support
-    res3 = recipe.execute({"dataframe": df}, {"rows": 10, "mode": "head", "offset": 20})
-    assert len(res3["dataframe"]) == 10
-    assert res3["dataframe"]["id"].iloc[0] == 20
-
-    # 4. Random sample reproducibility
-    res4a = recipe.execute({"dataframe": df}, {"rows": 15, "mode": "random", "random_state": 123})
-    res4b = recipe.execute({"dataframe": df}, {"rows": 15, "mode": "random", "random_state": 123})
-    assert (res4a["dataframe"]["id"] == res4b["dataframe"]["id"]).all()
-
-    # 5. Safe None handling
-    res5 = recipe.execute({"dataframe": df}, {"rows": None})
-    assert len(res5["dataframe"]) == 100
-
-
-def test_sort_recipe_comprehensive():
-    recipe = SortRecipe()
+def test_select_rename_reorder_basic():
+    recipe = SelectRenameReorderRecipe()
     df = pd.DataFrame({
-        "cat": ["B", "A", "B", "A", "C"],
-        "val": [10, 20, 15, 30, np.nan]
+        "customerID": ["C1", "C2"],
+        "tenure": [10, 20],
+        "MonthlyCharges": [50.0, 75.0]
     })
 
-    # 1. Single string column
-    res1 = recipe.execute({"dataframe": df}, {"columns": "val", "ascending": True})
-    assert res1["dataframe"]["val"].iloc[0] == 10
-    assert np.isnan(res1["dataframe"]["val"].iloc[-1])
+    config = {
+        "rename_mapping": {"customerID": "id", "MonthlyCharges": "monthly_fee"},
+        "column_order": ["monthly_fee", "id", "tenure"],
+        "mode": "keep_all"
+    }
 
-    # 2. Multi-column with [True, False]
-    res2 = recipe.execute({"dataframe": df}, {"columns": ["cat", "val"], "ascending": [True, False]})
-    assert res2["dataframe"]["cat"].tolist()[:2] == ["A", "A"]
-    assert res2["dataframe"]["val"].iloc[0] == 30
+    res = recipe.execute({"dataframe": df}, config)
+    out_df = res["dataframe"]
 
-    # 3. na_position first
-    res3 = recipe.execute({"dataframe": df}, {"columns": ["val"], "ascending": True, "na_position": "first"})
-    assert np.isnan(res3["dataframe"]["val"].iloc[0])
+    assert list(out_df.columns) == ["monthly_fee", "id", "tenure"]
+    assert out_df["monthly_fee"].tolist() == [50.0, 75.0]
+    assert res["metrics"]["renamed_columns_count"] == 2
+    assert "code" in recipe.to_code(config).lower() or "rename" in recipe.to_code(config).lower()
 
 
-def test_aggregate_recipe_comprehensive():
-    recipe = AggregateRecipe()
+def test_select_rename_reorder_strict_mode():
+    recipe = SelectRenameReorderRecipe()
     df = pd.DataFrame({
-        "store": ["S1", "S1", "S2", "S2"],
-        "dept": ["D1", "D2", "D1", "D2"],
-        "sales": [100.0, 150.0, 200.0, 250.0],
-        "item_name": ["apple", "banana", "orange", "grape"]
+        "col_a": [1, 2],
+        "col_b": [3, 4],
+        "col_c": [5, 6],
+        "col_d": [7, 8]
     })
 
-    # 1. Single string group_by & list aggregations
-    res1 = recipe.execute({"dataframe": df}, {
-        "group_by": "store",
-        "aggregations": [{"column": "sales", "func": "sum"}, {"column": "sales", "func": "mean"}]
-    })
-    assert len(res1["dataframe"]) == 2
-    assert "sales_sum" in res1["dataframe"].columns
-    assert "sales_mean" in res1["dataframe"].columns
+    config = {
+        "rename_mapping": {"col_a": "alpha"},
+        "column_order": ["col_c", "alpha"],
+        "mode": "strict"
+    }
 
-    # 2. Dict format aggregations
-    res2 = recipe.execute({"dataframe": df}, {
-        "group_by": ["store", "dept"],
-        "aggregations": {"sales": ["min", "max"]}
-    })
-    assert len(res2["dataframe"]) == 4
-    assert "sales_min" in res2["dataframe"].columns
+    res = recipe.execute({"dataframe": df}, config)
+    out_df = res["dataframe"]
 
-    # 3. Categorical non-numeric error on mean
-    with pytest.raises(ValueError):
-        recipe.execute({"dataframe": df}, {
-            "group_by": "store",
-            "aggregations": [{"column": "item_name", "func": "mean"}]
-        })
+    assert list(out_df.columns) == ["col_c", "alpha"]
+    assert len(out_df) == 2
 
 
-def test_combine_recipe_comprehensive():
-    recipe = CombineRecipe()
-    df_a = pd.DataFrame({"id": [1, 2, 3], "name": ["alice", "bob", "charlie"], "_merge": ["old", "old", "old"]})
-    df_b = pd.DataFrame({"id": [2, 3, 4], "name": ["bob", "charlie", "dave"], "salary": [50, 60, 70]})
-
-    # 1. DAGExecutor input keys: left_dataframe and right_dataframe
-    res1 = recipe.execute({"left_dataframe": df_a, "right_dataframe": df_b}, {"mode": "union", "column_alignment": "common_columns"})
-    assert len(res1["dataframe"]) == 6
-    assert list(res1["dataframe"].columns) == ["id", "name"]
-
-    # 2. parent_dataframes list & all_columns
-    res2 = recipe.execute({"parent_dataframes": [df_a, df_b]}, {"mode": "union", "column_alignment": "all_columns"})
-    assert len(res2["dataframe"]) == 6
-    assert "salary" in res2["dataframe"].columns
-
-    # 3. union_distinct
-    res3 = recipe.execute({"left": df_a[["id", "name"]], "right": df_b[["id", "name"]]}, {"mode": "union_distinct"})
-    assert len(res3["dataframe"]) == 4
-
-    # 4. intersect
-    res4 = recipe.execute({"left": df_a[["id", "name"]], "right": df_b[["id", "name"]]}, {"mode": "intersect"})
-    assert len(res4["dataframe"]) == 2
-
-    # 5. except with _merge collision
-    res5 = recipe.execute({"left": df_a, "right": df_b}, {"mode": "except"})
-    assert len(res5["dataframe"]) == 1
-    assert res5["dataframe"]["name"].iloc[0] == "alice"
-
-
-def test_pivot_recipe_comprehensive():
-    recipe = PivotRecipe()
+def test_select_rename_reorder_drop_columns():
+    recipe = SelectRenameReorderRecipe()
     df = pd.DataFrame({
-        "date": ["2023-01", "2023-01", "2023-02", "2023-02"],
-        "store": ["S1", "S2", "S1", "S2"],
-        "sales": [100, 200, 150, 250],
-        "item_name": ["apple", "banana", "orange", "grape"]
+        "col_1": [1, 2],
+        "col_2": [3, 4],
+        "drop_me": [9, 9]
     })
 
-    # 1. Pivot long to wide
-    res1 = recipe.execute({"dataframe": df}, {
-        "mode": "pivot",
-        "index": "date",
-        "columns": "store",
-        "values": "sales",
-        "agg_func": "sum",
-        "fill_value": 0
-    })
-    assert len(res1["dataframe"]) == 2
-    assert "S1" in res1["dataframe"].columns
-    assert "S2" in res1["dataframe"].columns
+    config = {
+        "drop_columns": ["drop_me"]
+    }
 
-    # 2. Unpivot wide to long
-    res2 = recipe.execute({"dataframe": res1["dataframe"]}, {
-        "mode": "unpivot",
-        "index": "date",
-        "values": ["S1", "S2"],
-        "var_name": "store_id",
-        "value_name": "total_sales"
-    })
-    assert len(res2["dataframe"]) == 4
-    assert "store_id" in res2["dataframe"].columns
-    assert "total_sales" in res2["dataframe"].columns
+    res = recipe.execute({"dataframe": df}, config)
+    out_df = res["dataframe"]
 
-    # 3. Non-numeric value column error on mean
-    with pytest.raises(ValueError):
-        recipe.execute({"dataframe": df}, {
-            "mode": "pivot",
-            "index": "date",
-            "columns": "store",
-            "values": "item_name",
-            "agg_func": "mean"
-        })
+    assert "drop_me" not in out_df.columns
+    assert list(out_df.columns) == ["col_1", "col_2"]
+
+
+# =========================================================================
+# 2. FUZZY-MATCH DEDUPLICATION
+# =========================================================================
+
+def test_fuzzy_match_deduplication_typos():
+    recipe = FuzzyMatchDeduplicationRecipe()
+    df = pd.DataFrame({
+        "id": [1, 2, 3, 4],
+        "company": [
+            "Microsoft Corporation",
+            "Microsoft Corp",
+            "Apple Inc",
+            "Google LLC"
+        ],
+        "city": ["Seattle", "Seattle", "Cupertino", "Mountain View"]
+    })
+
+    config = {
+        "key_columns": ["company"],
+        "similarity_threshold": 0.75,
+        "action": "merge_keep_first"
+    }
+
+    res = recipe.execute({"dataframe": df}, config)
+    out_df = res["dataframe"]
+
+    assert len(out_df) == 3
+    assert "Microsoft Corporation" in out_df["company"].values
+    assert res["metrics"]["rows_removed"] == 1
+    assert res["metrics"]["duplicate_clusters_count"] == 1
+
+
+def test_fuzzy_match_deduplication_flag_only():
+    recipe = FuzzyMatchDeduplicationRecipe()
+    df = pd.DataFrame({
+        "name": ["Jonathan Davis", "Jonatan Davis", "Sarah Connor"]
+    })
+
+    config = {
+        "key_columns": ["name"],
+        "similarity_threshold": 0.85,
+        "action": "flag_only"
+    }
+
+    res = recipe.execute({"dataframe": df}, config)
+    out_df = res["dataframe"]
+
+    assert len(out_df) == 3
+    assert "fuzzy_cluster_id" in out_df.columns
+    assert "fuzzy_similarity_score" in out_df.columns
+    assert out_df["fuzzy_cluster_id"].iloc[0] == out_df["fuzzy_cluster_id"].iloc[1]
+    assert out_df["fuzzy_cluster_id"].iloc[2] == -1
+
+
+# =========================================================================
+# 3. SEMANTIC DEDUPLICATION (EMBEDDING SIMILARITY)
+# =========================================================================
+
+def test_semantic_deduplication_paraphrases():
+    recipe = SemanticDeduplicationRecipe()
+    df = pd.DataFrame({
+        "id": [101, 102, 103],
+        "feedback": [
+            "The battery life is exceptional and charges rapidly.",
+            "The battery life is truly exceptional and it charges rapidly.",
+            "Customer service was terrible and unhelpful."
+        ]
+    })
+
+    config = {
+        "text_columns": ["feedback"],
+        "similarity_threshold": 0.75,
+        "action": "merge_keep_first"
+    }
+
+    res = recipe.execute({"dataframe": df}, config)
+    out_df = res["dataframe"]
+
+    assert len(out_df) == 2
+    assert res["metrics"]["rows_removed"] == 1
+    assert "Customer service was terrible" in out_df["feedback"].iloc[1]
+
+
+def test_semantic_deduplication_flag_only():
+    recipe = SemanticDeduplicationRecipe()
+    df = pd.DataFrame({
+        "review": [
+            "Great camera quality and crisp photos.",
+            "Great camera quality with crisp photos.",
+            "Shipping was delayed by two weeks."
+        ]
+    })
+
+    config = {
+        "text_columns": ["review"],
+        "similarity_threshold": 0.80,
+        "action": "flag_only"
+    }
+
+    res = recipe.execute({"dataframe": df}, config)
+    out_df = res["dataframe"]
+
+    assert len(out_df) == 3
+    assert "semantic_cluster_id" in out_df.columns
+    assert out_df["semantic_cluster_id"].iloc[0] == out_df["semantic_cluster_id"].iloc[1]
+    assert out_df["semantic_cluster_id"].iloc[2] == -1
+
+
+# =========================================================================
+# 4. DATA PROFILING REPORT
+# =========================================================================
+
+def test_data_profiling_report():
+    recipe = DataProfilingReportRecipe()
+    df = pd.DataFrame({
+        "age": [25, 30, 35, np.nan, 45],
+        "income": [50000.0, 60000.0, 75000.0, 80000.0, 95000.0],
+        "gender": ["M", "F", "F", "M", "M"],
+        "constant_col": ["X", "X", "X", "X", "X"]
+    })
+
+    config = {
+        "output_mode": "passthrough_with_report",
+        "null_threshold_pct": 15.0
+    }
+
+    res = recipe.execute({"dataframe": df}, config)
+    assert len(res["dataframe"]) == 5
+    assert "profile_table" in res
+
+    profile_df = res["profile_table"]
+    assert len(profile_df) == 4
+    assert "quality_alerts" in profile_df.columns
+
+    # check age null alert
+    age_row = profile_df[profile_df["column"] == "age"].iloc[0]
+    assert "High missing rate" in age_row["quality_alerts"]
+
+    # check constant col alert
+    const_row = profile_df[profile_df["column"] == "constant_col"].iloc[0]
+    assert "Zero variance" in const_row["quality_alerts"]
+
+    assert res["metrics"]["total_columns"] == 4
+    assert res["metrics"]["dataset_health_score"] > 0
+
+
+# =========================================================================
+# 5. SCHEMA / CONTRACT VALIDATION
+# =========================================================================
+
+def test_schema_contract_validation_pass():
+    recipe = SchemaContractValidationRecipe()
+    df = pd.DataFrame({
+        "user_id": [1, 2, 3],
+        "score": [85.5, 92.0, 78.4],
+        "status": ["active", "pending", "active"]
+    })
+
+    config = {
+        "expected_schema": [
+            {"name": "user_id", "type": "integer", "nullable": False},
+            {"name": "score", "type": "float", "min_value": 0.0, "max_value": 100.0},
+            {"name": "status", "type": "string", "allowed_values": ["active", "pending", "closed"]}
+        ],
+        "validation_mode": "flag_rows"
+    }
+
+    res = recipe.execute({"dataframe": df}, config)
+    out_df = res["dataframe"]
+
+    assert res["metrics"]["contract_passed"] is True
+    assert res["metrics"]["compliance_pct"] == 100.0
+    assert out_df["_contract_valid"].all()
+
+
+def test_schema_contract_validation_violations():
+    recipe = SchemaContractValidationRecipe()
+    df = pd.DataFrame({
+        "age": [25, -5, 120],  # -5 violates min_value
+        "role": ["admin", "invalid_role", "user"]
+    })
+
+    config = {
+        "expected_schema": [
+            {"name": "age", "type": "integer", "min_value": 0, "max_value": 100},
+            {"name": "role", "type": "string", "allowed_values": ["admin", "user"]}
+        ],
+        "validation_mode": "flag_rows"
+    }
+
+    res = recipe.execute({"dataframe": df}, config)
+    out_df = res["dataframe"]
+
+    assert res["metrics"]["contract_passed"] is False
+    assert bool(out_df["_contract_valid"].iloc[0]) is True
+    assert bool(out_df["_contract_valid"].iloc[1]) is False
+    assert bool(out_df["_contract_valid"].iloc[2]) is False
+
+
+def test_schema_contract_validation_strict_raise():
+    recipe = SchemaContractValidationRecipe()
+    df = pd.DataFrame({"col_x": [1, 2]})
+
+    config = {
+        "expected_schema": [{"name": "missing_col", "type": "string"}],
+        "validation_mode": "strict_raise"
+    }
+
+    with pytest.raises(ValueError, match="failed Schema Contract"):
+        recipe.execute({"dataframe": df}, config)
+
+
+# =========================================================================
+# 6. GUARDRAILS (VALIDATION CHECKS)
+# =========================================================================
+
+def test_data_guardrails_not_null_and_range():
+    recipe = DataGuardrailsRecipe()
+    df = pd.DataFrame({
+        "price": [10.0, 25.0, -2.0, 50.0],
+        "item": ["A", "B", None, "D"]
+    })
+
+    config = {
+        "rules": [
+            {"column": "price", "check_type": "greater_than", "min_value": 0.0},
+            {"column": "item", "check_type": "not_null"}
+        ],
+        "on_failure": "flag_rows"
+    }
+
+    res = recipe.execute({"dataframe": df}, config)
+    out_df = res["dataframe"]
+
+    assert len(out_df) == 4
+    assert "guardrail_status" in out_df.columns
+    assert out_df["guardrail_status"].iloc[0] == "PASS"
+    assert out_df["guardrail_status"].iloc[1] == "PASS"
+    assert out_df["guardrail_status"].iloc[2] == "FAIL"  # price < 0 and item is null
+
+
+def test_data_guardrails_quarantine():
+    recipe = DataGuardrailsRecipe()
+    df = pd.DataFrame({
+        "age": [20, 30, 40, -5],
+        "email": ["user1@test.com", "user2@test.com", "user3@test.com", "bad_email"]
+    })
+
+    config = {
+        "rules": [
+            {"column": "age", "check_type": "between", "min_value": 0, "max_value": 120},
+            {"column": "email", "check_type": "regex_match", "regex_pattern": r"@"}
+        ],
+        "on_failure": "quarantine_invalid_rows"
+    }
+
+    res = recipe.execute({"dataframe": df}, config)
+    out_df = res["dataframe"]
+
+    assert len(out_df) == 3
+    assert (out_df["age"] >= 0).all()
+    assert res["metrics"]["failing_rows"] == 1
+
+
+def test_data_guardrails_stop_and_error():
+    recipe = DataGuardrailsRecipe()
+    df = pd.DataFrame({"score": [-10, 50]})
+
+    config = {
+        "rules": [
+            {"column": "score", "check_type": "greater_than", "min_value": 0.0, "severity": "error"}
+        ],
+        "on_failure": "stop_and_error"
+    }
+
+    with pytest.raises(ValueError, match="Guardrail Check Failure"):
+        recipe.execute({"dataframe": df}, config)

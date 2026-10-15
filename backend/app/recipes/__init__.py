@@ -41,6 +41,12 @@ from backend.app.recipes.preprocessing.data_type_converter import DataTypeConver
 from backend.app.recipes.preprocessing.outlier_handler import OutlierHandlerRecipe
 from backend.app.recipes.preprocessing.feature_selector import FeatureSelectorRecipe
 from backend.app.recipes.preprocessing.dataset_join import DatasetJoinRecipe
+from backend.app.recipes.preprocessing.select_rename_reorder import SelectRenameReorderRecipe
+from backend.app.recipes.preprocessing.fuzzy_deduplication import FuzzyMatchDeduplicationRecipe
+from backend.app.recipes.preprocessing.semantic_deduplication import SemanticDeduplicationRecipe
+from backend.app.recipes.preprocessing.data_profiling import DataProfilingReportRecipe
+from backend.app.recipes.preprocessing.schema_validation import SchemaContractValidationRecipe
+from backend.app.recipes.preprocessing.data_guardrails import DataGuardrailsRecipe
 from backend.app.recipes.governance.mlflow_tracker import MLflowTrackerRecipe
 from backend.app.recipes.triggers.webhook_trigger import WebhookTriggerRecipe
 from backend.app.recipes.triggers.cron_trigger import CronScheduleTriggerRecipe
@@ -107,6 +113,12 @@ def register_all_recipes():
     recipe_registry.register(DataTypeConverterRecipe())
     recipe_registry.register(DuplicateRemoverRecipe())
     recipe_registry.register(CategorySanitizerRecipe())
+    recipe_registry.register(SelectRenameReorderRecipe())
+    recipe_registry.register(FuzzyMatchDeduplicationRecipe())
+    recipe_registry.register(SemanticDeduplicationRecipe())
+    recipe_registry.register(DataProfilingReportRecipe())
+    recipe_registry.register(SchemaContractValidationRecipe())
+    recipe_registry.register(DataGuardrailsRecipe())
     recipe_registry.register(CorrelationFilterRecipe())
     recipe_registry.register(VarianceFilterRecipe())
     recipe_registry.register(MissingValueImputerRecipe())
