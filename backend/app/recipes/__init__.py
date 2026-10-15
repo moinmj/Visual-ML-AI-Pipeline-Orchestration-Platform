@@ -92,6 +92,8 @@ from backend.app.recipes.monitoring import (
 from backend.app.recipes.vision.object_detection import ObjectDetectionRecipe
 from backend.app.recipes.vision.image_classifier import ImageClassifierRecipe
 from backend.app.recipes.vision.ocr import OCRRecipe
+from backend.app.recipes.vision.image_embedding import ImageEmbeddingRecipe
+from backend.app.recipes.vision.video_tracking import VideoObjectTrackingRecipe
 
 def register_all_recipes():
     recipe_registry.register(CSVLoaderRecipe())
@@ -183,6 +185,8 @@ def register_all_recipes():
     recipe_registry.register(ObjectDetectionRecipe())
     recipe_registry.register(ImageClassifierRecipe())
     recipe_registry.register(OCRRecipe())
+    recipe_registry.register(ImageEmbeddingRecipe())
+    recipe_registry.register(VideoObjectTrackingRecipe())
 
 
 # Automatically register upon module load
