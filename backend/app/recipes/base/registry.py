@@ -75,6 +75,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "google_sheets": ("Apps & Integrations", "Google Workspace"),
     "google_drive": ("Apps & Integrations", "Google Workspace"),
     "openweathermap": ("Apps & Integrations", "External APIs"),
+    "stock_market_api": ("Apps & Integrations", "Market & Reference Data"),
 
     # Unsupervised & Dimensionality Reduction
     "clustering": ("Modeling", "Unsupervised & Dimensionality Reduction"),

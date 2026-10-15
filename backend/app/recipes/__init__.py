@@ -68,6 +68,7 @@ from backend.app.recipes.integrations.gmail_notifier import GmailRecipe
 from backend.app.recipes.integrations.google_sheets import GoogleSheetsRecipe
 from backend.app.recipes.integrations.google_drive import GoogleDriveRecipe
 from backend.app.recipes.integrations.openweathermap import OpenWeatherMapRecipe
+from backend.app.recipes.integrations.stock_market_api import StockMarketApiRecipe
 
 # Unsupervised & Dimensionality Reduction Recipes
 from backend.app.recipes.unsupervised.clustering import ClusteringRecipe
@@ -159,6 +160,7 @@ def register_all_recipes():
     recipe_registry.register(GoogleSheetsRecipe())
     recipe_registry.register(GoogleDriveRecipe())
     recipe_registry.register(OpenWeatherMapRecipe())
+    recipe_registry.register(StockMarketApiRecipe())
 
     # Unsupervised & Dimensionality Reduction
     recipe_registry.register(ClusteringRecipe())
