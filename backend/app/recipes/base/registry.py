@@ -78,6 +78,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "google_drive": ("Apps & Integrations", "Google Workspace"),
     "openweathermap": ("Apps & Integrations", "External APIs"),
     "stock_market_api": ("Apps & Integrations", "Market & Reference Data"),
+    "currency_exchange_api": ("Apps & Integrations", "Market & Reference Data"),
 
     # Unsupervised & Dimensionality Reduction
     "clustering": ("Modeling", "Unsupervised & Dimensionality Reduction"),
@@ -133,6 +134,9 @@ class RecipeRegistry:
             "experiment_framework": "ab_testing_framework",
             "champion_challenger_comparison": "champion_challenger",
             "champion_vs_challenger": "champion_challenger",
+            "forex": "currency_exchange_api",
+            "exchange_rate": "currency_exchange_api",
+            "fx": "currency_exchange_api",
         }
 
     def register(self, recipe: BaseRecipe):
