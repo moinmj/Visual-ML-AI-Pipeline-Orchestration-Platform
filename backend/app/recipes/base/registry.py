@@ -81,6 +81,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "openweathermap": ("Apps & Integrations", "External APIs"),
     "stock_market_api": ("Apps & Integrations", "Market & Reference Data"),
     "currency_exchange_api": ("Apps & Integrations", "Market & Reference Data"),
+    "news_api": ("Apps & Integrations", "Market & Reference Data"),
 
     # Unsupervised & Dimensionality Reduction
     "clustering": ("Modeling", "Unsupervised & Dimensionality Reduction"),
@@ -139,6 +140,10 @@ class RecipeRegistry:
             "forex": "currency_exchange_api",
             "exchange_rate": "currency_exchange_api",
             "fx": "currency_exchange_api",
+            "news": "news_api",
+            "newsapi": "news_api",
+            "news_feed": "news_api",
+            "headlines": "news_api",
         }
 
     def register(self, recipe: BaseRecipe):

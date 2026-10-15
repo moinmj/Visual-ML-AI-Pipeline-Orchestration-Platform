@@ -70,6 +70,7 @@ from backend.app.recipes.integrations.google_drive import GoogleDriveRecipe
 from backend.app.recipes.integrations.openweathermap import OpenWeatherMapRecipe
 from backend.app.recipes.integrations.stock_market_api import StockMarketApiRecipe
 from backend.app.recipes.integrations.currency_exchange_api import CurrencyExchangeApiRecipe
+from backend.app.recipes.integrations.news_api import NewsApiRecipe
 
 # Unsupervised & Dimensionality Reduction Recipes
 from backend.app.recipes.unsupervised.clustering import ClusteringRecipe
@@ -165,6 +166,7 @@ def register_all_recipes():
     recipe_registry.register(OpenWeatherMapRecipe())
     recipe_registry.register(StockMarketApiRecipe())
     recipe_registry.register(CurrencyExchangeApiRecipe())
+    recipe_registry.register(NewsApiRecipe())
 
     # Unsupervised & Dimensionality Reduction
     recipe_registry.register(ClusteringRecipe())
