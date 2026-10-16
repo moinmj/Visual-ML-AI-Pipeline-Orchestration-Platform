@@ -28,11 +28,13 @@ class ARIMAForecasterRecipe(BaseRecipe):
             "date_column": {
                 "type": "string",
                 "title": "Date Column",
+                "input_type": "column_select",
                 "description": "Timestamp column."
             },
             "target_column": {
                 "type": "string",
                 "title": "Target Metric (Y)",
+                "input_type": "column_select",
                 "description": "The time-series value to model."
             },
             "p": {
@@ -41,6 +43,7 @@ class ARIMAForecasterRecipe(BaseRecipe):
                 "default": 1,
                 "minimum": 0,
                 "maximum": 10,
+                "input_type": "number",
                 "description": "Auto-regressive lag order."
             },
             "d": {
@@ -49,6 +52,7 @@ class ARIMAForecasterRecipe(BaseRecipe):
                 "default": 1,
                 "minimum": 0,
                 "maximum": 2,
+                "input_type": "number",
                 "description": "Degree of differencing for stationarity."
             },
             "q": {
@@ -57,6 +61,7 @@ class ARIMAForecasterRecipe(BaseRecipe):
                 "default": 1,
                 "minimum": 0,
                 "maximum": 10,
+                "input_type": "number",
                 "description": "Moving average window order."
             },
             "horizon_periods": {
@@ -64,7 +69,8 @@ class ARIMAForecasterRecipe(BaseRecipe):
                 "title": "Forecast Horizon (Steps ahead)",
                 "default": 14,
                 "minimum": 1,
-                "maximum": 365
+                "maximum": 365,
+                "input_type": "number"
             },
             "test_size_pct": {
                 "type": "number",
@@ -72,6 +78,7 @@ class ARIMAForecasterRecipe(BaseRecipe):
                 "default": 0.2,
                 "minimum": 0.05,
                 "maximum": 0.4,
+                "input_type": "number",
                 "description": "Fraction of chronologically latest observations to hold out for out-of-sample evaluation."
             }
         }

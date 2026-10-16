@@ -56,7 +56,12 @@ class RowFilterRecipe(BaseRecipe):
                     "items": {
                         "type": "object",
                         "properties": {
-                            "column": {"type": "string", "title": "Column Name"},
+                            "column": {
+                                "type": "string",
+                                "title": "Column Name",
+                                "input_type": "column_select",
+                                "ui:widget": "column_select"
+                            },
                             "operator": {
                                 "type": "string",
                                 "title": "Operator",
