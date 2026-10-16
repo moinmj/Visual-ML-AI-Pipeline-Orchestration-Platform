@@ -95,6 +95,8 @@ from backend.app.recipes.vision.image_classifier import ImageClassifierRecipe
 from backend.app.recipes.vision.ocr import OCRRecipe
 from backend.app.recipes.vision.image_embedding import ImageEmbeddingRecipe
 from backend.app.recipes.vision.video_tracking import VideoObjectTrackingRecipe
+from backend.app.recipes.vision.speech_to_text import SpeechToTextRecipe
+from backend.app.recipes.vision.text_to_speech import TextToSpeechRecipe
 
 def register_all_recipes():
     recipe_registry.register(CSVLoaderRecipe())
@@ -189,6 +191,8 @@ def register_all_recipes():
     recipe_registry.register(OCRRecipe())
     recipe_registry.register(ImageEmbeddingRecipe())
     recipe_registry.register(VideoObjectTrackingRecipe())
+    recipe_registry.register(SpeechToTextRecipe())
+    recipe_registry.register(TextToSpeechRecipe())
 
 
 # Automatically register upon module load

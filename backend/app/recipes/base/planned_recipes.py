@@ -187,8 +187,8 @@ _PLANNED: List[Tuple[str, str, str, List[Tuple[str, str, str, str]]]] = [
     ("Modeling", "Computer Vision & Audio", "vision_audio", [
         #("object_detection", "Object Detection", "transform", "Detects and locates objects in images with bounding boxes."),
         #("image_embedding_generator", "Image Embedding Generator", "transform", "Converts images into numeric embedding vectors for search or ML."),
-        ("speech_to_text", "Speech-to-Text", "transform", "Transcribes audio recordings into text."),
-        ("text_to_speech", "Text-to-Speech", "transform", "Converts text into spoken audio files."),
+        #("speech_to_text", "Speech-to-Text", "transform", "Transcribes audio recordings into text."),
+        #("text_to_speech", "Text-to-Speech", "transform", "Converts text into spoken audio files."),
         #("video_object_tracking", "Video Frame Extractor + Object Tracking", "transform", "Extracts frames from video and tracks objects across them."),
     ]),
 

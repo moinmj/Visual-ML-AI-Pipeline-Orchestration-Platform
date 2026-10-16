@@ -54,6 +54,8 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "ocr": ("Modeling", "Computer Vision & Audio"),
     "image_embedding_generator": ("Modeling", "Computer Vision & Audio"),
     "video_object_tracking": ("Modeling", "Computer Vision & Audio"),
+    "speech_to_text": ("Modeling", "Computer Vision & Audio"),
+    "text_to_speech": ("Modeling", "Computer Vision & Audio"),
     "mlflow_tracker": ("Evaluation & Governance", "Tracking & Registry"),
 
     # Flow Control
