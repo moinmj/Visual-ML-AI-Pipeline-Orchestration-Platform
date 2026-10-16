@@ -20,8 +20,9 @@ from backend.app.recipes.vision import object_detection as od
 MAX_IMAGES_PER_RUN = od.MAX_IMAGES_PER_RUN
 FILE_MODE_COLUMN = od.FILE_MODE_COLUMN
 MAX_VIDEOS_PER_RUN = 5  # videos are big and slow: keep a run small
+MAX_AUDIO_PER_RUN = 10  # audio files can be up to 200 MB each: keep a run small
 
-_LIMITS = {"image": MAX_IMAGES_PER_RUN, "video": MAX_VIDEOS_PER_RUN}
+_LIMITS = {"image": MAX_IMAGES_PER_RUN, "video": MAX_VIDEOS_PER_RUN, "audio": MAX_AUDIO_PER_RUN}
 
 
 def max_per_run(kind: str = "image") -> int:
