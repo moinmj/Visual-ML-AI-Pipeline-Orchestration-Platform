@@ -9,6 +9,7 @@ PANEL_CONFIG_PROPERTIES = {
     "group_by_column": {
         "type": "string",
         "title": "Entity / Group Column",
+        "input_type": "column_select",
         "description": "Optional column identifying distinct entities (e.g. 'Store', 'Region', 'Product') in panel datasets."
     },
     "panel_strategy": {
@@ -16,11 +17,13 @@ PANEL_CONFIG_PROPERTIES = {
         "title": "Panel Data Handling Strategy",
         "enum": ["auto", "aggregate_sum", "aggregate_mean", "filter_entity"],
         "default": "auto",
+        "input_type": "dropdown",
         "description": "Strategy for datasets where multiple rows share the same date. 'auto' / 'aggregate_sum' sums across entities, 'aggregate_mean' averages, and 'filter_entity' isolates a single entity."
     },
     "entity_value": {
         "type": "string",
         "title": "Entity Filter Value",
+        "input_type": "text",
         "description": "Specific entity identifier to forecast (e.g. '1' for Store 1) when 'filter_entity' is selected."
     }
 }
