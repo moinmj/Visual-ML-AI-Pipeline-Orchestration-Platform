@@ -65,8 +65,11 @@ class TelegramRecipe(BaseRecipe):
         }
 
     def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
-        bot_token = str(config.get("bot_token", "")).strip()
-        chat_id = str(config.get("chat_id", "")).strip()
+        bot_token = str(config.get("bot_token", "")).strip().strip("'\"<>")
+        if bot_token.lower().startswith("bot"):
+            # Strip redundant 'bot' prefix if user typed 'bot123456:ABC...'
+            bot_token = bot_token[3:].strip()
+        chat_id = str(config.get("chat_id", "")).strip().strip("'\"<>")
         message = str(config.get("message", "Pipeline Notification"))
         parse_mode = config.get("parse_mode", "Markdown")
 
@@ -95,6 +98,17 @@ class TelegramRecipe(BaseRecipe):
                     if resp.status == 200:
                         delivery_status = "SENT"
                         status_msg = f"Telegram message sent to chat {chat_id}."
+            except urllib.error.HTTPError as he:
+                error_body = ""
+                try:
+                    raw_body = he.read().decode("utf-8")
+                    parsed = json.loads(raw_body)
+                    error_body = parsed.get("description", raw_body)
+                except Exception:
+                    error_body = str(he)
+                logger.warning(f"Telegram HTTP Error {he.code}: {error_body}")
+                delivery_status = "FAILED"
+                status_msg = f"Telegram error ({he.code}): {error_body}"
             except Exception as e:
                 logger.warning(f"Telegram send failed: {e}")
                 delivery_status = "FAILED"
