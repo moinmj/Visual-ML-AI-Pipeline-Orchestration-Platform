@@ -27,6 +27,8 @@ class ColumnSelectorRecipe(BaseRecipe):
                     "type": "array",
                     "items": {"type": "string"},
                     "title": "Target Columns",
+                    "input_type": "column_select",
+                    "ui:widget": "column_select",
                     "description": "Columns to retain (if mode='keep') or eliminate (if mode='drop')."
                 }
             },
@@ -62,7 +64,11 @@ class ColumnSelectorRecipe(BaseRecipe):
             if drop_cols:
                 df_out = df_out.drop(columns=drop_cols)
 
-        return {"dataframe": df_out}
+        return {
+            "dataframe": df_out,
+            "feature_names": list(df_out.columns),
+            "output_summary": {"row_count": len(df_out), "columns": list(df_out.columns)}
+        }
 
     def to_code(self, config: Dict[str, Any]) -> str:
         mode = config.get("mode", "keep")
