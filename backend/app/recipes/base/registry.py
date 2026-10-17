@@ -84,6 +84,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "stock_market_api": ("Apps & Integrations", "Market & Reference Data"),
     "currency_exchange_api": ("Apps & Integrations", "Market & Reference Data"),
     "news_api": ("Apps & Integrations", "Market & Reference Data"),
+    "rss_news_reader": ("Apps & Integrations", "Market & Reference Data"),
 
     # Unsupervised & Dimensionality Reduction
     "clustering": ("Modeling", "Unsupervised & Dimensionality Reduction"),

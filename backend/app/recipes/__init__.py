@@ -95,6 +95,7 @@ from backend.app.recipes.integrations.openweathermap import OpenWeatherMapRecipe
 from backend.app.recipes.integrations.stock_market_api import StockMarketApiRecipe
 from backend.app.recipes.integrations.currency_exchange_api import CurrencyExchangeApiRecipe
 from backend.app.recipes.integrations.news_api import NewsApiRecipe
+from backend.app.recipes.integrations.rss_news_reader import RssNewsReaderRecipe
 
 # Unsupervised & Dimensionality Reduction Recipes
 from backend.app.recipes.unsupervised.clustering import ClusteringRecipe
@@ -217,6 +218,7 @@ def register_all_recipes():
     recipe_registry.register(StockMarketApiRecipe())
     recipe_registry.register(CurrencyExchangeApiRecipe())
     recipe_registry.register(NewsApiRecipe())
+    recipe_registry.register(RssNewsReaderRecipe())
 
     # Unsupervised & Dimensionality Reduction
     recipe_registry.register(ClusteringRecipe())
