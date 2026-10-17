@@ -69,6 +69,7 @@ class TimezoneConverterRecipe(BaseRecipe):
                 "columns": {
                     "type": "array",
                     "title": "Timestamp Columns to Convert",
+                    "input_type": "multi_column_select",
                     "items": {"type": "string"},
                     "default": [],
                     "description": "List of timestamp or datetime columns to convert."
@@ -76,24 +77,27 @@ class TimezoneConverterRecipe(BaseRecipe):
                 "column": {
                     "type": "string",
                     "title": "Single Timestamp Column",
-                    "default": "",
+                    "input_type": "column_select",
                     "description": "Alternative single column to convert."
                 },
                 "source_timezone": {
                     "type": "string",
                     "title": "Source Timezone",
+                    "input_type": "text",
                     "default": "UTC",
                     "description": "Timezone of incoming timestamps if naive (e.g. 'UTC', 'America/New_York', 'Europe/London', 'Asia/Kolkata') or 'auto'."
                 },
                 "target_timezone": {
                     "type": "string",
                     "title": "Target Timezone",
+                    "input_type": "text",
                     "default": "UTC",
                     "description": "Desired destination timezone (e.g. 'America/New_York', 'UTC', 'Asia/Tokyo', 'Europe/Paris')."
                 },
                 "naive_handling": {
                     "type": "string",
                     "title": "Naive Timestamp Handling",
+                    "input_type": "dropdown",
                     "enum": ["assume_source_tz", "raise_error", "drop_na"],
                     "default": "assume_source_tz",
                     "description": "How to handle timestamps without timezone metadata: 'assume_source_tz' localizes with source timezone; 'raise_error' throws; 'drop_na' sets to null."
@@ -101,6 +105,7 @@ class TimezoneConverterRecipe(BaseRecipe):
                 "output_mode": {
                     "type": "string",
                     "title": "Output Column Mode",
+                    "input_type": "dropdown",
                     "enum": ["in_place", "new_column"],
                     "default": "in_place",
                     "description": "Whether to replace timestamps in-place or generate new columns with a suffix."
@@ -108,12 +113,14 @@ class TimezoneConverterRecipe(BaseRecipe):
                 "new_column_suffix": {
                     "type": "string",
                     "title": "New Column Suffix",
+                    "input_type": "text",
                     "default": "_converted",
                     "description": "Suffix for new column when output_mode is 'new_column'."
                 },
                 "output_format": {
                     "type": "string",
                     "title": "Output Format",
+                    "input_type": "dropdown",
                     "enum": ["datetime64", "iso8601", "naive_local_wallclock", "custom"],
                     "default": "datetime64",
                     "description": "'datetime64' keeps timezone-aware pandas datetime; 'iso8601' produces ISO strings with offset; 'naive_local_wallclock' strips timezone offset leaving local wall-clock time."
@@ -121,6 +128,7 @@ class TimezoneConverterRecipe(BaseRecipe):
                 "target_date_format": {
                     "type": "string",
                     "title": "Custom Format String",
+                    "input_type": "text",
                     "default": "%Y-%m-%d %H:%M:%S",
                     "description": "Format string if output_format is 'custom'."
                 }

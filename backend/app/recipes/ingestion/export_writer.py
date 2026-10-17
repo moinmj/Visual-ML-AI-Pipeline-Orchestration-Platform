@@ -70,6 +70,7 @@ class ExportWriterRecipe(BaseRecipe):
                 "file_format": {
                     "type": "select",
                     "title": "File Format",
+                    "input_type": "dropdown",
                     "enum": ["csv", "parquet", "excel", "json", "tsv"],
                     "default": "csv",
                     "description": "Format of the exported file (CSV, Parquet, Excel .xlsx, JSON, or TSV)."
@@ -77,12 +78,14 @@ class ExportWriterRecipe(BaseRecipe):
                 "file_name": {
                     "type": "text",
                     "title": "File Name",
+                    "input_type": "text",
                     "default": "exported_dataset",
                     "description": "Name of the exported file (extension is automatically appended if omitted)."
                 },
                 "destination": {
                     "type": "radio",
                     "title": "Destination",
+                    "input_type": "dropdown",
                     "enum": ["export_store", "custom_path"],
                     "default": "export_store",
                     "description": "Save in platform's standard export store, or specify a custom relative path."
@@ -90,18 +93,21 @@ class ExportWriterRecipe(BaseRecipe):
                 "custom_file_path": {
                     "type": "text",
                     "title": "Custom File Path",
+                    "input_type": "text",
                     "default": "",
                     "description": "Relative file path when using 'custom_path' (e.g. 'exports/my_export.parquet')."
                 },
                 "include_index": {
                     "type": "boolean",
                     "title": "Include DataFrame Index",
+                    "input_type": "checkbox",
                     "default": False,
                     "description": "Whether to write the DataFrame row index as a column in the output file."
                 },
                 "delimiter": {
                     "type": "select",
                     "title": "Delimiter (CSV / TSV)",
+                    "input_type": "dropdown",
                     "enum": [",", ";", "\t", "|"],
                     "default": ",",
                     "description": "Field separator for delimited text exports."
@@ -109,6 +115,7 @@ class ExportWriterRecipe(BaseRecipe):
                 "compression": {
                     "type": "select",
                     "title": "Compression",
+                    "input_type": "dropdown",
                     "enum": ["none", "gzip", "snappy"],
                     "default": "none",
                     "description": "Compression algorithm (supported for CSV and Parquet)."
@@ -116,12 +123,14 @@ class ExportWriterRecipe(BaseRecipe):
                 "excel_sheet_name": {
                     "type": "text",
                     "title": "Excel Sheet Name",
+                    "input_type": "text",
                     "default": "Sheet1",
                     "description": "Name of the worksheet for Excel (.xlsx) exports."
                 },
                 "json_orient": {
                     "type": "select",
                     "title": "JSON Orientation",
+                    "input_type": "dropdown",
                     "enum": ["records", "split", "index", "columns"],
                     "default": "records",
                     "description": "Layout format for JSON export ('records' is standard list-of-dicts n8n shape)."
@@ -129,6 +138,7 @@ class ExportWriterRecipe(BaseRecipe):
                 "overwrite": {
                     "type": "boolean",
                     "title": "Overwrite Existing File",
+                    "input_type": "checkbox",
                     "default": True,
                     "description": "Whether to overwrite the file if a file with the same name already exists."
                 }

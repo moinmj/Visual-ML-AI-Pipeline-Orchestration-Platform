@@ -45,6 +45,7 @@ class CategoricalEncoderRecipe(BaseRecipe):
                 "method": {
                     "type": "select",
                     "title": "Encoding Method",
+                    "input_type": "dropdown",
                     "enum": ["one_hot", "label", "ordinal", "target", "frequency", "binary", "woe"],
                     "default": "one_hot",
                     "description": "Select from 7 encoding techniques."
@@ -52,16 +53,19 @@ class CategoricalEncoderRecipe(BaseRecipe):
                 "columns": {
                     "type": "column",
                     "title": "Columns to Encode",
+                    "input_type": "multi_column_select",
                     "description": "Specific categorical columns to encode. If empty, all string/categorical features are processed."
                 },
                 "target_column": {
                     "type": "column",
                     "title": "Target Column",
+                    "input_type": "column_select",
                     "description": "Required for Target and WoE encodings. If blank, auto-detected from context."
                 },
                 "drop_first": {
                     "type": "boolean",
                     "title": "Drop First Dummy",
+                    "input_type": "checkbox",
                     "default": False,
                     "description": "Used only with One-Hot encoding to avoid multicollinearity."
                 }

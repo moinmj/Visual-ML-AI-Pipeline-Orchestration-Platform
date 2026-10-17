@@ -50,6 +50,7 @@ class ParseDateRecipe(BaseRecipe):
                 "columns": {
                     "type": "array",
                     "title": "Date Columns to Parse",
+                    "input_type": "multi_column_select",
                     "items": {"type": "string"},
                     "default": [],
                     "description": "List of columns containing dates or timestamps to parse."
@@ -57,30 +58,34 @@ class ParseDateRecipe(BaseRecipe):
                 "column": {
                     "type": "string",
                     "title": "Single Date Column",
-                    "default": "",
+                    "input_type": "column_select",
                     "description": "Alternative single column to parse."
                 },
                 "date_format": {
                     "type": "string",
                     "title": "Date Format String",
+                    "input_type": "text",
                     "default": "auto",
                     "description": "Explicit strftime format string (e.g. '%Y-%m-%d', '%d/%m/%Y', '%m/%d/%Y %H:%M:%S', '%d-%b-%Y') or 'auto' for intelligent heuristic detection."
                 },
                 "dayfirst": {
                     "type": "boolean",
                     "title": "Day First (DD/MM/YYYY)",
+                    "input_type": "checkbox",
                     "default": False,
                     "description": "Whether to interpret the first value in an ambiguous 3-integer date (e.g. 01/05/09) as the day."
                 },
                 "yearfirst": {
                     "type": "boolean",
                     "title": "Year First (YYYY/MM/DD)",
+                    "input_type": "checkbox",
                     "default": False,
                     "description": "Whether to interpret the first value in an ambiguous 3-integer date as the year."
                 },
                 "errors": {
                     "type": "string",
                     "title": "Error Handling Action",
+                    "input_type": "dropdown",
                     "enum": ["coerce", "raise", "ignore"],
                     "default": "coerce",
                     "description": "'coerce' sets invalid/unparseable values to NaT (null); 'raise' throws an exception; 'ignore' leaves invalid values as original strings."
@@ -88,6 +93,7 @@ class ParseDateRecipe(BaseRecipe):
                 "output_mode": {
                     "type": "string",
                     "title": "Output Mode",
+                    "input_type": "dropdown",
                     "enum": ["in_place", "new_column"],
                     "default": "in_place",
                     "description": "Whether to overwrite the original column in-place or generate a new column with a suffix."
@@ -95,12 +101,14 @@ class ParseDateRecipe(BaseRecipe):
                 "new_column_suffix": {
                     "type": "string",
                     "title": "New Column Suffix",
+                    "input_type": "text",
                     "default": "_parsed",
                     "description": "Suffix for new column when output_mode is 'new_column'."
                 },
                 "output_format": {
                     "type": "string",
                     "title": "Output Representation",
+                    "input_type": "dropdown",
                     "enum": ["datetime64", "date_only", "iso8601", "custom"],
                     "default": "datetime64",
                     "description": "'datetime64' keeps native pandas datetime; 'date_only' formats as YYYY-MM-DD; 'iso8601' produces standard ISO timestamps; 'custom' uses target_date_format."
@@ -108,12 +116,14 @@ class ParseDateRecipe(BaseRecipe):
                 "target_date_format": {
                     "type": "string",
                     "title": "Target Date Format (for custom format)",
+                    "input_type": "text",
                     "default": "%Y-%m-%d",
                     "description": "Format string if output_format is set to 'custom'."
                 },
                 "extract_parts": {
                     "type": "array",
                     "title": "Extract Calendar Components",
+                    "input_type": "multi_select",
                     "items": {
                         "type": "string",
                         "enum": ["year", "month", "day", "day_name", "day_of_week", "hour", "quarter", "is_weekend"]
