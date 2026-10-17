@@ -31,6 +31,8 @@ class ModelServingEndpointRecipe(BaseRecipe):
     def get_schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
+            "x-no-column-validation": True,
+            "validate_columns": False,
             "properties": {
                 "endpoint_name": {
                     "type": "string",
@@ -55,7 +57,14 @@ class ModelServingEndpointRecipe(BaseRecipe):
                         "GCP Vertex AI",
                         "Azure ML"
                     ],
-                    "default": "Serverless API (FastAPI/Triton)"
+                    "default": "Serverless API (FastAPI/Triton)",
+                    "enum_type": "infrastructure",
+                    "format": "select",
+                    "ui:widget": "select",
+                    "is_column": False,
+                    "validate_as_column": False,
+                    "column_selector": False,
+                    "description": "Enterprise cloud or container compute target runtime."
                 },
                 "traffic_percentage": {
                     "type": "number",
@@ -125,7 +134,7 @@ class ModelServingEndpointRecipe(BaseRecipe):
 
         endpoint_name = str(config.get("endpoint_name", "model-serving-endpoint")).strip() or "model-serving-endpoint"
         environment = config.get("environment", "production")
-        compute_target = config.get("compute_target", "Serverless API (FastAPI/Triton)")
+        compute_target = config.get("compute_target") or config.get("compute_backend") or "Serverless API (FastAPI/Triton)"
         traffic_pct = float(config.get("traffic_percentage", 100))
         min_replicas = int(config.get("autoscaling_min_replicas", 1))
         max_replicas = int(config.get("autoscaling_max_replicas", 5))
@@ -174,7 +183,61 @@ class ModelServingEndpointRecipe(BaseRecipe):
                 latency_p50 = 9.1
                 latency_p95 = 15.0
 
-        # 4. Construct Governance / Deployment Record
+        # 4. Generate Interactive cURL and Python SDK Code Snippets
+        import json as _json
+        sample_instance: Dict[str, Any] = {}
+        active_features = feature_names[:6] if feature_names else ["feature_1", "feature_2", "feature_3"]
+        if isinstance(df, pd.DataFrame) and not df.empty:
+            for f in active_features:
+                if f in df.columns:
+                    val = df[f].iloc[0]
+                    if pd.isna(val):
+                        sample_instance[f] = None
+                    elif isinstance(val, (int, np.integer)):
+                        sample_instance[f] = int(val)
+                    elif isinstance(val, (float, np.floating)):
+                        sample_instance[f] = round(float(val), 2)
+                    else:
+                        sample_instance[f] = str(val)
+                else:
+                    sample_instance[f] = 1.0
+        else:
+            for f in active_features:
+                sample_instance[f] = 1.0
+
+        sample_json_inline = _json.dumps({"instances": [sample_instance]})
+        auth_header_curl = '  -H "Authorization: Bearer <YOUR_API_TOKEN>" \\\n' if auth_enabled else ""
+        auth_header_py = '    "Authorization": "Bearer <YOUR_API_TOKEN>",\n' if auth_enabled else ""
+
+        curl_snippet = (
+            f"curl -X POST \"https://api.yourdomain.com{predict_route}\" \\\n"
+            f"  -H \"Content-Type: application/json\" \\\n"
+            f"{auth_header_curl}"
+            f"  -d '{sample_json_inline}'"
+        )
+
+        formatted_sample_py = _json.dumps(sample_instance, indent=8)
+        python_sdk_snippet = (
+            f"import requests\n\n"
+            f"url = \"https://api.yourdomain.com{predict_route}\"\n"
+            f"headers = {{\n"
+            f"    \"Content-Type\": \"application/json\",\n"
+            f"{auth_header_py}"
+            f"}}\n"
+            f"payload = {{\n"
+            f"    \"instances\": [\n"
+            f"        {formatted_sample_py.strip()}\n"
+            f"    ]\n"
+            f"}}\n\n"
+            f"response = requests.post(url, json=payload, headers=headers)\n"
+            f"if response.status_code == 200:\n"
+            f"    result = response.json()\n"
+            f"    print(\"Prediction response:\", result)\n"
+            f"else:\n"
+            f"    print(f\"Request failed ({{response.status_code}}):\", response.text)\n"
+        )
+
+        # 5. Construct Governance / Deployment Record
         deployment_record = {
             "endpoint_id": endpoint_id,
             "endpoint_name": endpoint_name,
@@ -204,10 +267,14 @@ class ModelServingEndpointRecipe(BaseRecipe):
                 "expected_features": feature_names[:10],
                 "total_features": len(feature_names)
             },
-            "deployed_at": created_at
+            "deployed_at": created_at,
+            "snippets": {
+                "curl": curl_snippet,
+                "python_sdk": python_sdk_snippet
+            }
         }
 
-        # 5. Build Tabular Preview DataFrame
+        # 6. Build Tabular Preview DataFrame
         spec_rows = [
             {"Property": "Endpoint ID", "Configuration / Status": endpoint_id, "Category": "Identity"},
             {"Property": "Endpoint Name", "Configuration / Status": endpoint_name, "Category": "Identity"},
@@ -232,12 +299,36 @@ class ModelServingEndpointRecipe(BaseRecipe):
             "traffic_split_pct": traffic_pct,
             "warmup_latency_ms": latency_p50,
             "latency_p95_ms": latency_p95,
-            "inferred_features_count": len(feature_names)
+            "inferred_features_count": len(feature_names),
+            "curl_snippet": curl_snippet,
+            "python_snippet": python_sdk_snippet
+        }
+
+        output_summary = {
+            "status": "ACTIVE (Ready)",
+            "endpoint_id": endpoint_id,
+            "endpoint_name": endpoint_name,
+            "environment": environment.upper(),
+            "compute_target": compute_target,
+            "predict_route": predict_route,
+            "health_route": health_route,
+            "traffic_split_pct": traffic_pct,
+            "active_replicas": max(1, min_replicas),
+            "latency_p95_ms": latency_p95,
+            "auth_required": "Enabled (Bearer Token)" if auth_enabled else "Disabled",
+            "contract_features_count": len(feature_names),
+            "curl_snippet": curl_snippet,
+            "python_sdk_snippet": python_sdk_snippet,
+            "code_snippets": {
+                "curl": curl_snippet,
+                "python": python_sdk_snippet
+            }
         }
 
         ret = {
             "governance_record": deployment_record,
             "metrics": metrics,
+            "output_summary": output_summary,
             "dataframe": deployment_df,
             "output_table": deployment_df
         }
@@ -246,3 +337,15 @@ class ModelServingEndpointRecipe(BaseRecipe):
         if isinstance(df, pd.DataFrame):
             ret["input_dataframe"] = df
         return ret
+
+    def to_code(self, config: Dict[str, Any]) -> str:
+        ep = config.get("endpoint_name", "model-serving-endpoint")
+        target = config.get("compute_target", "Serverless API (FastAPI/Triton)")
+        env = config.get("environment", "production")
+        traffic = config.get("traffic_percentage", 100)
+        return (
+            f"# Model Serving / Deployment Endpoint\n"
+            f"# Target: {target} | Env: {env} | Traffic: {traffic}%\n"
+            f"# Route: /v1/models/{ep}/predict\n"
+            f"# Provisioned via Platform Orchestration Engine\n"
+        )

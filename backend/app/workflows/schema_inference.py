@@ -30,6 +30,7 @@ class WorkflowSchemaInferencer:
         nodes: List[Dict[str, Any]],
         edges: List[Dict[str, Any]],
         node_configs: Optional[Dict[str, Any]] = None,
+        session_id: Optional[str] = None,
         db: Optional[AsyncSession] = None
     ) -> WorkflowInferSchemaResponse:
         node_configs = node_configs or {}
@@ -82,7 +83,14 @@ class WorkflowSchemaInferencer:
                 elif recipe_id == "dataset_join":
                     schema = cls._infer_dataset_join(node_id, recipe_id, config, incoming_edges, node_schemas)
                 else:
-                    schema = cls._infer_generic_node(node_id, recipe_id, config, incoming_edges, node_schemas)
+                    schema = cls._infer_generic_node(
+                        node_id,
+                        recipe_id,
+                        config,
+                        incoming_edges,
+                        node_schemas,
+                        session_id=session_id
+                    )
 
                 node_schemas[node_id] = schema
             except Exception as e:
@@ -336,43 +344,157 @@ class WorkflowSchemaInferencer:
         recipe_id: str,
         config: Dict[str, Any],
         incoming_edges: List[Dict[str, Any]],
-        node_schemas: Dict[str, NodeInferredSchema]
+        node_schemas: Dict[str, NodeInferredSchema],
+        session_id: Optional[str] = None
     ) -> NodeInferredSchema:
         parent_cols: List[str] = []
         parent_details: List[NodeColumnInfo] = []
+        parent_recipe: Optional[str] = None
 
         if incoming_edges:
             first_edge = incoming_edges[0]
             src = str(first_edge.get("source", ""))
             parent_schema = node_schemas.get(src)
             if parent_schema:
-                sh = (
+                parent_recipe = parent_schema.recipe_id
+                raw_sh = (
                     first_edge.get("sourceHandle")
                     or first_edge.get("source_handle")
                     or first_edge.get("source_port")
                     or ""
                 ).lower().strip()
-                if sh and sh in parent_schema.ports:
-                    parent_cols = list(parent_schema.ports[sh].columns)
-                    parent_details = list(parent_schema.ports[sh].column_details)
+                sh_candidates = [
+                    raw_sh,
+                    raw_sh.replace(" ", "_"),
+                    raw_sh.replace("_", " "),
+                    raw_sh.replace("-", "_"),
+                    raw_sh.replace(" ", ""),
+                ]
+                matched_port = None
+                for c in sh_candidates:
+                    if c and c in parent_schema.ports:
+                        matched_port = parent_schema.ports[c]
+                        break
+                if matched_port and matched_port.columns:
+                    parent_cols = list(matched_port.columns)
+                    parent_details = list(matched_port.column_details)
                 else:
                     parent_cols = list(parent_schema.columns)
                     parent_details = list(parent_schema.column_details)
 
-        # Feature selection / dropping
+        # Check if node is an independent generator or preceded by a trigger
+        is_trigger_parent = parent_recipe in ["cron_trigger", "webhook_trigger", None]
+        if not parent_cols or is_trigger_parent:
+            if recipe_id == "stock_market_api":
+                mode = str(config.get("mode", "historical")).lower().strip()
+                if mode == "quote":
+                    parent_cols = ["symbol", "price", "change", "change_percent", "open", "high_24h", "low_24h", "volume_24h", "market_cap_est", "last_updated"]
+                else:
+                    parent_cols = ["date", "open", "high", "low", "close", "adj_close", "volume", "daily_return_pct", "sma_20", "sma_50", "symbol"]
+                parent_details = [NodeColumnInfo(name=c, type="numeric" if c not in ["date", "symbol", "last_updated"] else "string") for c in parent_cols]
+            elif recipe_id == "currency_exchange_api":
+                parent_cols = ["timestamp", "base_currency", "quote_currency", "exchange_rate", "converted_amount", "last_updated_utc"]
+                parent_details = [NodeColumnInfo(name=c, type="numeric" if "rate" in c or "amount" in c else "string") for c in parent_cols]
+            elif recipe_id in ["news_api", "rss_news_reader"]:
+                parent_cols = ["title", "link", "published_at", "description", "author", "guid", "category", "feed_title", "feed_url"]
+                parent_details = [NodeColumnInfo(name=c, type="string") for c in parent_cols]
+            elif recipe_id in ["cron_trigger", "webhook_trigger"]:
+                parent_cols = ["timestamp", "trigger_time", "payload"]
+                parent_details = [NodeColumnInfo(name=c, type="string") for c in parent_cols]
+
+        # Feature selection / dropping / modeling transformations
         active_cols = list(parent_cols)
         detail_map = {d.name: d for d in parent_details}
 
-        if config.get("selected_features") and isinstance(config["selected_features"], list):
+        if recipe_id == "isolation_forest":
+            for col_name in ["is_anomaly", "anomaly_score"]:
+                if col_name not in active_cols:
+                    active_cols.append(col_name)
+                    detail_map[col_name] = NodeColumnInfo(name=col_name, type="numeric")
+        elif recipe_id in ["arima_forecaster", "prophet_forecaster"]:
+            for col_name in ["forecast", "lower_bound", "upper_bound"]:
+                if col_name not in active_cols:
+                    active_cols.append(col_name)
+                    detail_map[col_name] = NodeColumnInfo(name=col_name, type="numeric")
+        elif recipe_id == "aggregate":
+            gb_cols = config.get("group_by") or []
+            if isinstance(gb_cols, str):
+                gb_cols = [c.strip() for c in gb_cols.split(",") if c.strip()]
+            aggs = config.get("aggregations") or []
+            if gb_cols:
+                active_cols = [c for c in active_cols if c in gb_cols]
+            for a in aggs:
+                if isinstance(a, dict):
+                    c = a.get("column", "")
+                    f = a.get("func", "sum")
+                    if c:
+                        new_col = f"{c}_{f}"
+                        if new_col not in active_cols:
+                            active_cols.append(new_col)
+                            detail_map[new_col] = NodeColumnInfo(name=new_col, type="numeric")
+        elif recipe_id == "column_selector":
+            mode = str(config.get("mode", "keep")).lower().strip()
+            cols = config.get("columns") or []
+            if isinstance(cols, str):
+                cols = [c.strip() for c in cols.split(",") if c.strip()]
+            if cols:
+                if mode == "keep":
+                    active_cols = [c for c in active_cols if c in cols]
+                elif mode == "drop":
+                    active_cols = [c for c in active_cols if c not in cols]
+        elif config.get("selected_features") and isinstance(config["selected_features"], list):
             sel = set(config["selected_features"])
             active_cols = [c for c in active_cols if c in sel]
         elif config.get("columns_to_drop") and isinstance(config["columns_to_drop"], list):
             drop_set = set(config["columns_to_drop"])
             active_cols = [c for c in active_cols if c not in drop_set]
 
+        # Check session test-step cache if available for runtime truth
+        if session_id:
+            try:
+                from backend.app.engine.execution.step_executor import NodeStepExecutor
+                cached = NodeStepExecutor.load_node_output(session_id=session_id, node_id=node_id)
+                if cached and isinstance(cached.get("dataframe"), pd.DataFrame):
+                    df_c = cached["dataframe"]
+                    if len(df_c.columns) > 0:
+                        active_cols = list(df_c.columns)
+                        detail_map = {
+                            c: NodeColumnInfo(
+                                name=c,
+                                type="numeric" if pd.api.types.is_numeric_dtype(df_c[c]) else "string"
+                            ) for c in active_cols
+                        }
+            except Exception:
+                pass
+
         active_details = [detail_map.get(c, NodeColumnInfo(name=c, type="string")) for c in active_cols]
 
         port_out = NodePortSchema(port_id="output", columns=active_cols, column_details=active_details)
+        ports = {
+            "output": port_out,
+            "dataframe": port_out,
+            "output 1": port_out,
+            "output_1": port_out,
+            "output1": port_out,
+            "output-1": port_out,
+            "1": port_out,
+            "out": port_out,
+            "input": port_out,
+            "in": port_out
+        }
+        if recipe_id == "isolation_forest":
+            model_port = NodePortSchema(port_id="model", columns=[], column_details=[])
+            metrics_port = NodePortSchema(port_id="metrics", columns=[], column_details=[])
+            ports.update({
+                "model": model_port,
+                "output 2": model_port,
+                "output_2": model_port,
+                "output2": model_port,
+                "metrics": metrics_port,
+                "output 3": metrics_port,
+                "output_3": metrics_port,
+                "output3": metrics_port
+            })
 
         return NodeInferredSchema(
             node_id=node_id,
@@ -381,5 +503,5 @@ class WorkflowSchemaInferencer:
             column_details=active_details,
             available_left_columns=list(parent_cols),
             available_right_columns=[],
-            ports={"output": port_out, "dataframe": port_out}
+            ports=ports
         )

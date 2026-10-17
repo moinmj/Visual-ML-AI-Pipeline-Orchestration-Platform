@@ -121,6 +121,10 @@ def test_pca_execution():
     assert "explained_variance_ratio" in result["metrics"]
     assert "feature_loadings" in result["metrics"]
     assert len(result["metrics"]["explained_variance_ratio"]) == 2
+    assert "explained_variance_ratio" in result["output_summary"]
+    assert "total_variance_explained" in result["output_summary"]
+    assert "bar_chart" in result["output_summary"]
+    assert "scatter_plot" in result["output_summary"]
 
 
 def test_pca_edge_cases():
@@ -160,6 +164,9 @@ def test_umap_execution():
     assert len(out_df) == 6
     assert result["metrics"]["n_components"] == 2
     assert "engine" in result["metrics"]
+    assert "scatter_plot" in result["metrics"]
+    assert "points" in result["metrics"]["scatter_plot"]
+    assert "scatter_plot" in result["output_summary"]
 
 
 def test_umap_edge_cases():
@@ -198,6 +205,9 @@ def test_tsne_execution():
     # Clamped to <= (6-1)/3 = 1.66
     assert result["metrics"]["perplexity_used"] < 30.0
     assert "scatter_preview" in result["metrics"]
+    assert "scatter_plot" in result["metrics"]
+    assert "points" in result["metrics"]["scatter_plot"]
+    assert "scatter_plot" in result["output_summary"]
 
 
 def test_tsne_edge_cases():

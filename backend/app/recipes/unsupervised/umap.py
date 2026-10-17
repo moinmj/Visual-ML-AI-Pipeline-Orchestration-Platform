@@ -233,13 +233,65 @@ class UMAPRecipe(BaseRecipe):
                 fitted_model = pca_fallback
                 engine_used = "pca_approximation"
 
+        # Condition coordinate scale to prevent microscopic 1e-7 exponential notation artifacts
+        for i in range(n_components):
+            c_std = float(np.std(X_umap[:, i]))
+            if c_std > 0 and c_std < 1e-3:
+                X_umap[:, i] = (X_umap[:, i] - np.mean(X_umap[:, i])) / c_std
+
         component_col_names = [f"{prefix}{i + 1}" for i in range(n_components)]
-        umap_df = pd.DataFrame(X_umap, columns=component_col_names, index=df.index)
+        umap_df = pd.DataFrame(np.round(X_umap, 5), columns=component_col_names, index=df.index)
 
         if append_components:
             out_df = pd.concat([df.copy(), umap_df], axis=1)
         else:
             out_df = umap_df
+
+        # Interactive 2D/3D scatter plot data
+        sample_size = min(300, len(umap_df))
+        sample_indices = np.random.RandomState(random_state).choice(len(umap_df), sample_size, replace=False) if len(umap_df) > sample_size else np.arange(len(umap_df))
+
+        color_col = None
+        for col_cand in ["cluster", "CLUSTER", "label", "target", "Churn", "churn", "category"]:
+            if col_cand in df.columns:
+                color_col = col_cand
+                break
+
+        scatter_points: List[Dict[str, Any]] = []
+        for idx in sample_indices:
+            row_umap = umap_df.iloc[idx]
+            x_val = round(float(row_umap[component_col_names[0]]), 4)
+            y_val = round(float(row_umap[component_col_names[1]]), 4) if n_components >= 2 else 0.0
+            p_dict: Dict[str, Any] = {
+                "x": x_val,
+                "y": y_val,
+                component_col_names[0]: x_val
+            }
+            if n_components >= 2:
+                p_dict[component_col_names[1]] = y_val
+            if n_components >= 3 and len(component_col_names) >= 3:
+                z_val = round(float(row_umap[component_col_names[2]]), 4)
+                p_dict["z"] = z_val
+                p_dict[component_col_names[2]] = z_val
+
+            if color_col is not None and idx < len(df):
+                val_color = df.iloc[idx][color_col]
+                p_dict["group"] = str(val_color)
+                p_dict["label"] = str(val_color)
+                p_dict["cluster"] = str(val_color)
+
+            scatter_points.append(p_dict)
+
+        scatter_plot: Dict[str, Any] = {
+            "x_axis": component_col_names[0],
+            "y_axis": component_col_names[1] if n_components >= 2 else component_col_names[0],
+            "z_axis": component_col_names[2] if n_components >= 3 else None,
+            "dimensions": min(3, n_components),
+            "points": scatter_points,
+            "total_points": len(scatter_points),
+            "has_color_group": color_col is not None,
+            "color_feature": color_col
+        }
 
         metrics: Dict[str, Any] = {
             "n_components": n_components,
@@ -248,19 +300,18 @@ class UMAPRecipe(BaseRecipe):
             "metric": metric,
             "engine": engine_used,
             "features_embedded": feature_cols,
-            "total_rows": len(df)
+            "total_rows": len(df),
+            "scatter_plot": scatter_plot,
+            "scatter_preview": scatter_points[:150]
         }
-
-        # Scatter preview if >= 2 components
-        scatter_sample = []
-        if n_components >= 2:
-            scatter_sample = umap_df[[component_col_names[0], component_col_names[1]]].head(150).to_dict(orient="records")
-        metrics["scatter_preview"] = scatter_sample
 
         summary = {
             "title": "UMAP Embedding Completed",
             "engine": engine_used,
             "n_components": n_components,
+            "n_neighbors": n_neighbors,
+            "metric": metric,
+            "scatter_plot": scatter_plot,
             "status": "SUCCESS"
         }
 

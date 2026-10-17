@@ -369,6 +369,10 @@ class ClusteringRecipe(BaseRecipe):
             "scatter_plot": scatter_plot,
             "status": "SUCCESS"
         }
+        if "silhouette_score" in metrics:
+            summary["silhouette_score"] = metrics["silhouette_score"]
+        if "inertia" in metrics:
+            summary["inertia"] = metrics["inertia"]
 
         return {
             "dataframe": out_df,

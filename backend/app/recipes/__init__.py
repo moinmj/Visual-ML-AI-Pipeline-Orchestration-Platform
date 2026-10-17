@@ -41,6 +41,30 @@ from backend.app.recipes.preprocessing.data_type_converter import DataTypeConver
 from backend.app.recipes.preprocessing.outlier_handler import OutlierHandlerRecipe
 from backend.app.recipes.preprocessing.feature_selector import FeatureSelectorRecipe
 from backend.app.recipes.preprocessing.dataset_join import DatasetJoinRecipe
+from backend.app.recipes.preprocessing.select_rename_reorder import SelectRenameReorderRecipe
+from backend.app.recipes.preprocessing.fuzzy_deduplication import FuzzyMatchDeduplicationRecipe
+from backend.app.recipes.preprocessing.semantic_deduplication import SemanticDeduplicationRecipe
+from backend.app.recipes.preprocessing.data_profiling import DataProfilingReportRecipe
+from backend.app.recipes.preprocessing.schema_validation import SchemaContractValidationRecipe
+from backend.app.recipes.preprocessing.data_guardrails import DataGuardrailsRecipe
+from backend.app.recipes.preprocessing.formula_calculator import FormulaCalculatorRecipe
+from backend.app.recipes.preprocessing.replace_value import ReplaceValueRecipe
+from backend.app.recipes.preprocessing.regex_replace_extract import RegexReplaceExtractRecipe
+from backend.app.recipes.preprocessing.parse_date import ParseDateRecipe
+from backend.app.recipes.preprocessing.geocode_distance import GeocodeDistanceCalculatorRecipe
+from backend.app.recipes.preprocessing.timezone_converter import TimezoneConverterRecipe
+from backend.app.recipes.preprocessing.business_day_holiday import BusinessDayHolidayCalculatorRecipe
+from backend.app.recipes.preprocessing.currency_unit_normalizer import CurrencyUnitNormalizerRecipe
+from backend.app.recipes.preprocessing.address_parser_standardizer import AddressParserStandardizerRecipe
+from backend.app.recipes.preprocessing.phone_number_validator import PhoneNumberValidatorRecipe
+from backend.app.recipes.preprocessing.email_domain_validator import EmailDomainValidatorRecipe
+from backend.app.recipes.preprocessing.json_xml_flattener import JsonXmlFlattenerNesterRecipe
+from backend.app.recipes.preprocessing.hierarchical_tree_flattener import HierarchicalTreeFlattenerRecipe
+from backend.app.recipes.preprocessing.cross_tab_generator import CrossTabGeneratorRecipe
+from backend.app.recipes.preprocessing.date_range_expander import DateRangeExpanderRecipe
+from backend.app.recipes.preprocessing.differential_privacy import DifferentialPrivacyAnonymizerRecipe
+from backend.app.recipes.preprocessing.compliance_tokenization import ComplianceTokenizationRecipe
+from backend.app.recipes.preprocessing.sampling_operator import SamplingOperatorRecipe
 from backend.app.recipes.governance.mlflow_tracker import MLflowTrackerRecipe
 from backend.app.recipes.triggers.webhook_trigger import WebhookTriggerRecipe
 from backend.app.recipes.triggers.cron_trigger import CronScheduleTriggerRecipe
@@ -71,6 +95,7 @@ from backend.app.recipes.integrations.openweathermap import OpenWeatherMapRecipe
 from backend.app.recipes.integrations.stock_market_api import StockMarketApiRecipe
 from backend.app.recipes.integrations.currency_exchange_api import CurrencyExchangeApiRecipe
 from backend.app.recipes.integrations.news_api import NewsApiRecipe
+from backend.app.recipes.integrations.rss_news_reader import RssNewsReaderRecipe
 
 # Unsupervised & Dimensionality Reduction Recipes
 from backend.app.recipes.unsupervised.clustering import ClusteringRecipe
@@ -109,6 +134,30 @@ def register_all_recipes():
     recipe_registry.register(DataTypeConverterRecipe())
     recipe_registry.register(DuplicateRemoverRecipe())
     recipe_registry.register(CategorySanitizerRecipe())
+    recipe_registry.register(SelectRenameReorderRecipe())
+    recipe_registry.register(FuzzyMatchDeduplicationRecipe())
+    recipe_registry.register(SemanticDeduplicationRecipe())
+    recipe_registry.register(DataProfilingReportRecipe())
+    recipe_registry.register(SchemaContractValidationRecipe())
+    recipe_registry.register(DataGuardrailsRecipe())
+    recipe_registry.register(FormulaCalculatorRecipe())
+    recipe_registry.register(ReplaceValueRecipe())
+    recipe_registry.register(RegexReplaceExtractRecipe())
+    recipe_registry.register(ParseDateRecipe())
+    recipe_registry.register(GeocodeDistanceCalculatorRecipe())
+    recipe_registry.register(TimezoneConverterRecipe())
+    recipe_registry.register(BusinessDayHolidayCalculatorRecipe())
+    recipe_registry.register(CurrencyUnitNormalizerRecipe())
+    recipe_registry.register(AddressParserStandardizerRecipe())
+    recipe_registry.register(PhoneNumberValidatorRecipe())
+    recipe_registry.register(EmailDomainValidatorRecipe())
+    recipe_registry.register(JsonXmlFlattenerNesterRecipe())
+    recipe_registry.register(HierarchicalTreeFlattenerRecipe())
+    recipe_registry.register(CrossTabGeneratorRecipe())
+    recipe_registry.register(DateRangeExpanderRecipe())
+    recipe_registry.register(DifferentialPrivacyAnonymizerRecipe())
+    recipe_registry.register(ComplianceTokenizationRecipe())
+    recipe_registry.register(SamplingOperatorRecipe())
     recipe_registry.register(CorrelationFilterRecipe())
     recipe_registry.register(VarianceFilterRecipe())
     recipe_registry.register(MissingValueImputerRecipe())
@@ -169,6 +218,7 @@ def register_all_recipes():
     recipe_registry.register(StockMarketApiRecipe())
     recipe_registry.register(CurrencyExchangeApiRecipe())
     recipe_registry.register(NewsApiRecipe())
+    recipe_registry.register(RssNewsReaderRecipe())
 
     # Unsupervised & Dimensionality Reduction
     recipe_registry.register(ClusteringRecipe())

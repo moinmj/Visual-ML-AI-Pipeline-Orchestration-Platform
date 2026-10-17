@@ -82,8 +82,19 @@ class CostAttributionReportRecipe(BaseRecipe):
         period = config.get("time_period", "Current Month (MTD)")
         total_budget = float(config.get("monthly_budget_usd", 5000.0))
         include_idle = bool(config.get("include_idle_capacity_cost", True))
-        currency_str = config.get("currency", "USD ($)")
-        curr_symbol = "$" if "USD" in currency_str else ("€" if "EUR" in currency_str else ("£" if "GBP" in currency_str else "₹"))
+        currency_str = str(config.get("currency", "USD ($)"))
+        if "EUR" in currency_str or "€" in currency_str:
+            curr_code = "EUR"
+            curr_symbol = "€"
+        elif "GBP" in currency_str or "£" in currency_str:
+            curr_code = "GBP"
+            curr_symbol = "£"
+        elif "INR" in currency_str or "₹" in currency_str:
+            curr_code = "INR"
+            curr_symbol = "₹"
+        else:
+            curr_code = "USD"
+            curr_symbol = "$"
 
         # Check if incoming dataframe has user-provided cost attribution ledger
         has_custom_cost_cols = False
@@ -102,18 +113,23 @@ class CostAttributionReportRecipe(BaseRecipe):
             
             records = []
             idle_pool = (total_spend * 0.12) if include_idle else 0.0
+            top_entity = str(agg.iloc[0][group_col]) if not agg.empty else "Platform"
+            top_spend = float(agg[cost_col].max()) if not agg.empty else 0.0
+
             for _, r in agg.iterrows():
                 entity_spend = float(r[cost_col])
                 share_pct = (entity_spend / max(total_spend, 1e-6)) * 100.0
                 budget_alloc = (total_budget * (share_pct / 100.0))
                 status = "OVER_BUDGET" if entity_spend > budget_alloc * 1.1 else ("WARNING" if entity_spend > budget_alloc * 0.9 else "ON_BUDGET")
+                idle_val = round(entity_spend * 0.12 if include_idle else 0.0, 2)
+                total_val = round(entity_spend * (1.12 if include_idle else 1.0), 2)
                 records.append({
                     "Entity": str(r[group_col]),
                     "Dimension": dim,
-                    "Direct_Spend": round(entity_spend, 2),
-                    "Idle_Overhead": round(entity_spend * 0.12 if include_idle else 0.0, 2),
-                    "Total_Spend": round(entity_spend * (1.12 if include_idle else 1.0), 2),
-                    "Share_of_Total_Pct": round(share_pct, 1),
+                    "Direct_Spend": f"{curr_symbol}{entity_spend:,.2f}",
+                    "Idle_Overhead": f"{curr_symbol}{idle_val:,.2f}",
+                    "Total_Cost": f"{curr_symbol}{total_val:,.2f}",
+                    "Share_of_Total_Pct": f"{round(share_pct, 1)}%",
                     "Status": status
                 })
             attribution_df = pd.DataFrame(records)
@@ -130,8 +146,20 @@ class CostAttributionReportRecipe(BaseRecipe):
             ]
 
             total_direct = sum(r["Direct_Cost"] for r in raw_attribution)
-            # Idle pool is ~15% of compute pool
+            # Idle pool is ~14% of direct compute pool
             idle_pool = (total_direct * 0.14) if include_idle else 0.0
+            total_actual_spend = round(total_direct + idle_pool, 2)
+
+            dept_totals: Dict[str, float] = {}
+            for item in raw_attribution:
+                direct = item["Direct_Cost"]
+                allocated_idle = (direct / total_direct) * idle_pool if total_direct > 0 else 0.0
+                total_item_cost = round(direct + allocated_idle, 2)
+                dept = item["Department"]
+                dept_totals[dept] = dept_totals.get(dept, 0.0) + total_item_cost
+
+            top_entity = max(dept_totals, key=lambda k: dept_totals[k])
+            top_spend = dept_totals[top_entity]
 
             rows = []
             for item in raw_attribution:
@@ -150,15 +178,14 @@ class CostAttributionReportRecipe(BaseRecipe):
                     "Resource_Type": item["Resource_Type"],
                     "Executions": f"{item['Executions']:,}",
                     "Compute_Hours": item["Compute_Hours"],
-                    "Direct_Spend": direct,
-                    "Idle_Overhead": round(allocated_idle, 2),
-                    "Total_Cost": total_item_cost,
+                    "Direct_Spend": f"{curr_symbol}{direct:,.2f}",
+                    "Idle_Overhead": f"{curr_symbol}{allocated_idle:,.2f}",
+                    "Total_Cost": f"{curr_symbol}{total_item_cost:,.2f}",
                     "Budget_Utilization_Pct": f"{budget_share}%",
                     "Budget_Status": status
                 })
 
             attribution_df = pd.DataFrame(rows)
-            total_actual_spend = round(total_direct + idle_pool, 2)
 
         # 2. Financial KPIs & Executive Summary
         budget_util_pct = round((total_actual_spend / total_budget) * 100.0, 1)
@@ -172,19 +199,14 @@ class CostAttributionReportRecipe(BaseRecipe):
             budget_health = "HEALTHY"
             recommendation = "Platform spend is well within approved financial envelope."
 
-        # Top spender entity
-        if "Department" in attribution_df.columns:
-            dept_totals = attribution_df.groupby("Department")["Total_Cost"].sum()
-            top_entity = str(dept_totals.idxmax())
-            top_spend = float(dept_totals.max())
-        else:
-            top_entity = str(attribution_df.iloc[0, 0])
-            top_spend = float(attribution_df.iloc[0]["Total_Spend"])
-
         report = {
-            "title": f"FinOps Cloud Compute Cost Attribution ({period})",
+            "title": f"FinOps Cloud Compute Cost Attribution ({period}) - {curr_code}",
             "reporting_period": period,
             "currency": currency_str,
+            "currency_code": curr_code,
+            "currency_symbol": curr_symbol,
+            f"total_spend_{curr_code.lower()}": f"{curr_symbol}{total_actual_spend:,.2f}",
+            f"monthly_budget_{curr_code.lower()}": f"{curr_symbol}{total_budget:,.2f}",
             "total_platform_spend": f"{curr_symbol}{total_actual_spend:,.2f}",
             "monthly_budget": f"{curr_symbol}{total_budget:,.2f}",
             "budget_utilization": f"{budget_util_pct}%",
@@ -195,20 +217,50 @@ class CostAttributionReportRecipe(BaseRecipe):
         }
 
         metrics = {
+            f"total_spend_{curr_code.lower()}": total_actual_spend,
+            f"monthly_budget_{curr_code.lower()}": total_budget,
+            f"idle_overhead_{curr_code.lower()}": round(idle_pool, 2) if include_idle else 0.0,
             "total_spend_usd": total_actual_spend,
             "monthly_budget_usd": total_budget,
+            "idle_overhead_usd": round(idle_pool, 2) if include_idle else 0.0,
             "budget_utilization_pct": budget_util_pct,
             "status": budget_health,
             "top_spending_department": top_entity,
-            "idle_overhead_usd": round(idle_pool, 2) if include_idle else 0.0
+            "currency": curr_code,
+            "currency_symbol": curr_symbol
+        }
+
+        output_summary = {
+            f"Total Spend ({curr_code})": f"{curr_symbol}{total_actual_spend:,.2f}",
+            f"Monthly Budget ({curr_code})": f"{curr_symbol}{total_budget:,.2f}",
+            "Budget Utilization": f"{budget_util_pct}%",
+            "Status": budget_health,
+            "Top Spending Department": top_entity,
+            f"Idle Overhead ({curr_code})": f"{curr_symbol}{idle_pool:,.2f}" if include_idle else f"{curr_symbol}0.00",
+            "currency": curr_code,
+            "currency_symbol": curr_symbol,
+            "formatted_spend": f"{curr_symbol}{total_actual_spend:,.2f}",
+            "formatted_budget": f"{curr_symbol}{total_budget:,.2f}",
+            "budget_utilization_pct": budget_util_pct
         }
 
         ret = {
             "report": report,
             "metrics": metrics,
+            "output_summary": output_summary,
             "dataframe": attribution_df,
             "output_table": attribution_df
         }
         if isinstance(df, pd.DataFrame):
             ret["input_dataframe"] = df
         return ret
+
+    def to_code(self, config: Dict[str, Any]) -> str:
+        curr = config.get("currency", "USD ($)")
+        budget = config.get("monthly_budget_usd", 5000.0)
+        dim = config.get("attribution_dimension", "Team / Department")
+        return (
+            f"# FinOps Cost Attribution Report\n"
+            f"# Dimension: {dim} | Monthly Budget: {budget} ({curr})\n"
+            f"# Enterprise Cloud Infrastructure & Spend Governance\n"
+        )

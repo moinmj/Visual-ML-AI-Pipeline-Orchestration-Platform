@@ -5,6 +5,9 @@ Fetches news articles by keyword, source, or category. Supports live query feeds
 (NewsAPI, public open search feeds) and realistic offline simulated feeds.
 """
 import json
+import re
+import html
+import xml.etree.ElementTree as ET
 import urllib.request
 import urllib.parse
 from datetime import datetime, timezone, timedelta
@@ -14,6 +17,15 @@ import pandas as pd
 
 from backend.app.recipes.base.recipe import BaseRecipe, RecipePort
 from backend.app.core.logging import logger
+
+
+def _clean_text(raw: str) -> str:
+    """Strips HTML entities and tags, normalizing whitespace."""
+    if not raw:
+        return ""
+    unescaped = html.unescape(raw)
+    cleaned = re.sub(r"<[^>]+>", " ", unescaped)
+    return " ".join(cleaned.split()).strip()
 
 
 # Curated realistic offline benchmark articles by topic category
@@ -101,32 +113,96 @@ OFFLINE_BENCHMARK_ARTICLES = {
 }
 
 
+def _fetch_live_google_rss_news(query: str, category: str = "technology", max_articles: int = 15) -> List[Dict[str, Any]]:
+    """
+    Fetches real-time, current news headlines from Google News RSS.
+    Free, reliable, no API key required. Returns actual top-tier news publications
+    (Bloomberg, Reuters, The New York Times, TechCrunch, Nature, etc.)
+    with clean titles, real timestamps, and source publication names.
+    """
+    articles = []
+    try:
+        clean_q = urllib.parse.quote_plus(query.strip() or category)
+        url = f"https://news.google.com/rss/search?q={clean_q}&hl=en-US&gl=US&ceid=US:en"
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Visual-AI-Platform/1.0"}
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            if resp.status == 200:
+                root = ET.fromstring(resp.read())
+                for item in root.findall(".//item")[:max_articles]:
+                    title_elem = item.find("title")
+                    if title_elem is None or not title_elem.text:
+                        continue
+                    clean_t = _clean_text(title_elem.text)
+
+                    source_elem = item.find("source")
+                    source_name = source_elem.text if (source_elem is not None and source_elem.text) else "Google News Aggregator"
+
+                    headline = clean_t
+                    if " - " in clean_t:
+                        parts = clean_t.rsplit(" - ", 1)
+                        headline = parts[0].strip()
+                        if not source_name or source_name == "Google News Aggregator":
+                            source_name = parts[1].strip()
+
+                    desc_elem = item.find("description")
+                    clean_desc = _clean_text(desc_elem.text) if desc_elem is not None else ""
+                    if not clean_desc or len(clean_desc) < 15 or clean_desc.startswith("http"):
+                        clean_desc = f"{headline}. Reported by {source_name}."
+
+                    link_elem = item.find("link")
+                    article_url = link_elem.text if link_elem is not None else ""
+
+                    pub_elem = item.find("pubDate")
+                    pub_dt = pub_elem.text if pub_elem is not None else datetime.now(timezone.utc).isoformat()
+
+                    articles.append({
+                        "title": headline,
+                        "description": clean_desc,
+                        "content": clean_desc,
+                        "author": source_name,
+                        "source_name": source_name,
+                        "url": article_url,
+                        "published_at": pub_dt,
+                        "category": category,
+                        "keyword": query,
+                    })
+    except Exception as ex:
+        logger.debug(f"Google News RSS fetch failed for query '{query}': {ex}")
+    return articles
+
+
 def _fetch_live_hn_news(query: str, max_articles: int = 15) -> List[Dict[str, Any]]:
     """
-    Fetches real, live tech/business news via Hacker News Algolia public API.
+    Fetches recent tech news via Hacker News Algolia public API (sorted by date).
     Free, reliable, no API key required.
     """
     articles = []
     try:
         clean_q = urllib.parse.quote_plus(query.strip() or "technology")
-        url = f"https://hn.algolia.com/api/v1/search?query={clean_q}&tags=story&hitsPerPage={min(max_articles, 50)}"
+        url = f"https://hn.algolia.com/api/v1/search_by_date?query={clean_q}&tags=story&hitsPerPage={min(max_articles, 50)}"
         req = urllib.request.Request(
             url,
             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Visual-AI-Platform/1.0"}
         )
-        with urllib.request.urlopen(req, timeout=6) as resp:
+        with urllib.request.urlopen(req, timeout=5) as resp:
             if resp.status == 200:
                 data = json.loads(resp.read().decode("utf-8"))
                 hits = data.get("hits", [])
                 for hit in hits:
-                    title = hit.get("title")
+                    title = _clean_text(hit.get("title") or "")
                     if not title:
                         continue
                     pub_dt = hit.get("created_at") or datetime.now(timezone.utc).isoformat()
+                    story_text = _clean_text(hit.get("story_text") or "")
+                    description = story_text if story_text else f"Tech analysis: {title}"
+
                     articles.append({
                         "title": title,
-                        "description": hit.get("story_text") or f"Discussion with {hit.get('num_comments', 0)} comments and {hit.get('points', 0)} points on Hacker News.",
-                        "content": hit.get("story_text") or title,
+                        "description": description,
+                        "content": story_text if story_text else title,
                         "author": hit.get("author") or "Hacker News Contributor",
                         "source_name": "Hacker News / Public Feed",
                         "url": hit.get("url") or f"https://news.ycombinator.com/item?id={hit.get('objectID')}",
@@ -346,6 +422,8 @@ class NewsApiRecipe(BaseRecipe):
             if use_live:
                 if api_key:
                     term_articles = _fetch_live_newsapi(term, api_key=api_key, category=category, max_articles=max_articles)
+                if not term_articles:
+                    term_articles = _fetch_live_google_rss_news(term, category=category, max_articles=max_articles)
                 if not term_articles:
                     term_articles = _fetch_live_hn_news(term, max_articles=max_articles)
 

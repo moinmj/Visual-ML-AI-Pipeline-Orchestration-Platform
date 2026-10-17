@@ -236,15 +236,62 @@ class TSNERecipe(BaseRecipe):
             "total_rows": n_samples
         }
 
+        # Interactive 2D/3D scatter plot data
+        sample_size = min(300, len(tsne_df))
+        sample_indices = np.random.RandomState(random_state).choice(len(tsne_df), sample_size, replace=False) if len(tsne_df) > sample_size else np.arange(len(tsne_df))
+
+        color_col = None
+        for col_cand in ["cluster", "CLUSTER", "label", "target", "Churn", "churn", "category"]:
+            if col_cand in df.columns:
+                color_col = col_cand
+                break
+
+        scatter_points: List[Dict[str, Any]] = []
+        for idx in sample_indices:
+            row_tsne = tsne_df.iloc[idx]
+            x_val = round(float(row_tsne[coord_col_names[0]]), 4)
+            y_val = round(float(row_tsne[coord_col_names[1]]), 4) if n_components >= 2 else 0.0
+            p_dict: Dict[str, Any] = {
+                "x": x_val,
+                "y": y_val,
+                coord_col_names[0]: x_val
+            }
+            if n_components >= 2:
+                p_dict[coord_col_names[1]] = y_val
+            if n_components >= 3 and len(coord_col_names) >= 3:
+                z_val = round(float(row_tsne[coord_col_names[2]]), 4)
+                p_dict["z"] = z_val
+                p_dict[coord_col_names[2]] = z_val
+
+            if color_col is not None and idx < len(df):
+                val_color = df.iloc[idx][color_col]
+                p_dict["group"] = str(val_color)
+                p_dict["label"] = str(val_color)
+                p_dict["cluster"] = str(val_color)
+
+            scatter_points.append(p_dict)
+
+        scatter_plot: Dict[str, Any] = {
+            "x_axis": coord_col_names[0],
+            "y_axis": coord_col_names[1] if n_components >= 2 else coord_col_names[0],
+            "z_axis": coord_col_names[2] if n_components >= 3 else None,
+            "dimensions": min(3, n_components),
+            "points": scatter_points,
+            "total_points": len(scatter_points),
+            "has_color_group": color_col is not None,
+            "color_feature": color_col
+        }
+
         # 2D scatter preview
-        scatter_sample = tsne_df[[coord_col_names[0], coord_col_names[1]]].head(150).to_dict(orient="records")
-        metrics["scatter_preview"] = scatter_sample
+        metrics["scatter_plot"] = scatter_plot
+        metrics["scatter_preview"] = scatter_points[:150]
 
         summary = {
             "title": "t-SNE Embedding Completed",
             "n_components": n_components,
             "perplexity": round(effective_perp, 2),
             "kl_divergence": metrics["kl_divergence"],
+            "scatter_plot": scatter_plot,
             "status": "SUCCESS"
         }
 
