@@ -239,6 +239,7 @@ class NodeInferredSchema(BaseModel):
 
 class WorkflowInferSchemaRequest(BaseModel):
     workflow_id: Optional[str] = None
+    session_id: Optional[str] = None
     nodes: Optional[List[Dict[str, Any]]] = None
     edges: Optional[List[Dict[str, Any]]] = None
     node_configs: Optional[Dict[str, Any]] = None
