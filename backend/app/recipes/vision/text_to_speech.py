@@ -4,7 +4,8 @@ Text-to-Speech recipe (Modeling -> Computer Vision & Audio).
 Turns the text in a column into spoken audio (one WAV file per row), saved into the
 caller's Ozone folder. The output table gets the path and a preview URL of each audio file.
 
-Text comes from a connected table + 'text_column'.
+Text comes from the 'text' box (type a message, get one audio file), or from a connected table +
+'text_column' (one audio file per row). The typed text is used only when no table is connected.
 
 Place this file at:  backend/app/recipes/vision/text_to_speech.py
 Needs:               pip install pyttsx3
@@ -111,9 +112,19 @@ class TextToSpeechRecipe(BaseRecipe):
         return {
             "type": "object",
             "properties": {
+                "text": {
+                    "type": "textarea", "title": "Text to Speak",
+                    "description": (
+                        f"Type the message here (max {MAX_CHARS_PER_TEXT} characters). "
+                        "Used when no table is connected."
+                    ),
+                },
                 "text_column": {
-                    "type": "string", "title": "Text Column", "input_type": "column_select",
-                    "description": f"The column holding the text to speak (max {MAX_CHARS_PER_TEXT} characters per row).",
+                    "type": "string", "title": "Text Column (table input only)", "input_type": "column_select",
+                    "description": (
+                        f"Only when a table is connected: the column holding the text to speak, one audio file "
+                        f"per row (max {MAX_CHARS_PER_TEXT} characters per row). Leave empty when you type the text above."
+                    ),
                 },
                 "rate": {
                     "type": "integer", "title": "Speaking Speed (words/min)", "input_type": "slider",
@@ -128,13 +139,19 @@ class TextToSpeechRecipe(BaseRecipe):
                     "description": "Picks the first installed voice whose name contains this text, e.g. 'english' or 'zira'. Empty = system default.",
                 },
             },
-            "required": ["text_column"],
+            "required": [],
         }
 
     def validate_config(self, config: Dict[str, Any]) -> List[str]:
         errors: List[str] = []
-        if not str(config.get("text_column") or "").strip():
-            errors.append("Choose the text column ('text_column') of the connected table.")
+        text = config.get("text")
+        if text is not None and not isinstance(text, str):
+            errors.append("text must be text.")
+        elif isinstance(text, str) and len(text.strip()) > MAX_CHARS_PER_TEXT:
+            errors.append(f"Text is longer than {MAX_CHARS_PER_TEXT} characters.")
+        typed = isinstance(text, str) and bool(text.strip())
+        if not typed and not str(config.get("text_column") or "").strip():
+            errors.append("Type the text to speak ('text'), or connect a table and choose its text column ('text_column').")
         for err in (
             c.validate_range(config, "rate", 80, 300, integer=True),
             c.validate_range(config, "volume", 0.1, 1.0),
@@ -159,11 +176,17 @@ class TextToSpeechRecipe(BaseRecipe):
                 table = pd.DataFrame(list(table) if isinstance(table, tuple) else table)
             except Exception as e:
                 raise ValueError(f"inputs.dataframe must be a list of row objects like [{{\"text\": \"Hello\"}}] ({str(e)[:80]})")
+        typed = str(config.get("text") or "").strip()
+        col = str(config.get("text_column") or "").strip()
         if table is None:
-            raise ValueError(f"{self.name} needs a connected table with a text column.")
-        col = str(config["text_column"]).strip()
-        if col not in table.columns:
-            raise ValueError(f"Text column '{col}' not found. Available columns: {list(table.columns)}")
+            if not typed:
+                raise ValueError(f"{self.name} needs text: type it in 'Text to Speak', or connect a table with a text column.")
+            table, col = pd.DataFrame({"text": [typed]}), "text"
+        else:
+            if not col:
+                raise ValueError("A table is connected: choose its text column, or disconnect it to speak the typed text.")
+            if col not in table.columns:
+                raise ValueError(f"Text column '{col}' not found. Available columns: {list(table.columns)}")
         if len(table) > MAX_ROWS_PER_RUN:
             raise ValueError(
                 f"Too many rows ({len(table)}). The limit is {MAX_ROWS_PER_RUN} per run; add a Limit node before this one."
@@ -229,11 +252,13 @@ class TextToSpeechRecipe(BaseRecipe):
         return {"dataframe": out, "metrics": metrics, "output_summary": metrics, "task_type": "text_to_speech"}
 
     def to_code(self, config: Dict[str, Any]) -> str:
+        typed = str(config.get("text") or "").strip()
+        source = repr(typed) if typed else f"df[{config.get('text_column', 'text')!r}].iloc[0]"
         return (
             "import pyttsx3\n\n"
             "engine = pyttsx3.init()\n"
             f"engine.setProperty('rate', {int(config.get('rate', DEFAULT_RATE))})\n"
             f"engine.setProperty('volume', {float(config.get('volume', DEFAULT_VOLUME))})\n"
-            f"engine.save_to_file(df[{config.get('text_column', 'text')!r}].iloc[0], 'speech.wav')\n"
+            f"engine.save_to_file({source}, 'speech.wav')\n"
             "engine.runAndWait()"
         )

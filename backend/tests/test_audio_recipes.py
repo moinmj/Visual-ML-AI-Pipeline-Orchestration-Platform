@@ -64,7 +64,11 @@ def test_validation():
     assert s.validate_config({"audio_files": ["a.wav"], "task": "dance"})
     assert s.validate_config({"audio_files": ["a.wav"], "output_format": "xml"})
     assert t.validate_config({"text_column": "msg"}) == []
-    assert t.validate_config({})
+    assert t.validate_config({"text": "Hello there"}) == []           # typed message, no table
+    assert t.validate_config({})                                       # neither text nor column
+    assert t.validate_config({"text": "   "})                          # blank text counts as missing
+    assert t.validate_config({"text": "x" * (tts.MAX_CHARS_PER_TEXT + 1)})
+    assert t.validate_config({"text": 123})
     assert t.validate_config({"text_column": "msg", "rate": 10})
     assert t.validate_config({"text_column": "msg", "volume": 5})
     assert t.validate_config({"text_column": "msg", "voice_contains": "x" * 51})
@@ -194,6 +198,16 @@ def test_tts_execute():
     assert m["preview_items"][0]["text_preview"] == "Hello there"
 
 
+def test_tts_typed_text_without_a_table():
+    with patch("backend.app.recipes.vision.text_to_speech._synthesize", return_value=_wav_bytes(0.5)) as syn, _upload_patch() as up:
+        out = TextToSpeechRecipe().execute({}, {"text": "  Hello from the text box  ", "tenant_id": 2, "text_column": "leftover"})
+    o = out["dataframe"]
+    assert len(o) == 1 and o["text"].iloc[0] == "Hello from the text box"
+    assert o["audio_path"].iloc[0].startswith("s3://b/ml-workflow/t2/outputs/text_to_speech/") and o["audio_duration_s"].iloc[0] == 0.5
+    assert syn.call_args[0][0] == "Hello from the text box" and up.call_count == 1
+    assert out["metrics"]["preview_items"][0]["audio_preview_url"].endswith(o["audio_path"].iloc[0])
+
+
 def test_tts_bad_rows_do_not_fail_run():
     df = pd.DataFrame({"msg": ["ok", "", None, "x" * (tts.MAX_CHARS_PER_TEXT + 1)]})
     with patch("backend.app.recipes.vision.text_to_speech._synthesize", return_value=_wav_bytes()) as syn, _upload_patch():
@@ -203,6 +217,15 @@ def test_tts_bad_rows_do_not_fail_run():
     assert "longer than" in o["tts_error"].iloc[3]
     assert pd.isna(o["audio_path"].iloc[1]) and syn.call_count == 1
     assert out["metrics"]["rows_failed"] == 3 and out["metrics"]["rows_processed"] == 1
+
+
+def test_tts_accepts_json_rows_from_run_endpoint():
+    rows = [{"id": 1, "msg": "Hello there"}, {"id": 2, "msg": "Second"}]
+    with patch("backend.app.recipes.vision.text_to_speech._synthesize", return_value=_wav_bytes()), _upload_patch():
+        out = TextToSpeechRecipe().execute({"dataframe": rows}, {"text_column": "msg", "tenant_id": 1})
+    assert list(out["dataframe"]["id"]) == [1, 2] and out["metrics"]["rows_processed"] == 2
+    with pytest.raises(ValueError, match="must be a list of row objects"):
+        TextToSpeechRecipe().execute({"dataframe": {"msg": ["a", "b,"], "x": ["only one"]}}, {"text_column": "msg", "tenant_id": 1})
 
 
 def test_tts_engine_unavailable_fails_whole_run():
@@ -216,8 +239,10 @@ def test_tts_input_errors():
     r = TextToSpeechRecipe()
     with pytest.raises(PermissionError):
         r.execute({"dataframe": pd.DataFrame({"msg": ["a"]})}, {"text_column": "msg"})
-    with pytest.raises(ValueError, match="connected table"):
+    with pytest.raises(ValueError, match="needs text"):
         r.execute({}, {"text_column": "msg", "tenant_id": 1})
+    with pytest.raises(ValueError, match="choose its text column"):
+        r.execute({"dataframe": pd.DataFrame({"msg": ["a"]})}, {"text": "typed but a table is connected", "tenant_id": 1})
     with pytest.raises(ValueError, match="not found"):
         r.execute({"dataframe": pd.DataFrame({"msg": ["a"]})}, {"text_column": "nope", "tenant_id": 1})
     with pytest.raises(ValueError, match="Too many rows"):
