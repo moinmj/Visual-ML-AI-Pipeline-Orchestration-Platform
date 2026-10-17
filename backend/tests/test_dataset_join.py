@@ -351,7 +351,16 @@ async def test_workflow_multi_dataset_endpoints():
     from backend.app.core.security import get_current_user, TokenData, create_access_token
     import uuid
 
-    app.dependency_overrides[get_current_user] = lambda: TokenData("test", 1, ["Tenant Admin", "Data Scientist", "ML Engineer"], ["*"])
+    from backend.app.core.tenant_context import set_current_tenant_id, set_current_user_id
+
+    def mock_user():
+        set_current_tenant_id(1)
+        set_current_user_id("test")
+        return TokenData("test", 1, ["Tenant Admin", "Data Scientist", "ML Engineer"], ["*"])
+
+    app.dependency_overrides[get_current_user] = mock_user
+    set_current_tenant_id(1)
+    set_current_user_id("test")
 
     def auth_headers():
         token = create_access_token(sub="test-user", tenant_id=1, roles=["Tenant Admin"])
@@ -697,5 +706,86 @@ def test_dag_executor_source_handle_routing_split_join():
     node_results = {nr.node_id: nr for nr in res.node_results}
     assert node_results["filter_unmatched"].status == "SUCCESS"
     assert node_results["filter_unmatched"].output_summary["dataframe"]["shape"][0] == 2
+
+
+def test_dataset_join_recipe_cross_join():
+    recipe = DatasetJoinRecipe()
+    df_left = pd.DataFrame({"color": ["Red", "Blue"]})
+    df_right = pd.DataFrame({"size": ["S", "M", "L"]})
+
+    inputs = {"left_dataframe": df_left, "right_dataframe": df_right}
+    config = {"join_type": "cross"}
+    res = recipe.execute(inputs=inputs, config=config)
+
+    assert "dataframe" in res
+    df_out = res["dataframe"]
+    # 2 colors * 3 sizes = 6 rows
+    assert len(df_out) == 6
+    assert list(df_out.columns) == ["color", "size"]
+    assert res["metrics"]["join_type"] == "CROSS"
+    assert res["metrics"]["merged_rows"] == 6
+
+
+def test_dataset_join_recipe_flexible_rename_formats():
+    recipe = DatasetJoinRecipe()
+    df_left = pd.DataFrame({"cust_id": [1, 2], "city_name": ["NY", "LA"]})
+    df_right = pd.DataFrame({"user_id": [1, 2], "rev_amt": [100.0, 200.0]})
+
+    inputs = {"left_dataframe": df_left, "right_dataframe": df_right}
+
+    # Test JSON string and list of dicts renaming
+    config = {
+        "join_type": "inner",
+        "conditions": [{"left": "cust_id", "right": "user_id"}],
+        "rename_columns_left": '{"city_name": "location"}',
+        "rename_columns_right": [{"column": "rev_amt", "new_name": "revenue"}]
+    }
+
+    res = recipe.execute(inputs=inputs, config=config)
+    df_out = res["dataframe"]
+
+    assert "location" in df_out.columns
+    assert "revenue" in df_out.columns
+    assert "city_name" not in df_out.columns
+    assert "rev_amt" not in df_out.columns
+    assert len(df_out) == 2
+
+
+def test_workflow_graph_node_configs_and_nested_data():
+    # Verify that WorkflowGraph extracts node_configs and nested data.config for validation
+    raw_payload = {
+        "nodes": [
+            {"id": "node_left", "recipe_id": "csv_loader", "position": {"x": 0, "y": 0}},
+            {"id": "node_right", "recipe_id": "csv_loader", "position": {"x": 0, "y": 100}},
+            {
+                "id": "node_join",
+                "type": "processor",
+                "data": {"recipe_id": "dataset_join", "label": "Joiner"}
+            }
+        ],
+        "edges": [
+            {"source": "node_left", "target": "node_join", "target_handle": "left"},
+            {"source": "node_right", "target": "node_join", "target_handle": "right"}
+        ],
+        "node_configs": {
+            "node_left": {"delimiter": ","},
+            "node_right": {"delimiter": ","},
+            "node_join": {
+                "join_type": "inner",
+                "conditions": [{"left": "id", "right": "id"}]
+            }
+        }
+    }
+
+    graph = WorkflowGraph(**raw_payload)
+    join_node = next(n for n in graph.nodes if n.id == "node_join")
+    assert join_node.recipe_id == "dataset_join"
+    assert join_node.config.get("join_type") == "inner"
+    assert join_node.config.get("conditions") == [{"left": "id", "right": "id"}]
+
+    diag = graph.get_diagnostics()
+    assert diag["is_valid"] is True
+    assert len(diag["errors"]) == 0
+
 
 
