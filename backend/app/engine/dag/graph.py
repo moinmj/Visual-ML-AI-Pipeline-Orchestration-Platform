@@ -11,6 +11,25 @@ class WorkflowNode(BaseModel):
     config: Dict[str, Any] = Field(default_factory=dict, description="Configuration matching recipe JSON schema")
     label: Optional[str] = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_node(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            node_data = data.get("data")
+            if isinstance(node_data, dict):
+                if not data.get("recipe_id"):
+                    data["recipe_id"] = (
+                        node_data.get("recipe_id")
+                        or node_data.get("recipeId")
+                        or node_data.get("type")
+                        or data.get("type")
+                    )
+                if (not data.get("config") or not isinstance(data.get("config"), dict)) and isinstance(node_data.get("config"), dict):
+                    data["config"] = dict(node_data["config"])
+                if not data.get("label"):
+                    data["label"] = node_data.get("label") or node_data.get("content")
+        return data
+
 
 class WorkflowEdge(BaseModel):
     source: str = Field(..., description="Source node ID")
@@ -38,6 +57,28 @@ class WorkflowGraph(BaseModel):
     dataset_name: Optional[str] = None
     nodes: List[WorkflowNode]
     edges: List[WorkflowEdge]
+    node_configs: Optional[Dict[str, Any]] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_graph(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            node_configs = data.get("node_configs")
+            if isinstance(node_configs, dict) and "nodes" in data and isinstance(data["nodes"], list):
+                for n in data["nodes"]:
+                    if isinstance(n, dict):
+                        nid = n.get("id")
+                        n_cfg = node_configs.get(nid)
+                        if n_cfg and isinstance(n_cfg, dict):
+                            # If config is missing, empty, or dict without recipe keys
+                            cfg = n.get("config")
+                            if not cfg or not isinstance(cfg, dict):
+                                n["config"] = dict(n_cfg)
+                            else:
+                                for k, v in n_cfg.items():
+                                    if k not in n["config"]:
+                                        n["config"][k] = v
+        return data
 
     def validate_graph(self) -> List[Dict[str, Any]]:
         """
