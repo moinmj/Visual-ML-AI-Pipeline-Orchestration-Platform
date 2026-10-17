@@ -2726,6 +2726,7 @@ async def infer_workflow_schema(
         nodes=nodes,
         edges=edges,
         node_configs=node_configs,
+        session_id=payload.session_id,
         db=db
     )
 
