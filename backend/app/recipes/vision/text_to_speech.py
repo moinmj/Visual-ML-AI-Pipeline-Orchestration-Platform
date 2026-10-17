@@ -2,7 +2,8 @@
 Text-to-Speech recipe (Modeling -> Computer Vision & Audio).
 
 Turns the text in a column into spoken audio (one WAV file per row), saved into the
-caller's Ozone folder. The output table gets the path and a preview URL of each audio file.
+caller's Ozone folder. The output table gets the path and a preview URL of each file
+(columns named annotated_*).
 
 Text comes from the 'text' box (type a message, get one audio file), or from a connected table +
 'text_column' (one audio file per row). The typed text is used only when no table is connected.
@@ -220,9 +221,9 @@ class TextToSpeechRecipe(BaseRecipe):
             results.append(res)
 
         out = table.copy().reset_index(drop=True)
-        out["audio_path"] = [r["path"] for r in results]
-        out["audio_preview_url"] = [c.preview_url(r["path"]) for r in results]
-        out["audio_duration_s"] = [r["seconds"] for r in results]
+        out["annotated_path"] = [r["path"] for r in results]
+        out["annotated_preview_url"] = [c.preview_url(r["path"]) for r in results]
+        out["annotated_duration_s"] = [r["seconds"] for r in results]
         out["char_count"] = [r["chars"] for r in results]
         out["tts_error"] = [r["error"] for r in results]
 
@@ -230,9 +231,9 @@ class TextToSpeechRecipe(BaseRecipe):
         previews = [
             {
                 "text_preview": "" if c.is_empty(v) else str(v)[:100],
-                "audio_path": r["path"],
-                "audio_preview_url": c.preview_url(r["path"]),
-                "audio_duration_s": r["seconds"],
+                "annotated_path": r["path"],
+                "annotated_preview_url": c.preview_url(r["path"]),
+                "annotated_duration_s": r["seconds"],
                 "error": r["error"],
             }
             for v, r in zip(values, results)
@@ -245,7 +246,7 @@ class TextToSpeechRecipe(BaseRecipe):
             "rows_processed": len(results) - len(failed),
             "rows_failed": len(failed),
             "total_characters": int(sum(r["chars"] for r in results)),
-            "total_audio_seconds": round(sum(r["seconds"] or 0 for r in results), 3),
+            "total_annotated_seconds": round(sum(r["seconds"] or 0 for r in results), 3),
             "errors_sample": [r["error"] for r in failed[:5]],
             "preview_items": previews,
         }

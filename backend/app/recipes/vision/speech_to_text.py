@@ -221,15 +221,22 @@ class SpeechToTextRecipe(BaseRecipe):
             out_df = out
 
         failed = [r for r in per_audio if r["error"]]
+        # Keys follow the frontend's preview_items contract (same as object detection):
+        # original_path, original_preview_url, annotated_path, annotated_preview_url, num_objects, error.
+        # Audio has nothing to annotate, so annotated_* stay None. num_objects = number of segments.
+        # The extra speech fields below are additional and do not affect those keys.
         previews = [
             {
                 "original_path": None if c.is_empty(v) else str(v),
                 "original_preview_url": c.preview_url(v),
+                "annotated_path": None,
+                "annotated_preview_url": None,
+                "num_objects": len(r["segments"]),
+                "error": r["error"],
                 "detected_language": r["language"],
                 "duration_s": r["duration_s"],
                 "num_segments": len(r["segments"]),
                 "text_preview": " ".join(s["text"] for s in r["segments"])[:200],
-                "error": r["error"],
             }
             for v, r in zip(values, per_audio)
         ]
