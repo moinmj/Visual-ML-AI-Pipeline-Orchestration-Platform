@@ -20,12 +20,14 @@ class RandomForestTrainerRecipe(BaseRecipe):
                 "task_type": {
                     "type": "string",
                     "title": "ML Task Type",
+                    "input_type": "dropdown",
                     "enum": ["classification", "regression"],
                     "default": "classification"
                 },
                 "n_estimators": {
                     "type": "integer",
                     "title": "Number of Trees",
+                    "input_type": "slider",
                     "default": 100,
                     "minimum": 10,
                     "maximum": 1000
@@ -33,6 +35,7 @@ class RandomForestTrainerRecipe(BaseRecipe):
                 "max_depth": {
                     "type": "integer",
                     "title": "Max Depth",
+                    "input_type": "slider",
                     "default": 10,
                     "minimum": 1,
                     "maximum": 50
@@ -40,6 +43,7 @@ class RandomForestTrainerRecipe(BaseRecipe):
                 "min_samples_split": {
                     "type": "integer",
                     "title": "Min Samples to Split",
+                    "input_type": "slider",
                     "default": 2,
                     "minimum": 2,
                     "maximum": 50,
@@ -48,6 +52,7 @@ class RandomForestTrainerRecipe(BaseRecipe):
                 "min_samples_leaf": {
                     "type": "integer",
                     "title": "Min Samples in Leaf",
+                    "input_type": "slider",
                     "default": 1,
                     "minimum": 1,
                     "maximum": 50,
@@ -56,12 +61,14 @@ class RandomForestTrainerRecipe(BaseRecipe):
                 "max_features": {
                     "type": "string",
                     "title": "Max Features per Split",
+                    "input_type": "dropdown",
                     "enum": ["sqrt", "log2", "all"],
                     "default": "sqrt"
                 },
                 "class_weight": {
                     "type": "string",
                     "title": "Class Weighting (Imbalance)",
+                    "input_type": "dropdown",
                     "enum": ["none", "balanced", "balanced_subsample"],
                     "default": "none",
                     "description": "Crucial business setting for fraud/churn: automatically adjusts weights inversely proportional to class frequencies."
@@ -69,6 +76,7 @@ class RandomForestTrainerRecipe(BaseRecipe):
                 "random_state": {
                     "type": "integer",
                     "title": "Random Seed",
+                    "input_type": "number",
                     "default": 42
                 }
             },

@@ -29,6 +29,7 @@ class ModelEvaluatorRecipe(BaseRecipe):
                 "report_type": {
                     "type": "string",
                     "title": "Evaluation Report Mode",
+                    "input_type": "dropdown",
                     "enum": [
                         "Comprehensive (All Metrics + Confusion Matrix)",
                         "Executive Summary (Accuracy, F1, Loss)",
@@ -40,12 +41,14 @@ class ModelEvaluatorRecipe(BaseRecipe):
                 "average_strategy": {
                     "type": "string",
                     "title": "Multiclass Averaging Strategy",
+                    "input_type": "dropdown",
                     "enum": ["weighted", "macro", "micro"],
                     "default": "weighted"
                 },
                 "decision_threshold": {
                     "type": "number",
                     "title": "Decision Probability Threshold",
+                    "input_type": "slider",
                     "default": 0.5,
                     "minimum": 0.05,
                     "maximum": 0.95,
@@ -54,6 +57,7 @@ class ModelEvaluatorRecipe(BaseRecipe):
                 "cost_false_positive": {
                     "type": "number",
                     "title": "Business Cost per False Positive ($)",
+                    "input_type": "number",
                     "default": 0.0,
                     "minimum": 0.0,
                     "description": "Cost of a false alarm (e.g. customer support call or investigation cost)."
@@ -61,6 +65,7 @@ class ModelEvaluatorRecipe(BaseRecipe):
                 "cost_false_negative": {
                     "type": "number",
                     "title": "Business Cost per False Negative ($)",
+                    "input_type": "number",
                     "default": 0.0,
                     "minimum": 0.0,
                     "description": "Financial cost of a missed positive (e.g. unprevented fraud loss or customer churn value)."

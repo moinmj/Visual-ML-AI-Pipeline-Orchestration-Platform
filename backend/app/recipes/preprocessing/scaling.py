@@ -20,18 +20,21 @@ class FeatureScalerRecipe(BaseRecipe):
                 "method": {
                     "type": "string",
                     "title": "Scaling Method",
+                    "input_type": "dropdown",
                     "enum": ["standard", "minmax", "robust"],
                     "default": "standard"
                 },
                 "exclude_target": {
                     "type": "boolean",
                     "title": "Exclude Target / Label Column from Scaling",
+                    "input_type": "checkbox",
                     "default": True
                 },
                 "columns": {
                     "type": "array",
                     "items": {"type": "string"},
                     "title": "Columns to Scale",
+                    "input_type": "multi_column_select",
                     "description": "Specific numeric columns to scale. If empty, all continuous numeric features are scaled."
                 }
             },

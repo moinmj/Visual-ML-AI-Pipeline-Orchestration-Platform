@@ -21,6 +21,7 @@ class SQLStepRecipe(BaseRecipe):
                 "query": {
                     "type": "textarea",
                     "title": "SQL Query",
+                    "input_type": "textarea",
                     "default": "SELECT * FROM df",
                     "description": "Standard SQL. Reference the incoming data as table 'df' (or 'data' / 'input_df')."
                 }

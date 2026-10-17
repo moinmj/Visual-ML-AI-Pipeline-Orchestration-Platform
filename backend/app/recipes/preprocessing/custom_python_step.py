@@ -56,6 +56,7 @@ class CustomPythonStepRecipe(BaseRecipe):
                 "packages": {
                     "type": "string",
                     "title": "Additional Python Packages",
+                    "input_type": "text",
                     "default": "",
                     "description": (
                         "Comma-separated list of extra Python packages to install/import (e.g. 'scipy, faker, polars'). "
@@ -65,6 +66,7 @@ class CustomPythonStepRecipe(BaseRecipe):
                 "install_source": {
                     "type": "string",
                     "title": "Package Installation Source",
+                    "input_type": "dropdown",
                     "enum": ["internet", "local"],
                     "default": "internet",
                     "description": "Choose 'internet' to install packages from PyPI or 'local' to install from offline wheel files."
@@ -72,12 +74,14 @@ class CustomPythonStepRecipe(BaseRecipe):
                 "local_wheels_dir": {
                     "type": "string",
                     "title": "Local Wheels Directory (for offline install)",
+                    "input_type": "text",
                     "default": "./data/packages",
                     "description": "Path to local directory containing .whl or source archive files when install_source is 'local'."
                 },
                 "code": {
                     "type": "textarea",
                     "title": "Python Code",
+                    "input_type": "textarea",
                     "default": (
                         "# Access data as 'df' (pandas DataFrame) or 'items' (list of dicts, n8n style)\n"
                         "# Example:\n"

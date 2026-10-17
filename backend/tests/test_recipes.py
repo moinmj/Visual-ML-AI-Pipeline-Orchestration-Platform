@@ -80,3 +80,56 @@ def test_preprocessing_column_type_resilience():
     out3 = imputer.execute({"dataframe": df}, {"strategy": "median", "columns": ["Age", "City"]})
     assert out3["dataframe"]["Age"].isna().sum() == 0
     assert out3["dataframe"]["City"].isna().sum() == 0
+
+
+def test_all_recipes_have_valid_input_types():
+    """
+    Validates that every single implemented recipe in the registry has explicit,
+    valid input_type metadata on every configuration property and no empty string defaults
+    on column, metric, or target fields.
+    """
+    valid_input_types = {
+        "column_select",
+        "multi_column_select",
+        "dropdown",
+        "multi_select",
+        "checkbox",
+        "slider",
+        "number",
+        "text",
+        "textarea",
+        "key_value",
+        "conditions",
+        "aggregations",
+        "tags",
+        "file_select",
+        "dataset_select",
+        "password",
+        "boolean"
+    }
+
+    total_recipes = 0
+    total_props = 0
+
+    for rid, recipe in recipe_registry._recipes.items():
+        total_recipes += 1
+        schema = recipe.get_schema() or {}
+        props = schema.get("properties", {})
+
+        for pname, pdef in props.items():
+            total_props += 1
+            # Check input_type presence
+            assert "input_type" in pdef, f"Recipe '{rid}', property '{pname}' is missing mandatory 'input_type'!"
+            assert pdef["input_type"] in valid_input_types, (
+                f"Recipe '{rid}', property '{pname}' has invalid input_type '{pdef['input_type']}'!"
+            )
+
+            # Check critical rule: no empty string defaults on column/metric/target
+            low = pname.lower()
+            if any(k in low for k in ("column", "metric", "target")):
+                assert pdef.get("default") != "", (
+                    f"Recipe '{rid}', property '{pname}' must not have an empty string default ('')!"
+                )
+
+    assert total_recipes >= 100, f"Expected at least 100 recipes, found {total_recipes}"
+    assert total_props >= 500, f"Expected at least 500 properties, found {total_props}"

@@ -21,11 +21,13 @@ class StratifiedSplitRecipe(BaseRecipe):
                 "target_column": {
                     "type": "string",
                     "title": "Target Variable (Y)",
+                    "input_type": "column_select",
                     "description": "The categorical target column to stratify on."
                 },
                 "test_size": {
                     "type": "number",
                     "title": "Test Split Ratio",
+                    "input_type": "slider",
                     "default": 0.2,
                     "minimum": 0.05,
                     "maximum": 0.5,
@@ -34,6 +36,7 @@ class StratifiedSplitRecipe(BaseRecipe):
                 "random_state": {
                     "type": "integer",
                     "title": "Random Seed",
+                    "input_type": "number",
                     "default": 42,
                     "description": "Random seed for reproducible shuffling."
                 }

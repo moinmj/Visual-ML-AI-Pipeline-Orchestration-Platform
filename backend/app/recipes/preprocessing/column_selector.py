@@ -19,6 +19,7 @@ class ColumnSelectorRecipe(BaseRecipe):
                 "mode": {
                     "type": "string",
                     "title": "Selection Mode",
+                    "input_type": "dropdown",
                     "enum": ["keep", "drop"],
                     "default": "keep",
                     "description": "'keep' retains only the specified columns; 'drop' removes the specified columns and retains all others."
