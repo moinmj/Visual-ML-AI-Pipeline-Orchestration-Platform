@@ -398,6 +398,9 @@ class WorkflowSchemaInferencer:
             elif recipe_id in ["news_api", "rss_news_reader"]:
                 parent_cols = ["title", "link", "published_at", "description", "author", "guid", "category", "feed_title", "feed_url"]
                 parent_details = [NodeColumnInfo(name=c, type="string") for c in parent_cols]
+            elif recipe_id == "open_data_api":
+                parent_cols = ["country_code", "country_name", "indicator_id", "indicator_name", "year", "value"]
+                parent_details = [NodeColumnInfo(name=c, type="numeric" if c in ["year", "value"] else "string") for c in parent_cols]
             elif recipe_id in ["cron_trigger", "webhook_trigger"]:
                 parent_cols = ["timestamp", "trigger_time", "payload"]
                 parent_details = [NodeColumnInfo(name=c, type="string") for c in parent_cols]

@@ -85,6 +85,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "currency_exchange_api": ("Apps & Integrations", "Market & Reference Data"),
     "news_api": ("Apps & Integrations", "Market & Reference Data"),
     "rss_news_reader": ("Apps & Integrations", "Market & Reference Data"),
+    "open_data_api": ("Apps & Integrations", "Market & Reference Data"),
 
     # Unsupervised & Dimensionality Reduction
     "clustering": ("Modeling", "Unsupervised & Dimensionality Reduction"),
@@ -147,6 +148,11 @@ class RecipeRegistry:
             "newsapi": "news_api",
             "news_feed": "news_api",
             "headlines": "news_api",
+            "open_data": "open_data_api",
+            "government_data": "open_data_api",
+            "gov_data": "open_data_api",
+            "public_data": "open_data_api",
+            "data_gov": "open_data_api",
         }
 
     def register(self, recipe: BaseRecipe):

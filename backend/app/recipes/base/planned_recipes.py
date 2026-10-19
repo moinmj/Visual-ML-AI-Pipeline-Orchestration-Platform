@@ -221,10 +221,6 @@ _PLANNED: List[Tuple[str, str, str, List[Tuple[str, str, str, str]]]] = [
     ]),
 
     # ------------------------------------------------------------------ 6. Integrations & Live APIs (35)
-    ("Apps & Integrations", "Market & Reference Data", "integrations", [
-        ("rss_news_reader", "RSS/News Feed Reader", "source", "Reads items from a single RSS or news feed."),
-        ("open_data_api", "Public / Open-Data (Government) API Connector", "source", "Fetches datasets from public and government open-data portals."),
-    ]),
     ("Apps & Integrations", "Social & Comms", "integrations", [
         ("twitter_x_connector", "Twitter/X Connector", "source", "Fetches posts, mentions or metrics from Twitter/X."),
         ("reddit_connector", "Reddit Connector", "source", "Fetches posts and comments from subreddits."),
