@@ -401,6 +401,15 @@ class WorkflowSchemaInferencer:
             elif recipe_id == "open_data_api":
                 parent_cols = ["country_code", "country_name", "indicator_id", "indicator_name", "year", "value"]
                 parent_details = [NodeColumnInfo(name=c, type="numeric" if c in ["year", "value"] else "string") for c in parent_cols]
+            elif recipe_id in ["twitter_connector", "twitter", "x_connector"]:
+                parent_cols = ["tweet_id", "text", "created_at", "author_id", "author_username", "like_count", "retweet_count", "reply_count", "quote_count", "impression_count", "bookmark_count", "lang", "source"]
+                parent_details = [NodeColumnInfo(name=c, type="numeric" if "count" in c else "string") for c in parent_cols]
+            elif recipe_id in ["reddit_connector", "reddit"]:
+                parent_cols = ["post_id", "title", "author", "subreddit", "score", "upvote_ratio", "num_comments", "created_utc", "url", "permalink", "selftext", "is_self", "over_18"]
+                parent_details = [NodeColumnInfo(name=c, type="numeric" if c in ["score", "upvote_ratio", "num_comments"] else "string") for c in parent_cols]
+            elif recipe_id in ["linkedin_connector", "linkedin"]:
+                parent_cols = ["post_urn", "author_urn", "published_at", "commentary_text", "media_type", "like_count", "comment_count", "share_count", "impression_count", "click_count", "engagement_rate"]
+                parent_details = [NodeColumnInfo(name=c, type="numeric" if "count" in c or "rate" in c else "string") for c in parent_cols]
             elif recipe_id in ["cron_trigger", "webhook_trigger"]:
                 parent_cols = ["timestamp", "trigger_time", "payload"]
                 parent_details = [NodeColumnInfo(name=c, type="string") for c in parent_cols]

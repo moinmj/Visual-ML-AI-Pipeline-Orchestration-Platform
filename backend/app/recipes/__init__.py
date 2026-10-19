@@ -97,6 +97,9 @@ from backend.app.recipes.integrations.currency_exchange_api import CurrencyExcha
 from backend.app.recipes.integrations.news_api import NewsApiRecipe
 from backend.app.recipes.integrations.rss_news_reader import RssNewsReaderRecipe
 from backend.app.recipes.integrations.open_data_api import OpenDataApiRecipe
+from backend.app.recipes.integrations.twitter_connector import TwitterConnectorRecipe
+from backend.app.recipes.integrations.reddit_connector import RedditConnectorRecipe
+from backend.app.recipes.integrations.linkedin_connector import LinkedInConnectorRecipe
 
 # Unsupervised & Dimensionality Reduction Recipes
 from backend.app.recipes.unsupervised.clustering import ClusteringRecipe
@@ -221,6 +224,9 @@ def register_all_recipes():
     recipe_registry.register(NewsApiRecipe())
     recipe_registry.register(RssNewsReaderRecipe())
     recipe_registry.register(OpenDataApiRecipe())
+    recipe_registry.register(TwitterConnectorRecipe())
+    recipe_registry.register(RedditConnectorRecipe())
+    recipe_registry.register(LinkedInConnectorRecipe())
 
     # Unsupervised & Dimensionality Reduction
     recipe_registry.register(ClusteringRecipe())
