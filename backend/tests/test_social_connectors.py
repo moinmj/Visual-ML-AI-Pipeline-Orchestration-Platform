@@ -151,6 +151,7 @@ def test_linkedin_connector_schema_and_execution():
     assert "author_urn" in df_posts.columns
     assert df_posts["author_urn"].iloc[0] == "urn:li:organization:1035"
     assert "like_count" in df_posts.columns
+    assert "content_format" in df_posts.columns
     assert "comment_count" in df_posts.columns
 
     # Company Engagement Metrics & Statistics

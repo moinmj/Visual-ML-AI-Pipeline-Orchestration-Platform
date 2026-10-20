@@ -408,7 +408,7 @@ class WorkflowSchemaInferencer:
                 parent_cols = ["post_id", "title", "author", "subreddit", "score", "upvote_ratio", "num_comments", "created_utc", "url", "permalink", "selftext", "is_self", "over_18"]
                 parent_details = [NodeColumnInfo(name=c, type="numeric" if c in ["score", "upvote_ratio", "num_comments"] else "string") for c in parent_cols]
             elif recipe_id in ["linkedin_connector", "linkedin"]:
-                parent_cols = ["post_urn", "author_urn", "published_at", "commentary_text", "media_type", "like_count", "comment_count", "share_count", "impression_count", "click_count", "engagement_rate"]
+                parent_cols = ["post_urn", "author_urn", "published_at", "commentary_text", "content_format", "like_count", "comment_count", "share_count", "impression_count", "click_count", "engagement_rate"]
                 parent_details = [NodeColumnInfo(name=c, type="numeric" if "count" in c or "rate" in c else "string") for c in parent_cols]
             elif recipe_id in ["cron_trigger", "webhook_trigger"]:
                 parent_cols = ["timestamp", "trigger_time", "payload"]
