@@ -8,8 +8,15 @@ across frames. Output: one row per tracked object (default) or per detection.
 Videos come from 'video_files' (picked from unstructured/; same rules and security checks
 as the image recipes, see _common.py). There is no table / column input.
 
+Annotated video: with 'save_annotated_video' the WHOLE video is written back with the boxes, the
+category (class) names and the track ids drawn on it, as an H.264 .mp4 that plays in a browser
+<video> tag. Frames that are skipped by 'frame_stride' re-use the boxes of the last analysed frame,
+so the video keeps its original frame rate and looks continuous. Every result also carries a
+per-category summary ('categories').
+
 Place this file at:  backend/app/recipes/vision/video_tracking.py
 Needs:               pip install ultralytics lapx   (opencv comes with easyocr / ultralytics)
+                     pip install "av<19"            (only for the annotated video; already needed by speech-to-text)
 
 Security: only built-in model/tracker names are accepted; videos are read only from the
 caller's tenant folder; limits come from core/media_types.py plus the caps below;
@@ -20,6 +27,7 @@ import os
 import tempfile
 from collections import Counter
 from datetime import datetime, timezone
+from fractions import Fraction
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -34,6 +42,7 @@ TRACKERS = ["bytetrack.yaml", "botsort.yaml"]
 DEFAULT_TRACKER = "bytetrack.yaml"
 MAX_FRAMES_CAP = 1000          # processed frames per video
 PREVIEW_FRAMES = 4             # annotated frames saved per video
+MAX_OUTPUT_VIDEO_FRAMES = 3000  # frames written to the annotated video (~100 s at 30 fps); longer is cut
 OUTPUT_FOLDER = "outputs/video_tracking"
 OUTPUT_FORMATS = ("one_row_per_track", "one_row_per_detection")
 
@@ -51,6 +60,46 @@ def _new_model(model_name: str):
     return YOLO(model_name)
 
 
+class _AnnotatedVideoWriter:
+    """Writes BGR frames into an H.264 .mp4 (plays in every browser) with PyAV. 'faststart' puts the index at the
+    start of the file, so the browser can begin playing without downloading everything first."""
+
+    def __init__(self, path: str, fps: float):
+        try:
+            import av
+        except ImportError as e:
+            raise RuntimeError("The annotated video needs 'av'. Install it with: pip install \"av<19\"") from e
+        self._av = av
+        self.fps = Fraction(fps if fps and fps > 0 else 25.0).limit_denominator(1001)
+        self.container = av.open(path, mode="w", options={"movflags": "faststart"})
+        self.stream = None
+        self.size = (0, 0)
+        self.frames = 0
+
+    def write(self, bgr) -> None:
+        import numpy as np
+
+        h, w = bgr.shape[:2]
+        if self.stream is None:
+            self.size = (w - w % 2, h - h % 2)  # H.264 (yuv420p) needs even sizes
+            self.stream = self.container.add_stream("libx264", rate=self.fps)
+            self.stream.width, self.stream.height = self.size
+            self.stream.pix_fmt = "yuv420p"
+            self.stream.options = {"crf": "23", "preset": "veryfast"}
+        frame = self._av.VideoFrame.from_ndarray(np.ascontiguousarray(bgr[: self.size[1], : self.size[0]]), format="bgr24")
+        for packet in self.stream.encode(frame):
+            self.container.mux(packet)
+        self.frames += 1
+
+    def close(self) -> None:
+        try:
+            if self.stream is not None:
+                for packet in self.stream.encode():
+                    self.container.mux(packet)
+        finally:
+            self.container.close()
+
+
 class VideoObjectTrackingRecipe(BaseRecipe):
     recipe_id = "video_object_tracking"
     name = "Video Frame Extractor + Object Tracking"
@@ -58,7 +107,7 @@ class VideoObjectTrackingRecipe(BaseRecipe):
     category = "vision_audio"
     media_type = "video"
     description = "Extracts frames from video and tracks objects across them."
-    input_types = ["dataframe"]
+    input_types = []  # source node: reads its own files, takes no input
     output_types = ["dataframe"]
 
     def get_schema(self) -> Dict[str, Any]:
@@ -107,6 +156,15 @@ class VideoObjectTrackingRecipe(BaseRecipe):
                     "type": "select", "title": "Output Format", "input_type": "dropdown",
                     "enum": list(OUTPUT_FORMATS), "default": "one_row_per_track",
                     "description": "One row per tracked object (first/last frame, duration) or one row per detection in each frame.",
+                },
+                "save_annotated_video": {
+                    "type": "boolean", "title": "Save Annotated Video", "input_type": "checkbox",
+                    "default": False,
+                    "description": (
+                        f"Saves the whole video with boxes, category names and track ids drawn on it (.mp4, plays in the browser) "
+                        f"into your Ozone folder ({OUTPUT_FOLDER}/<model>_<time>/). Skipped frames re-use the last boxes, so the "
+                        f"video keeps its frame rate. Cut after {MAX_OUTPUT_VIDEO_FRAMES} frames."
+                    ),
                 },
                 "save_preview_frames": {
                     "type": "boolean", "title": "Save Preview Frames", "input_type": "checkbox",
@@ -178,6 +236,40 @@ class VideoObjectTrackingRecipe(BaseRecipe):
             })
         return tracks
 
+    @staticmethod
+    def _summarise_categories(detections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Per category (class): how many objects (tracks), detections, when it is on screen, average confidence.
+        The tracker keeps one id while the detector may change the label (person <-> handbag), so each track is
+        counted ONCE, under its most common label: the numbers then agree with 'tracks_per_class' and 'total_tracks'.
+        """
+        by_id: Dict[int, List[Dict[str, Any]]] = {}
+        for d in detections:
+            by_id.setdefault(d["track_id"], []).append(d)
+        by_label: Dict[str, List[Dict[str, Any]]] = {}
+        for ds in by_id.values():
+            by_label.setdefault(Counter(d["label"] for d in ds).most_common(1)[0][0], []).extend(ds)
+        cats = []
+        for label, ds in by_label.items():
+            times = [d["time_s"] for d in ds if d["time_s"] is not None]
+            cats.append({
+                "label": label,
+                "num_tracks": len({d["track_id"] for d in ds}),
+                "num_detections": len(ds),
+                "first_time_s": min(times) if times else None,
+                "last_time_s": max(times) if times else None,
+                "avg_confidence": round(sum(d["confidence"] for d in ds) / len(ds), 4),
+            })
+        return sorted(cats, key=lambda x: (-x["num_tracks"], x["label"]))
+
+    @staticmethod
+    def _draw_held(res, frame):
+        """The boxes of the last analysed frame drawn on a skipped frame (keeps the video's full frame rate)."""
+        try:
+            return res.plot(img=frame)
+        except TypeError:  # an older ultralytics without img=: show the plain frame
+            return frame
+
     def _track_video(self, path: str, cfg: Dict[str, Any], save_preview, tenant_id, vidx, source_value, run_tag) -> Dict[str, Any]:
         import cv2
 
@@ -209,10 +301,22 @@ class VideoObjectTrackingRecipe(BaseRecipe):
             detections: List[Dict[str, Any]] = []
             previews: List[Dict[str, Any]] = []
             idx = processed = 0
+            writer, video_tmp, last_res = None, None, None
+            if cfg.get("save_video"):
+                fd, video_tmp = tempfile.mkstemp(suffix=".mp4")
+                os.close(fd)
+                writer = _AnnotatedVideoWriter(video_tmp, fps)
             while processed < max_frames:
                 if idx % stride != 0:
-                    if not cap.grab():
-                        break
+                    if writer is None:
+                        if not cap.grab():
+                            break
+                    else:  # the video needs the pixels of this frame too
+                        ok, frame = cap.read()
+                        if not ok:
+                            break
+                        if last_res is not None and writer.frames < MAX_OUTPUT_VIDEO_FRAMES:
+                            writer.write(self._draw_held(last_res, frame))
                     idx += 1
                     continue
                 ok, frame = cap.read()
@@ -226,12 +330,32 @@ class VideoObjectTrackingRecipe(BaseRecipe):
                 detections.extend(self._parse_frame(res, idx, time_s))
                 if save_preview and processed in preview_at:
                     previews.append(self._save_preview(res, tenant_id, vidx, source_value, idx, run_tag))
+                if writer is not None and writer.frames < MAX_OUTPUT_VIDEO_FRAMES:
+                    writer.write(res.plot())
+                last_res = res
                 processed += 1
                 idx += 1
+
+            output_video, frames_written, truncated = None, 0, False
+            if writer is not None:
+                writer.close()
+                frames_written, truncated = writer.frames, writer.frames >= MAX_OUTPUT_VIDEO_FRAMES
+                if frames_written:
+                    from backend.app.infrastructure.storage.ozone_client import upload_file_to_ozone
+
+                    with open(video_tmp, "rb") as f:
+                        video_bytes = f.read()
+                    base = str(source_value).rstrip("/").rsplit("/", 1)[-1].rsplit(".", 1)[0] or "video"
+                    output_video = upload_file_to_ozone(
+                        video_bytes, f"{OUTPUT_FOLDER}/{run_tag}/{vidx}_{base}_tracked.mp4", tenant_id, "video/mp4"
+                    )
         finally:
             cap.release()
+            if video_tmp and os.path.exists(video_tmp):
+                os.unlink(video_tmp)
 
-        return {**info, "frames_processed": processed, "detections": detections, "previews": previews}
+        return {**info, "frames_processed": processed, "detections": detections, "previews": previews,
+                "output_video": output_video, "video_frames_written": frames_written, "video_truncated": truncated}
 
     @staticmethod
     def _save_preview(res, tenant_id: int, vidx: int, source_value: Any, frame_index: int, run_tag: str) -> Dict[str, Any]:
@@ -263,6 +387,7 @@ class VideoObjectTrackingRecipe(BaseRecipe):
             "iou": float(config.get("iou_threshold", 0.7)),
             "imgsz": int(config.get("image_size", 640)),
             "classes": od.ObjectDetectionRecipe._parse_classes(config.get("classes")),
+            "save_video": bool(config.get("save_annotated_video", False)),
         }
         out_format = config.get("output_format", "one_row_per_track")
         save_preview = bool(config.get("save_preview_frames", False))
@@ -321,12 +446,15 @@ class VideoObjectTrackingRecipe(BaseRecipe):
             per_class = Counter(t["label"] for t in r["tracks"])
             previews.append(c.preview_item(
                 original=value,
-                media=r["previews"][0]["media_path"] if r["previews"] else None,  # first annotated frame
+                # the annotated video when it was saved, otherwise the first annotated frame
+                media=r.get("output_video") or (r["previews"][0]["media_path"] if r["previews"] else None),
                 error=r["error"],
                 frames_processed=r["frames_processed"],
                 num_tracks=len(r["tracks"]),
                 tracks_per_class=dict(per_class),
+                categories=self._summarise_categories(r["detections"]),  # per category: tracks, detections, first/last time
                 preview_frames=r["previews"],  # every saved frame: {frame_index, media_path, media_preview_url}
+                **({"video_truncated": True} if r.get("video_truncated") else {}),
             ))
         metrics = {
             "task_type": "video_object_tracking",

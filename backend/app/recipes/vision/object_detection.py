@@ -132,7 +132,7 @@ class ObjectDetectionRecipe(BaseRecipe):
     category = "vision_audio"
     media_type = "image"
     description = "Detects and locates objects in images with bounding boxes."
-    input_types = ["dataframe"]
+    input_types = []  # source node: reads its own files, takes no input
     output_types = ["dataframe"]
 
     def get_schema(self) -> Dict[str, Any]:
