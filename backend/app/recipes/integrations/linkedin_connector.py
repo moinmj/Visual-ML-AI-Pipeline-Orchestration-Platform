@@ -182,7 +182,7 @@ class LinkedInConnectorRecipe(BaseRecipe):
                     "commentary_text": commentary,
                     "lifecycle_state": str(item.get("lifecycleState", "PUBLISHED")),
                     "visibility": str(item.get("visibility", "PUBLIC")),
-                    "media_type": str(item.get("content", {}).get("media", {}).get("type", "NONE") if isinstance(item.get("content"), dict) else "NONE"),
+                    "content_format": str(item.get("content", {}).get("media", {}).get("type", "TEXT") if isinstance(item.get("content"), dict) else "TEXT").title(),
                     "like_count": 0,
                     "comment_count": 0,
                     "share_count": 0,
@@ -259,14 +259,14 @@ class LinkedInConnectorRecipe(BaseRecipe):
 
         # Company Page Posts & Updates (or Member Profile Shares)
         sample_updates = [
-            ("We are thrilled to be recognized as an industry leader in enterprise machine learning and scalable pipeline orchestration.", "ARTICLE", 1450, 89, 45, 34200, 1540),
-            ("How our engineering organization halved GPU inference costs with dynamic batching and INT8 quantization: Read the case study.", "VIDEO", 2890, 164, 88, 62100, 3120),
-            ("Join us this Thursday for a live technical deep dive into building production-ready automated feature stores.", "IMAGE", 1120, 72, 34, 28400, 980),
-            ("Celebrating another milestone quarter! A huge thank you to our global team and vibrant open-source developer community.", "IMAGE", 4210, 230, 115, 89500, 4200),
-            ("New Whitepaper Released: Best practices for implementing governance, auditability, and safety rails in generative AI workflows.", "DOCUMENT", 3140, 195, 92, 57800, 2650),
-            ("Our team is hiring senior ML platform engineers, research scientists, and distributed systems architects. Apply today!", "ARTICLE", 1850, 94, 61, 39100, 1870),
-            ("Key takeaways from the Global AI Summit: The shift from standalone models to unified agentic orchestration frameworks.", "ARTICLE", 2340, 142, 70, 48300, 2190),
-            ("Continuous monitoring and automated data drift detection: Why ML pipelines need proactive alerting in production.", "IMAGE", 1980, 110, 54, 41200, 1780)
+            ("We are thrilled to be recognized as an industry leader in enterprise machine learning and scalable pipeline orchestration.", "Article", 1450, 89, 45, 34200, 1540),
+            ("How our engineering organization halved GPU inference costs with dynamic batching and INT8 quantization: Read the case study.", "Video", 2890, 164, 88, 62100, 3120),
+            ("Join us this Thursday for a live technical deep dive into building production-ready automated feature stores.", "Image", 1120, 72, 34, 28400, 980),
+            ("Celebrating another milestone quarter! A huge thank you to our global team and vibrant open-source developer community.", "Image", 4210, 230, 115, 89500, 4200),
+            ("New Whitepaper Released: Best practices for implementing governance, auditability, and safety rails in generative AI workflows.", "Document", 3140, 195, 92, 57800, 2650),
+            ("Our team is hiring senior ML platform engineers, research scientists, and distributed systems architects. Apply today!", "Article", 1850, 94, 61, 39100, 1870),
+            ("Key takeaways from the Global AI Summit: The shift from standalone models to unified agentic orchestration frameworks.", "Article", 2340, 142, 70, 48300, 2190),
+            ("Continuous monitoring and automated data drift detection: Why ML pipelines need proactive alerting in production.", "Image", 1980, 110, 54, 41200, 1780)
         ]
 
         records = []
@@ -281,7 +281,7 @@ class LinkedInConnectorRecipe(BaseRecipe):
                 "commentary_text": f"[{organization_urn}] {commentary} (Post #{i+1})",
                 "lifecycle_state": "PUBLISHED",
                 "visibility": "PUBLIC",
-                "media_type": media,
+                "content_format": media,
                 "like_count": int(likes + i * 29),
                 "comment_count": int(comments + i * 6),
                 "share_count": int(shares + i * 4),
