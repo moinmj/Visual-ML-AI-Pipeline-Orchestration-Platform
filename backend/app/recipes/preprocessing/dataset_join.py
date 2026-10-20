@@ -103,6 +103,7 @@ class DatasetJoinRecipe(BaseRecipe):
                 "join_type": {
                     "type": "string",
                     "title": "Join Type",
+                    "input_type": "dropdown",
                     "enum": ["inner", "left", "right", "outer", "split", "cross"],
                     "default": "inner",
                     "description": "'inner' (matched records only); 'left' (all left rows); 'right' (all right rows); 'outer' (full join of all records); 'split' (produces matched, left-only, and right-only partitions); 'cross' (cartesian product of all rows)."
@@ -110,13 +111,24 @@ class DatasetJoinRecipe(BaseRecipe):
                 "conditions": {
                     "type": "array",
                     "title": "Join Conditions",
+                    "input_type": "conditions",
                     "items": {
                         "type": "object",
                         "properties": {
-                            "left": {"type": "string", "title": "Left Column"},
-                            "right": {"type": "string", "title": "Right Column"},
+                            "left": {
+                                "type": "string",
+                                "title": "Left Column",
+                                "input_type": "column_select"
+                            },
+                            "right": {
+                                "type": "string",
+                                "title": "Right Column",
+                                "input_type": "column_select"
+                            },
                             "operator": {
                                 "type": "string",
+                                "title": "Operator",
+                                "input_type": "dropdown",
                                 "enum": ["=", "!=", ">", "<", ">=", "<="],
                                 "default": "="
                             }
@@ -130,51 +142,60 @@ class DatasetJoinRecipe(BaseRecipe):
                     "type": "array",
                     "items": {"type": "string"},
                     "title": "Choose Columns (Left Table)",
+                    "input_type": "multi_column_select",
                     "description": "Specific columns to keep from Left table. Leave empty to keep all."
                 },
                 "selected_columns_right": {
                     "type": "array",
                     "items": {"type": "string"},
                     "title": "Choose Columns (Right Table)",
+                    "input_type": "multi_column_select",
                     "description": "Specific columns to keep from Right table. Leave empty to keep all."
                 },
                 "rename_columns_left": {
                     "type": "object",
                     "title": "Rename Columns (Left Table)",
+                    "input_type": "key_value",
                     "description": "Key-value dictionary of {old_column_name: new_column_name} for Left table."
                 },
                 "rename_columns_right": {
                     "type": "object",
                     "title": "Rename Columns (Right Table)",
+                    "input_type": "key_value",
                     "description": "Key-value dictionary of {old_column_name: new_column_name} for Right table."
                 },
                 "suffixes": {
                     "type": "array",
                     "items": {"type": "string"},
                     "title": "Column Overlap Suffixes",
+                    "input_type": "tags",
                     "default": ["_left", "_right"],
                     "description": "Suffixes appended to overlapping non-key column names to avoid collision."
                 },
                 "indicator": {
                     "type": "boolean",
                     "title": "Add Merge Indicator Column (_merge)",
+                    "input_type": "checkbox",
                     "default": False,
                     "description": "If enabled, appends a '_merge' column ('left_only', 'right_only', 'both')."
                 },
                 "save_as_dataset": {
                     "type": "boolean",
                     "title": "Save Output as New Dataset",
+                    "input_type": "checkbox",
                     "default": False,
                     "description": "If enabled, automatically persists the merged result to your Datasets library."
                 },
                 "output_dataset_name": {
                     "type": "string",
                     "title": "New Dataset Name",
+                    "input_type": "text",
                     "description": "Custom name for the newly created dataset (e.g. 'Customers_Orders_Joined')."
                 },
                 "output_dataset_description": {
                     "type": "string",
                     "title": "New Dataset Description",
+                    "input_type": "text",
                     "description": "Optional description for the newly created dataset."
                 }
             },

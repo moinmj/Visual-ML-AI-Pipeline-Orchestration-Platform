@@ -50,12 +50,13 @@ class RegexReplaceExtractRecipe(BaseRecipe):
                 "source_column": {
                     "type": "string",
                     "title": "Source Column",
-                    "description": "Column to extract from or perform regex replacement on.",
-                    "default": ""
+                    "input_type": "column_select",
+                    "description": "Column to extract from or perform regex replacement on."
                 },
                 "columns": {
                     "type": "array",
                     "title": "Multiple Source Columns (for Replace mode)",
+                    "input_type": "multi_column_select",
                     "items": {"type": "string"},
                     "default": [],
                     "description": "Optional list of columns to apply regex replacement across simultaneously."
@@ -63,6 +64,7 @@ class RegexReplaceExtractRecipe(BaseRecipe):
                 "mode": {
                     "type": "string",
                     "title": "Operation Mode",
+                    "input_type": "dropdown",
                     "enum": ["replace", "extract", "extract_all", "match_flag"],
                     "default": "replace",
                     "description": "'replace' substitutes matched patterns; 'extract' captures regex groups into new columns; 'extract_all' collects all matches joined by delimiter; 'match_flag' adds boolean match column."
@@ -70,24 +72,27 @@ class RegexReplaceExtractRecipe(BaseRecipe):
                 "regex_pattern": {
                     "type": "string",
                     "title": "Regular Expression Pattern",
+                    "input_type": "text",
                     "description": "Regex pattern. E.g. '\\d{4}' (digits), '(?P<user>[^@]+)@(?P<domain>[^\\s]+)' (email groups), '\\$|,|\\s' (currency symbols).",
                     "default": ""
                 },
                 "replacement": {
                     "type": "string",
                     "title": "Replacement String (Replace mode)",
+                    "input_type": "text",
                     "description": "Replacement string or backreference (e.g. '', '_', '\\1'). Used when mode is 'replace'.",
                     "default": ""
                 },
                 "target_column": {
                     "type": "string",
                     "title": "Target / Output Column",
-                    "description": "Name of output column. In 'replace' mode, if blank, replaces in-place. In 'extract' mode with single match, name of extracted column.",
-                    "default": ""
+                    "input_type": "text",
+                    "description": "Name of output column. In 'replace' mode, if blank, replaces in-place. In 'extract' mode with single match, name of extracted column."
                 },
                 "target_columns": {
                     "type": "array",
                     "title": "Extracted Column Names",
+                    "input_type": "tags",
                     "items": {"type": "string"},
                     "default": [],
                     "description": "Explicit list of column names for multiple regex capture groups in 'extract' mode. Overrides auto-detected group names."
@@ -95,24 +100,28 @@ class RegexReplaceExtractRecipe(BaseRecipe):
                 "delimiter": {
                     "type": "string",
                     "title": "Extract All Delimiter",
+                    "input_type": "text",
                     "default": ", ",
                     "description": "Delimiter used to join multiple matches in 'extract_all' mode."
                 },
                 "ignore_case": {
                     "type": "boolean",
                     "title": "Ignore Case (re.IGNORECASE)",
+                    "input_type": "checkbox",
                     "default": True,
                     "description": "Case-insensitive matching."
                 },
                 "multiline": {
                     "type": "boolean",
                     "title": "Multiline Matching (re.MULTILINE)",
+                    "input_type": "checkbox",
                     "default": False,
                     "description": "Makes '^' and '$' match the beginning and end of each line."
                 },
                 "dotall": {
                     "type": "boolean",
                     "title": "Dotall (re.DOTALL)",
+                    "input_type": "checkbox",
                     "default": False,
                     "description": "Makes '.' match any character including newlines."
                 }

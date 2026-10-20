@@ -37,19 +37,26 @@ class AggregateRecipe(BaseRecipe):
                 "group_by": {
                     "type": "array",
                     "title": "Group By Columns",
+                    "input_type": "multi_column_select",
                     "items": {"type": "string"},
                     "description": "Columns to group by (e.g. ['Store', 'Dept'] or 'Category')."
                 },
                 "aggregations": {
                     "type": "array",
                     "title": "Aggregations",
+                    "input_type": "aggregations",
                     "items": {
                         "type": "object",
                         "properties": {
-                            "column": {"type": "string", "title": "Column"},
+                            "column": {
+                                "type": "string",
+                                "title": "Column",
+                                "input_type": "column_select"
+                            },
                             "func": {
                                 "type": "string",
                                 "title": "Function",
+                                "input_type": "dropdown",
                                 "enum": ["sum", "mean", "count", "min", "max", "median", "std", "nunique"]
                             }
                         },

@@ -20,6 +20,7 @@ class MissingValueImputerRecipe(BaseRecipe):
                 "strategy": {
                     "type": "string",
                     "title": "Imputation Strategy",
+                    "input_type": "dropdown",
                     "enum": ["mean", "median", "mode", "drop_rows", "constant", "ffill", "bfill"],
                     "default": "median"
                 },
@@ -27,11 +28,13 @@ class MissingValueImputerRecipe(BaseRecipe):
                     "type": "array",
                     "items": {"type": "string"},
                     "title": "Target Columns",
+                    "input_type": "multi_column_select",
                     "description": "Columns to impute. If left empty, strategy will apply to all compatible columns."
                 },
                 "fill_value": {
                     "type": "string",
                     "title": "Constant Fill Value",
+                    "input_type": "text",
                     "description": "Used only when strategy is 'constant'."
                 }
             },

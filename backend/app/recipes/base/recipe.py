@@ -103,6 +103,97 @@ class BaseRecipe(ABC):
         """
         pass
 
+    @classmethod
+    def enrich_schema_input_types(cls, schema: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Ensures all properties in the schema have an explicit 'input_type' matching
+        frontend Inspector widgets and scrubs empty string defaults on column/metric/target fields.
+        """
+        if not isinstance(schema, dict):
+            return schema
+
+        props = schema.get("properties")
+        if not isinstance(props, dict):
+            return schema
+
+        for prop_name, prop_data in props.items():
+            if not isinstance(prop_data, dict):
+                continue
+
+            # Recursively enrich nested properties (e.g. array items with object properties)
+            if "properties" in prop_data:
+                cls.enrich_schema_input_types(prop_data)
+            if "items" in prop_data and isinstance(prop_data["items"], dict) and "properties" in prop_data["items"]:
+                cls.enrich_schema_input_types(prop_data["items"])
+
+            low_name = prop_name.lower()
+
+            # Rule: Keep parameter schemas free of empty string defaults on keys containing column, metric, or target
+            if any(k in low_name for k in ("column", "metric", "target")):
+                if prop_data.get("default") == "":
+                    prop_data.pop("default", None)
+
+            # If input_type is already set, normalize it if necessary
+            current_input_type = prop_data.get("input_type")
+            if current_input_type:
+                if current_input_type == "select":
+                    prop_data["input_type"] = "dropdown"
+                continue
+
+            prop_type = prop_data.get("type", "")
+            has_enum = "enum" in prop_data
+
+            if has_enum or prop_type in ("select", "radio"):
+                if prop_type == "array" or ("items" in prop_data and isinstance(prop_data["items"], dict) and "enum" in prop_data["items"]):
+                    prop_data["input_type"] = "multi_select"
+                else:
+                    prop_data["input_type"] = "dropdown"
+            elif prop_type == "boolean":
+                prop_data["input_type"] = "checkbox"
+            elif prop_type in ("number", "integer", "float"):
+                if "minimum" in prop_data and "maximum" in prop_data:
+                    prop_data["input_type"] = "slider"
+                else:
+                    prop_data["input_type"] = "number"
+            elif prop_type == "textarea" or any(kw in low_name for kw in ("query", "code", "sql", "formula", "prompt", "script", "template", "message_body")):
+                prop_data["input_type"] = "textarea"
+            elif prop_type == "object" or any(kw in low_name for kw in ("mapping", "conversions", "dictionary", "key_value")):
+                prop_data["input_type"] = "key_value"
+            elif prop_type == "password" or any(kw in low_name for kw in ("password", "secret")):
+                prop_data["input_type"] = "password"
+            elif any(kw in low_name for kw in ("dataset_id", "file_id", "image_files", "input_file")):
+                prop_data["input_type"] = "file_select"
+            elif prop_type == "array":
+                if any(kw in low_name for kw in ("column", "feature", "key", "group", "subset", "order", "drop", "select", "exclude", "include", "target")):
+                    prop_data["input_type"] = "multi_column_select"
+                else:
+                    prop_data["input_type"] = "tags"
+            else:
+                is_excluded_col = any(low_name.endswith(sfx) for sfx in ("_format", "_name", "_prefix", "_suffix", "_unit", "_type", "_mode", "_action", "_style", "_strategy", "_method", "_provider", "_delim", "_delimiter", "_val", "_value"))
+                if not is_excluded_col and (
+                    low_name in ("column", "target", "label", "date_column", "time_column", "timestamp_column", "target_column")
+                    or low_name.endswith(("_column", "_col", "_field"))
+                    or ("column" in low_name and not any(kw in low_name for kw in ("columns", "order", "mapping", "prefix", "suffix", "count")))
+                    or ("target" in low_name and not any(kw in low_name for kw in ("targets", "target_currencies", "metric", "directory", "size", "length", "ratio", "count")))
+                ):
+                    prop_data["input_type"] = "column_select"
+                else:
+                    prop_data["input_type"] = "text"
+
+        return schema
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if "get_schema" in cls.__dict__:
+            orig_get_schema = cls.__dict__["get_schema"]
+            def wrapped_get_schema(self, *args, **kw):
+                raw_schema = orig_get_schema(self, *args, **kw)
+                return BaseRecipe.enrich_schema_input_types(raw_schema)
+            # Preserve original docstring and function metadata
+            wrapped_get_schema.__name__ = orig_get_schema.__name__
+            wrapped_get_schema.__doc__ = orig_get_schema.__doc__
+            cls.get_schema = wrapped_get_schema
+
     def to_code(self, config: Dict[str, Any]) -> str:
         """
         Renders the recipe configuration as a clean Python code snippet for the Node Code-View (Section 9).
@@ -111,6 +202,8 @@ class BaseRecipe(ABC):
         return f"# Recipe: {self.name}\n# ID: {self.recipe_id}\nresult = {self.recipe_id}({args_str})"
 
     def to_metadata(self) -> RecipeMetadata:
+        schema = self.get_schema()
+        schema = self.enrich_schema_input_types(schema)
         return RecipeMetadata(
             recipe_id=self.recipe_id,
             name=self.name,
@@ -124,5 +217,5 @@ class BaseRecipe(ABC):
             output_types=self.output_types,
             inputs=self.get_inputs(),
             outputs=self.get_outputs(),
-            parameters_schema=self.get_schema()
+            parameters_schema=schema
         )

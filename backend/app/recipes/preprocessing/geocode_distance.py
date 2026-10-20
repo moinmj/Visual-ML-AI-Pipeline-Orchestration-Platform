@@ -93,6 +93,7 @@ class GeocodeDistanceCalculatorRecipe(BaseRecipe):
                 "mode": {
                     "type": "string",
                     "title": "Operation Mode",
+                    "input_type": "dropdown",
                     "enum": ["distance", "geocode", "reverse_geocode", "validate_clean"],
                     "default": "distance",
                     "description": "'distance' computes distances; 'geocode' converts address/city to lat/lon; 'reverse_geocode' finds nearest city/country; 'validate_clean' sanitizes coordinates."
@@ -100,6 +101,7 @@ class GeocodeDistanceCalculatorRecipe(BaseRecipe):
                 "distance_method": {
                     "type": "string",
                     "title": "Distance Method",
+                    "input_type": "dropdown",
                     "enum": ["haversine", "euclidean", "manhattan"],
                     "default": "haversine",
                     "description": "'haversine' great-circle spherical distance; 'euclidean' flat distance; 'manhattan' grid distance."
@@ -107,6 +109,7 @@ class GeocodeDistanceCalculatorRecipe(BaseRecipe):
                 "distance_unit": {
                     "type": "string",
                     "title": "Distance Unit",
+                    "input_type": "dropdown",
                     "enum": ["km", "miles", "meters", "nautical_miles"],
                     "default": "km",
                     "description": "Output unit for distance calculations."
@@ -114,46 +117,52 @@ class GeocodeDistanceCalculatorRecipe(BaseRecipe):
                 "lat1_column": {
                     "type": "string",
                     "title": "Origin Latitude Column",
+                    "input_type": "column_select",
                     "default": "latitude",
                     "description": "Column name containing origin latitude coordinates."
                 },
                 "lon1_column": {
                     "type": "string",
                     "title": "Origin Longitude Column",
+                    "input_type": "column_select",
                     "default": "longitude",
                     "description": "Column name containing origin longitude coordinates."
                 },
                 "lat2_column": {
                     "type": "string",
                     "title": "Destination Latitude Column",
-                    "default": "",
+                    "input_type": "column_select",
                     "description": "Optional column containing destination latitude coordinates for pairwise row distance."
                 },
                 "lon2_column": {
                     "type": "string",
                     "title": "Destination Longitude Column",
-                    "default": "",
+                    "input_type": "column_select",
                     "description": "Optional column containing destination longitude coordinates."
                 },
                 "reference_lat": {
                     "type": "number",
                     "title": "Fixed Reference Latitude",
+                    "input_type": "number",
                     "description": "Fixed destination latitude (e.g. warehouse, store, or airport) if lat2_column is omitted."
                 },
                 "reference_lon": {
                     "type": "number",
                     "title": "Fixed Reference Longitude",
+                    "input_type": "number",
                     "description": "Fixed destination longitude if lon2_column is omitted."
                 },
                 "address_column": {
                     "type": "string",
                     "title": "Address / City Column",
+                    "input_type": "column_select",
                     "default": "address",
                     "description": "Column containing address, city, or coordinates text for 'geocode' mode."
                 },
                 "output_column": {
                     "type": "string",
                     "title": "Output Column Name",
+                    "input_type": "text",
                     "default": "distance_km",
                     "description": "Name of output column for distance or primary result."
                 }

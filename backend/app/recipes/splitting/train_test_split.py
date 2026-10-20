@@ -23,11 +23,13 @@ class TrainTestSplitRecipe(BaseRecipe):
                 "target_column": {
                     "type": "string",
                     "title": "Target Variable (Y)",
+                    "input_type": "column_select",
                     "description": "The column to predict."
                 },
                 "test_size": {
                     "type": "number",
                     "title": "Test Split Ratio",
+                    "input_type": "slider",
                     "default": 0.2,
                     "minimum": 0.05,
                     "maximum": 0.5
@@ -35,17 +37,20 @@ class TrainTestSplitRecipe(BaseRecipe):
                 "random_state": {
                     "type": "integer",
                     "title": "Random Seed",
+                    "input_type": "number",
                     "default": 42
                 },
                 "stratify": {
                     "type": "boolean",
                     "title": "Stratified Split",
+                    "input_type": "checkbox",
                     "default": False,
                     "description": "Preserve target class distribution in splits (classification only)."
                 },
                 "time_series_mode": {
                     "type": "boolean",
                     "title": "Time-Series Mode (Chronological Split)",
+                    "input_type": "checkbox",
                     "default": False,
                     "description": (
                         "When enabled, sorts data by the time column and uses the chronologically latest "
@@ -56,6 +61,7 @@ class TrainTestSplitRecipe(BaseRecipe):
                 "time_column": {
                     "type": "string",
                     "title": "Time / Date Column (for Time-Series Mode)",
+                    "input_type": "column_select",
                     "description": (
                         "Column to sort by for chronological splitting. Auto-detected if not specified "
                         "(searches for 'year', 'date', 'time', 'period', 'timestamp' in column names)."
