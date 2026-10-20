@@ -102,7 +102,7 @@ class TextToSpeechRecipe(BaseRecipe):
     version = "1.0.0"
     category = "vision_audio"
     description = "Converts text into spoken audio files."
-    input_types = ["dataframe"]
+    input_types = []  # source node: reads its own files, takes no input
     output_types = ["dataframe"]
 
     def get_schema(self) -> Dict[str, Any]:
