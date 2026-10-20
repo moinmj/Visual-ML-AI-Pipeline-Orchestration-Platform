@@ -4,8 +4,8 @@ Image Classifier recipe (Modeling -> Computer Vision & Audio).
 Runs a pretrained YOLOv8 classification model (ImageNet, 1000 classes) on each
 image and returns the predicted label, its confidence and the top-k guesses.
 
-Images come from 'image_files' or a connected table + 'image_column'
-(same rules and security checks as object_detection, see _common.py).
+Images come from 'image_files' (picked from unstructured/; same rules and security
+checks as object_detection, see _common.py). There is no table / column input.
 
 Place this file at:  backend/app/recipes/vision/image_classifier.py
 Needs:               pip install ultralytics pillow   (already needed by object_detection)
@@ -159,20 +159,20 @@ class ImageClassifierRecipe(BaseRecipe):
         previews = []
         for value, lbl, r in zip(df[image_col].tolist(), labels, per_image):
             b = best(r)
-            previews.append({
-                "original_path": None if c.is_empty(value) else str(value),
-                "original_preview_url": c.preview_url(value),
-                "predicted_label": lbl,
-                "confidence": b["confidence"] if b else None,
-                "error": r["error"],
-            })
+            previews.append(c.preview_item(
+                original=value,
+                text=lbl,
+                error=r["error"],
+                predicted_label=lbl,
+                confidence=b["confidence"] if b else None,
+            ))
 
         metrics = {
             "task_type": "image_classification",
             "model": model_name,
-            "input_source": "image_files" if from_files else "table",
-            "images_processed": len(ok),
-            "images_failed": len(per_image) - len(ok),
+            "input_source": "image_files",
+            "items_processed": len(ok),
+            "items_failed": len(per_image) - len(ok),
             "predictions_per_class": dict(sorted(counts.items(), key=lambda kv: kv[1], reverse=True)),
             "avg_confidence": round(sum(confs) / len(confs), 4) if confs else None,
             "uncertain_count": int(sum(1 for lbl in labels if lbl == UNCERTAIN_LABEL)),
@@ -184,7 +184,7 @@ class ImageClassifierRecipe(BaseRecipe):
     def to_code(self, config: Dict[str, Any]) -> str:
         model = config.get("model", DEFAULT_MODEL)
         files = c.image_files(config)
-        source = repr(files) if files else f"df[{config.get('image_column', 'image_path')!r}].tolist()"
+        source = repr(files) if files else "[]"
         return (
             "from ultralytics import YOLO\n\n"
             f"model = YOLO({model!r})\n"

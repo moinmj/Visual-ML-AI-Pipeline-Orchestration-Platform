@@ -5,8 +5,8 @@ Turns each image into a numeric vector (embedding) with a pretrained torchvision
 network (ImageNet weights, classification head removed). Use the vectors for
 similarity search, clustering, duplicate detection, or as features for a trainer.
 
-Images come from 'image_files' or a connected table + 'image_column'
-(same rules and security checks as object_detection, see _common.py).
+Images come from 'image_files' (picked from unstructured/; same rules and security
+checks as object_detection, see _common.py). There is no table / column input.
 
 Place this file at:  backend/app/recipes/vision/image_embedding.py
 Needs:               torch + torchvision (already installed). No new packages.
@@ -179,23 +179,22 @@ class ImageEmbeddingRecipe(BaseRecipe):
 
         failed = [e for e in row_errors if e]
         previews = [
-            {
-                "original_path": None if c.is_empty(v) else str(v),
-                "original_preview_url": c.preview_url(v),
-                "embedding_dim": dim if vec is not None else None,
-                "embedding_head": [round(float(x), 4) for x in vec[:5]] if vec is not None else None,
-                "error": err,
-            }
+            c.preview_item(
+                original=v,
+                error=err,
+                embedding_dim=dim if vec is not None else None,
+                embedding_head=[round(float(x), 4) for x in vec[:5]] if vec is not None else None,
+            )
             for v, vec, err in zip(values, vectors, row_errors)
         ]
         metrics = {
             "task_type": "image_embedding",
             "model": model_name,
-            "input_source": "image_files" if from_files else "table",
+            "input_source": "image_files",
             "embedding_dim": dim,
             "normalized": normalize,
-            "images_processed": len(values) - len(failed),
-            "images_failed": len(failed),
+            "items_processed": len(values) - len(failed),
+            "items_failed": len(failed),
             "errors_sample": failed[:5],
             "preview_items": previews,
         }
