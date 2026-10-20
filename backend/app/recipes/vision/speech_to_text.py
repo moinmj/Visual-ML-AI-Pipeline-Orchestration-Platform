@@ -4,8 +4,8 @@ Speech-to-Text recipe (Modeling -> Computer Vision & Audio).
 Transcribes audio recordings with Whisper (via faster-whisper). Returns the full
 transcript, the detected language and timed segments.
 
-Audio comes from 'audio_files' (picked from unstructured/) or a connected table +
-'audio_column' (same rules and security checks as the image/video recipes, see _common.py).
+Audio comes from 'audio_files' (picked from unstructured/; same rules and security checks
+as the image/video recipes, see _common.py). There is no table / column input.
 
 Place this file at:  backend/app/recipes/vision/speech_to_text.py
 Needs:               pip install faster-whisper "av<19"
@@ -108,14 +108,6 @@ class SpeechToTextRecipe(BaseRecipe):
 
     def get_schema(self) -> Dict[str, Any]:
         source = c.source_schema("audio")
-        source["audio_files"]["description"] = (
-            f"Pick audio files from your uploaded files (unstructured/). "
-            f"Max {c.max_per_run('audio')} per run. Leave empty to use a connected table instead."
-        )
-        source["audio_column"]["description"] = (
-            "Only when a table is connected: the column holding the Ozone path of each audio file "
-            "(s3://... or a path inside your folder)."
-        )
         return {
             "type": "object",
             "properties": {
@@ -204,7 +196,7 @@ class SpeechToTextRecipe(BaseRecipe):
         out["num_segments"] = [None if r["error"] else len(r["segments"]) for r in per_audio]
         out["segments"] = [json.dumps(r["segments"], ensure_ascii=False) if not r["error"] else None for r in per_audio]
         out["transcription_error"] = [r["error"] for r in per_audio]
-        out["audio_preview_url"] = [c.preview_url(v) for v in values]
+        out["original_preview_url"] = [c.preview_url(v) for v in values]
 
         if out_format == "one_row_per_segment":
             base_cols = [col for col in out.columns if col not in ("transcript", "segments")]
@@ -221,33 +213,26 @@ class SpeechToTextRecipe(BaseRecipe):
             out_df = out
 
         failed = [r for r in per_audio if r["error"]]
-        # Keys follow the frontend's preview_items contract (same as object detection):
-        # original_path, original_preview_url, annotated_path, annotated_preview_url, num_objects, error.
-        # Audio has nothing to annotate, so annotated_* stay None. num_objects = number of segments.
-        # The extra speech fields below are additional and do not affect those keys.
-        previews = [
-            {
-                "original_path": None if c.is_empty(v) else str(v),
-                "original_preview_url": c.preview_url(v),
-                "annotated_path": None,
-                "annotated_preview_url": None,
-                "num_objects": len(r["segments"]),
-                "error": r["error"],
-                "detected_language": r["language"],
-                "duration_s": r["duration_s"],
-                "num_segments": len(r["segments"]),
-                "text_preview": " ".join(s["text"] for s in r["segments"])[:200],
-            }
-            for v, r in zip(values, per_audio)
-        ]
+        previews = []
+        for v, r in zip(values, per_audio):
+            item = c.preview_item(
+                original=v,
+                text=" ".join(s["text"] for s in r["segments"] if s["text"]).strip(),  # the transcript
+                error=r["error"],
+                segments=r["segments"],
+                detected_language=r["language"],
+                duration_s=r["duration_s"],
+                num_segments=len(r["segments"]),
+            )
+            previews.append(item)
         metrics = {
             "task_type": "speech_to_text",
             "model": model_name,
             "task": task,
             "language": language,
-            "input_source": "audio_files" if from_files else "table",
-            "audios_processed": len(per_audio) - len(failed),
-            "audios_failed": len(failed),
+            "input_source": "audio_files",
+            "items_processed": len(per_audio) - len(failed),
+            "items_failed": len(failed),
             "total_duration_s": round(sum(r["duration_s"] or 0 for r in per_audio), 3),
             "total_segments": int(sum(len(r["segments"]) for r in per_audio)),
             "errors_sample": [r["error"] for r in failed[:5]],
@@ -257,7 +242,7 @@ class SpeechToTextRecipe(BaseRecipe):
 
     def to_code(self, config: Dict[str, Any]) -> str:
         files = c.image_files(config, "audio")
-        source = repr(files[0]) if files else f"df[{config.get('audio_column', 'audio_path')!r}].iloc[0]"
+        source = repr(files[0]) if files else "'unstructured/<audio>'"
         language = config.get("language", "auto")
         return (
             "from faster_whisper import WhisperModel\n\n"

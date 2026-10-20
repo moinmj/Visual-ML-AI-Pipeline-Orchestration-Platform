@@ -1,12 +1,8 @@
 """
 Object Detection recipe (Modeling -> Computer Vision & Audio).
 
-Two ways to say which images to process (use one, not both):
-  1. Image Files ('image_files'): images picked from the user's uploaded
-     unstructured files, e.g. ["unstructured/cat.png"]. No table needed.
-  2. A connected table plus 'image_column': one column holds the Ozone path of
-     each image (s3://<bucket>/ml-workflow/t<tenant>/... or a path inside the
-     tenant folder). This is the original behaviour and is unchanged.
+Which images to process: 'image_files', images picked from the user's uploaded
+unstructured files, e.g. ["unstructured/cat.png"]. No table or column input.
 
 For every image the recipe runs a pretrained YOLO detector and returns a table
 with the detected objects (label, confidence, bounding box).
@@ -150,16 +146,7 @@ class ObjectDetectionRecipe(BaseRecipe):
                     "input_type": "file_select",
                     "file_kind": "image",
                     "maxItems": MAX_IMAGES_PER_RUN,
-                    "description": (
-                        "Pick images from your uploaded files (unstructured/). "
-                        f"Max {MAX_IMAGES_PER_RUN} per run. Leave empty to use a connected table instead."
-                    ),
-                },
-                "image_column": {
-                    "type": "string",
-                    "title": "Image Column",
-                    "input_type": "column_select",
-                    "description": "Only when a table is connected: the column holding the Ozone path of each image (s3://... or a path inside your folder).",
+                    "description": f"Pick images from your uploaded files (unstructured/). Max {MAX_IMAGES_PER_RUN} per run.",
                 },
                 "model": {
                     "type": "select",
@@ -226,7 +213,7 @@ class ObjectDetectionRecipe(BaseRecipe):
                     "description": f"Saves a copy of each image with boxes drawn into your Ozone folder ({OUTPUT_FOLDER}/<model>_<time>/).",
                 },
             },
-            # Either 'image_files' or 'image_column' is needed; validate_config checks that.
+            # 'image_files' is needed; validate_config checks that.
             "required": [],
         }
 
@@ -247,8 +234,8 @@ class ObjectDetectionRecipe(BaseRecipe):
         files = self._image_files(config)
         if len(files) > MAX_IMAGES_PER_RUN:
             errors.append(f"Too many image files ({len(files)}). The limit is {MAX_IMAGES_PER_RUN} per run.")
-        if not files and not str(config.get("image_column") or "").strip():
-            errors.append("Choose image files ('image_files') or set the image column ('image_column') of a connected table.")
+        if not files:
+            errors.append("Choose image files ('image_files') from your uploaded files.")
 
         model = config.get("model", DEFAULT_MODEL)
         if model not in SUPPORTED_MODELS:
@@ -334,22 +321,11 @@ class ObjectDetectionRecipe(BaseRecipe):
             raise PermissionError("Object Detection needs a tenant context to read images.")
         tenant_id = int(tenant_id)
 
-        # Decide where the image list comes from: picked files, or a connected table.
+        # The images are always the picked files (validate_config made sure there are some).
         files = self._image_files(config)
-        table: Optional[pd.DataFrame] = (inputs or {}).get("dataframe")
-        from_files = bool(files)
-        if from_files:
-            if table is not None:
-                raise ValueError("Use either the connected table or 'Image Files', not both. Clear one of them.")
-            df = pd.DataFrame({FILE_MODE_COLUMN: files})
-            image_col = FILE_MODE_COLUMN
-        else:
-            if table is None:
-                raise ValueError("ObjectDetection needs a connected table or 'image_files'.")
-            df = table
-            image_col = str(config["image_column"]).strip()
-            if image_col not in df.columns:
-                raise ValueError(f"Image column '{image_col}' not found. Available columns: {list(df.columns)}")
+        from_files = True
+        df = pd.DataFrame({FILE_MODE_COLUMN: files})
+        image_col = FILE_MODE_COLUMN
 
         if len(df) > MAX_IMAGES_PER_RUN:
             raise ValueError(
@@ -442,24 +418,24 @@ class ObjectDetectionRecipe(BaseRecipe):
                 label_counts[d["label"]] = label_counts.get(d["label"], 0) + 1
         failed = [r for r in per_image if r["error"]]
 
-        annotated_previews = []
-        for idx, r in enumerate(per_image):
-            orig_val = df[image_col].iloc[idx] if idx < len(df) else None
-            annotated_previews.append({
-                "original_path": str(orig_val) if orig_val is not None else None,
-                "original_preview_url": f"/api/v1/datasets/media/preview?key={orig_val}" if orig_val is not None else None,
-                "annotated_path": r.get("annotated_path"),
-                "annotated_preview_url": f"/api/v1/datasets/media/preview?key={r['annotated_path']}" if r.get("annotated_path") else None,
-                "num_objects": len(r["detections"]),
-                "error": r["error"],
-            })
+        from backend.app.recipes.vision import _common as _c  # imported here: _common imports this module
+
+        annotated_previews = [
+            _c.preview_item(
+                original=df[image_col].iloc[idx] if idx < len(df) else None,
+                media=r.get("annotated_path"),
+                error=r["error"],
+                num_objects=len(r["detections"]),
+            )
+            for idx, r in enumerate(per_image)
+        ]
 
         metrics = {
             "task_type": "object_detection",
             "model": model_name,
-            "input_source": "image_files" if from_files else "table",
-            "images_processed": len(per_image) - len(failed),
-            "images_failed": len(failed),
+            "input_source": "image_files",
+            "items_processed": len(per_image) - len(failed),
+            "items_failed": len(failed),
             "total_detections": int(sum(label_counts.values())),
             "images_with_no_objects": int(sum(1 for r in per_image if not r["error"] and not r["detections"])),
             "detections_per_class": dict(sorted(label_counts.items(), key=lambda kv: kv[1], reverse=True)),
@@ -479,7 +455,7 @@ class ObjectDetectionRecipe(BaseRecipe):
         model = config.get("model", DEFAULT_MODEL)
         conf = config.get("confidence_threshold", 0.25)
         files = self._image_files(config)
-        source = repr(files) if files else f"df[{config.get('image_column', 'image_path')!r}].tolist()"
+        source = repr(files) if files else "[]"
         return (
             "from ultralytics import YOLO\n\n"
             f"model = YOLO({model!r})\n"

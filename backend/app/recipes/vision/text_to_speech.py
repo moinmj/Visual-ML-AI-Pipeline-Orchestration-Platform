@@ -1,12 +1,9 @@
 """
 Text-to-Speech recipe (Modeling -> Computer Vision & Audio).
 
-Turns the text in a column into spoken audio (one WAV file per row), saved into the
-caller's Ozone folder. The output table gets the path and a preview URL of each file
-(columns named annotated_*).
-
-Text comes from the 'text' box (type a message, get one audio file), or from a connected table +
-'text_column' (one audio file per row). The typed text is used only when no table is connected.
+Turns the message typed in the 'text' box into one spoken WAV file, saved into the caller's
+Ozone folder. The one-row output table gets the path and a preview URL of the file
+(columns media_path / media_preview_url). There is no table / column input.
 
 Place this file at:  backend/app/recipes/vision/text_to_speech.py
 Needs:               pip install pyttsx3
@@ -33,7 +30,6 @@ from backend.app.recipes.base.recipe import BaseRecipe
 from backend.app.recipes.vision import _common as c
 
 OUTPUT_FOLDER = "outputs/text_to_speech"
-MAX_ROWS_PER_RUN = 50
 MAX_CHARS_PER_TEXT = 5000
 DEFAULT_RATE = 170  # words per minute
 DEFAULT_VOLUME = 1.0
@@ -115,17 +111,7 @@ class TextToSpeechRecipe(BaseRecipe):
             "properties": {
                 "text": {
                     "type": "textarea", "title": "Text to Speak",
-                    "description": (
-                        f"Type the message here (max {MAX_CHARS_PER_TEXT} characters). "
-                        "Used when no table is connected."
-                    ),
-                },
-                "text_column": {
-                    "type": "string", "title": "Text Column (table input only)", "input_type": "column_select",
-                    "description": (
-                        f"Only when a table is connected: the column holding the text to speak, one audio file "
-                        f"per row (max {MAX_CHARS_PER_TEXT} characters per row). Leave empty when you type the text above."
-                    ),
+                    "description": f"Type the message to turn into speech (max {MAX_CHARS_PER_TEXT} characters).",
                 },
                 "rate": {
                     "type": "integer", "title": "Speaking Speed (words/min)", "input_type": "slider",
@@ -140,7 +126,7 @@ class TextToSpeechRecipe(BaseRecipe):
                     "description": "Picks the first installed voice whose name contains this text, e.g. 'english' or 'zira'. Empty = system default.",
                 },
             },
-            "required": [],
+            "required": ["text"],
         }
 
     def validate_config(self, config: Dict[str, Any]) -> List[str]:
@@ -150,9 +136,8 @@ class TextToSpeechRecipe(BaseRecipe):
             errors.append("text must be text.")
         elif isinstance(text, str) and len(text.strip()) > MAX_CHARS_PER_TEXT:
             errors.append(f"Text is longer than {MAX_CHARS_PER_TEXT} characters.")
-        typed = isinstance(text, str) and bool(text.strip())
-        if not typed and not str(config.get("text_column") or "").strip():
-            errors.append("Type the text to speak ('text'), or connect a table and choose its text column ('text_column').")
+        if not (isinstance(text, str) and text.strip()):
+            errors.append("Type the text to speak ('text').")
         for err in (
             c.validate_range(config, "rate", 80, 300, integer=True),
             c.validate_range(config, "volume", 0.1, 1.0),
@@ -169,29 +154,7 @@ class TextToSpeechRecipe(BaseRecipe):
         if errors:
             raise ValueError("; ".join(errors))
         tenant_id = c.require_tenant(config, self.name, "text")
-        table = (inputs or {}).get("dataframe")
-        if isinstance(table, (list, tuple, dict)):
-            # JSON rows, e.g. {"dataframe": [{"message": "Hi"}]} sent to POST /recipes/{id}/run,
-            # which does not convert the request body into a DataFrame.
-            try:
-                table = pd.DataFrame(list(table) if isinstance(table, tuple) else table)
-            except Exception as e:
-                raise ValueError(f"inputs.dataframe must be a list of row objects like [{{\"text\": \"Hello\"}}] ({str(e)[:80]})")
-        typed = str(config.get("text") or "").strip()
-        col = str(config.get("text_column") or "").strip()
-        if table is None:
-            if not typed:
-                raise ValueError(f"{self.name} needs text: type it in 'Text to Speak', or connect a table with a text column.")
-            table, col = pd.DataFrame({"text": [typed]}), "text"
-        else:
-            if not col:
-                raise ValueError("A table is connected: choose its text column, or disconnect it to speak the typed text.")
-            if col not in table.columns:
-                raise ValueError(f"Text column '{col}' not found. Available columns: {list(table.columns)}")
-        if len(table) > MAX_ROWS_PER_RUN:
-            raise ValueError(
-                f"Too many rows ({len(table)}). The limit is {MAX_ROWS_PER_RUN} per run; add a Limit node before this one."
-            )
+        text = str(config["text"]).strip()
 
         from backend.app.infrastructure.storage.ozone_client import upload_file_to_ozone
 
@@ -200,61 +163,46 @@ class TextToSpeechRecipe(BaseRecipe):
         voice = str(config.get("voice_contains") or "").strip()
         run_tag = f"{datetime.now(timezone.utc):%Y%m%d_%H%M%S}"
 
-        values = table[col].tolist()
-        results: List[Dict[str, Any]] = []
-        for idx, value in enumerate(values):
-            res: Dict[str, Any] = {"path": None, "seconds": None, "chars": 0, "error": None}
-            try:
-                if c.is_empty(value):
-                    raise ValueError("Empty text")
-                text = str(value).strip()
-                res["chars"] = len(text)
-                if len(text) > MAX_CHARS_PER_TEXT:
-                    raise ValueError(f"Text is longer than {MAX_CHARS_PER_TEXT} characters")
-                data = _synthesize(text, rate, volume, voice)
-                res["seconds"] = _wav_seconds(data)
-                res["path"] = upload_file_to_ozone(data, f"{OUTPUT_FOLDER}/{run_tag}/{idx}.wav", tenant_id, "audio/wav")
-            except _FatalTTSError:
-                raise
-            except Exception as e:  # one bad row must not fail the whole run
-                res["error"] = c.safe_error(e)
-            results.append(res)
+        path: Optional[str] = None
+        seconds: Optional[float] = None
+        error: Optional[str] = None
+        try:
+            data = _synthesize(text, rate, volume, voice)
+            seconds = _wav_seconds(data)
+            path = upload_file_to_ozone(data, f"{OUTPUT_FOLDER}/{run_tag}/0.wav", tenant_id, "audio/wav")
+        except _FatalTTSError:
+            raise
+        except Exception as e:  # report it in the result instead of crashing the node
+            error = c.safe_error(e)
 
-        out = table.copy().reset_index(drop=True)
-        out["annotated_path"] = [r["path"] for r in results]
-        out["annotated_preview_url"] = [c.preview_url(r["path"]) for r in results]
-        out["annotated_duration_s"] = [r["seconds"] for r in results]
-        out["char_count"] = [r["chars"] for r in results]
-        out["tts_error"] = [r["error"] for r in results]
-
-        failed = [r for r in results if r["error"]]
-        previews = [
-            {
-                "text_preview": "" if c.is_empty(v) else str(v)[:100],
-                "annotated_path": r["path"],
-                "annotated_preview_url": c.preview_url(r["path"]),
-                "annotated_duration_s": r["seconds"],
-                "error": r["error"],
-            }
-            for v, r in zip(values, results)
-        ]
+        out = pd.DataFrame([{
+            "text": text,
+            "media_path": path,
+            "media_preview_url": c.preview_url(path),
+            "duration_s": seconds,
+            "char_count": len(text),
+            "tts_error": error,
+        }])
         metrics = {
             "task_type": "text_to_speech",
             "engine": "pyttsx3",
             "rate": rate,
             "volume": volume,
-            "rows_processed": len(results) - len(failed),
-            "rows_failed": len(failed),
-            "total_characters": int(sum(r["chars"] for r in results)),
-            "total_annotated_seconds": round(sum(r["seconds"] or 0 for r in results), 3),
-            "errors_sample": [r["error"] for r in failed[:5]],
-            "preview_items": previews,
+            "input_source": "typed_text",
+            "items_processed": 0 if error else 1,
+            "items_failed": 1 if error else 0,
+            "total_characters": len(text),
+            "total_duration_s": round(seconds or 0, 3),
+            "errors_sample": [error] if error else [],
+            "preview_items": [
+                # the generated audio; the input is typed text, so there are no original_* keys
+                c.preview_item(media=path, text=text, error=error, duration_s=seconds)
+            ],
         }
         return {"dataframe": out, "metrics": metrics, "output_summary": metrics, "task_type": "text_to_speech"}
 
     def to_code(self, config: Dict[str, Any]) -> str:
-        typed = str(config.get("text") or "").strip()
-        source = repr(typed) if typed else f"df[{config.get('text_column', 'text')!r}].iloc[0]"
+        source = repr(str(config.get("text") or "").strip())
         return (
             "import pyttsx3\n\n"
             "engine = pyttsx3.init()\n"

@@ -5,8 +5,8 @@ Reads each video, takes every Nth frame, runs a pretrained YOLO detector with a
 tracker (ByteTrack / BoT-SORT) and gives every object an id that stays the same
 across frames. Output: one row per tracked object (default) or per detection.
 
-Videos come from 'video_files' (picked from unstructured/) or a connected table
-+ 'video_column' (same rules and security checks as the image recipes, see _common.py).
+Videos come from 'video_files' (picked from unstructured/; same rules and security checks
+as the image recipes, see _common.py). There is no table / column input.
 
 Place this file at:  backend/app/recipes/vision/video_tracking.py
 Needs:               pip install ultralytics lapx   (opencv comes with easyocr / ultralytics)
@@ -243,7 +243,7 @@ class VideoObjectTrackingRecipe(BaseRecipe):
             raise ValueError("Could not encode preview frame")
         base = str(source_value).rstrip("/").rsplit("/", 1)[-1].rsplit(".", 1)[0] or "video"
         path = upload_file_to_ozone(buf.tobytes(), f"{OUTPUT_FOLDER}/{run_tag}/{vidx}_{base}_f{frame_index}.jpg", tenant_id, "image/jpeg")
-        return {"frame_index": frame_index, "annotated_path": path, "annotated_preview_url": c.preview_url(path)}
+        return {"frame_index": frame_index, "media_path": path, "media_preview_url": c.preview_url(path)}
 
     # ------------------------------------------------------------------ execution
     def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
@@ -303,7 +303,7 @@ class VideoObjectTrackingRecipe(BaseRecipe):
                 "video_preview_url": c.preview_url(src[video_col]),
             }
             if save_preview:
-                base["preview_frame_urls"] = json.dumps([p["annotated_preview_url"] for p in r["previews"]])
+                base["preview_frame_urls"] = json.dumps([p["media_preview_url"] for p in r["previews"]])
             items = r["tracks"] if out_format == "one_row_per_track" else r["detections"]
             if items:
                 rows.extend({**base, **it} for it in items)
@@ -319,22 +319,22 @@ class VideoObjectTrackingRecipe(BaseRecipe):
         previews = []
         for value, r in zip(df[video_col].tolist(), per_video):
             per_class = Counter(t["label"] for t in r["tracks"])
-            previews.append({
-                "original_path": None if c.is_empty(value) else str(value),
-                "original_preview_url": c.preview_url(value),
-                "frames_processed": r["frames_processed"],
-                "num_tracks": len(r["tracks"]),
-                "tracks_per_class": dict(per_class),
-                "preview_frames": r["previews"],
-                "error": r["error"],
-            })
+            previews.append(c.preview_item(
+                original=value,
+                media=r["previews"][0]["media_path"] if r["previews"] else None,  # first annotated frame
+                error=r["error"],
+                frames_processed=r["frames_processed"],
+                num_tracks=len(r["tracks"]),
+                tracks_per_class=dict(per_class),
+                preview_frames=r["previews"],  # every saved frame: {frame_index, media_path, media_preview_url}
+            ))
         metrics = {
             "task_type": "video_object_tracking",
             "model": model_name,
             "tracker": cfg["tracker"],
-            "input_source": "video_files" if from_files else "table",
-            "videos_processed": len(per_video) - len(failed),
-            "videos_failed": len(failed),
+            "input_source": "video_files",
+            "items_processed": len(per_video) - len(failed),
+            "items_failed": len(failed),
             "frames_processed": int(sum(r["frames_processed"] for r in per_video)),
             "total_tracks": int(sum(label_tracks.values())),
             "tracks_per_class": dict(sorted(label_tracks.items(), key=lambda kv: kv[1], reverse=True)),
@@ -346,7 +346,7 @@ class VideoObjectTrackingRecipe(BaseRecipe):
 
     def to_code(self, config: Dict[str, Any]) -> str:
         files = c.image_files(config, "video")
-        source = repr(files[0]) if files else f"df[{config.get('video_column', 'video_path')!r}].iloc[0]"
+        source = repr(files[0]) if files else "'unstructured/<video>'"
         return (
             "from ultralytics import YOLO\n\n"
             f"model = YOLO({config.get('model', DEFAULT_MODEL)!r})\n"

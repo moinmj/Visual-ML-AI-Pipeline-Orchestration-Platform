@@ -4,8 +4,8 @@ OCR recipe (Modeling -> Computer Vision & Audio).
 Reads printed or handwritten text from images with EasyOCR and returns the
 text, a confidence per text block and the box of each block.
 
-Images come from 'image_files' or a connected table + 'image_column'
-(same rules and security checks as object_detection, see _common.py).
+Images come from 'image_files' (picked from unstructured/; same rules and security
+checks as object_detection, see _common.py). There is no table / column input.
 
 Place this file at:  backend/app/recipes/vision/ocr.py
 Needs:               pip install easyocr pillow numpy   (torch is already installed for ultralytics)
@@ -227,23 +227,20 @@ class OCRRecipe(BaseRecipe):
         all_conf = [b["confidence"] for r in per_image for b in r["blocks"]]
         previews = []
         for value, r in zip(df[image_col].tolist(), per_image):
-            text = "\n".join(b["text"] for b in r["blocks"])
-            previews.append({
-                "original_path": None if c.is_empty(value) else str(value),
-                "original_preview_url": c.preview_url(value),
-                "annotated_path": r.get("annotated_path"),
-                "annotated_preview_url": c.preview_url(r.get("annotated_path")),
-                "num_text_blocks": len(r["blocks"]),
-                "text_preview": text[:200],
-                "error": r["error"],
-            })
+            previews.append(c.preview_item(
+                original=value,
+                media=r.get("annotated_path"),
+                text="\n".join(b["text"] for b in r["blocks"]),
+                error=r["error"],
+                num_text_blocks=len(r["blocks"]),
+            ))
 
         metrics = {
             "task_type": "ocr",
             "languages": langs,
-            "input_source": "image_files" if from_files else "table",
-            "images_processed": len(per_image) - len(failed),
-            "images_failed": len(failed),
+            "input_source": "image_files",
+            "items_processed": len(per_image) - len(failed),
+            "items_failed": len(failed),
             "total_text_blocks": len(all_conf),
             "images_with_no_text": int(sum(1 for r in per_image if not r["error"] and not r["blocks"])),
             "avg_confidence": round(sum(all_conf) / len(all_conf), 4) if all_conf else None,
@@ -256,7 +253,7 @@ class OCRRecipe(BaseRecipe):
     def to_code(self, config: Dict[str, Any]) -> str:
         langs = _parse_languages(config.get("languages"))
         files = c.image_files(config)
-        source = repr(files) if files else f"df[{config.get('image_column', 'image_path')!r}].tolist()"
+        source = repr(files) if files else "[]"
         return (
             "import easyocr\n\n"
             f"reader = easyocr.Reader({langs!r})\n"

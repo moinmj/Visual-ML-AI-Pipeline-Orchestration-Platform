@@ -2,8 +2,8 @@
 Shared helpers for the media recipes (image_classifier, ocr, image_embedding_generator,
 video_object_tracking).
 
-Source rules are identical to object_detection: either '<kind>_files' (picked from
-unstructured/) or a connected table + '<kind>_column'. kind is "image" (default) or "video".
+The input is always '<kind>_files': files picked from the user's uploaded unstructured/ files.
+There is no table / column input. kind is "image" (default), "video" or "audio".
 All path, tenant, extension and size checks reuse object_detection's helpers, so they
 stay in ONE place.
 
@@ -37,8 +37,9 @@ def image_files(config: Dict[str, Any], kind: str = "image") -> List[str]:
 
 
 def source_schema(kind: str = "image") -> Dict[str, Any]:
-    """The two 'where are my files' properties."""
+    """The 'where are my files' property: files picked from unstructured/."""
     limit = max_per_run(kind)
+    noun = {"audio": "audio files"}.get(kind, f"{kind}s")
     return {
         f"{kind}_files": {
             "type": "array",
@@ -47,16 +48,7 @@ def source_schema(kind: str = "image") -> Dict[str, Any]:
             "input_type": "file_select",
             "file_kind": kind,
             "maxItems": limit,
-            "description": (
-                f"Pick {kind}s from your uploaded files (unstructured/). "
-                f"Max {limit} per run. Leave empty to use a connected table instead."
-            ),
-        },
-        f"{kind}_column": {
-            "type": "string",
-            "title": f"{kind.title()} Column",
-            "input_type": "column_select",
-            "description": f"Only when a table is connected: the column holding the Ozone path of each {kind} (s3://... or a path inside your folder).",
+            "description": f"Pick {noun} from your uploaded files (unstructured/). Max {limit} per run.",
         },
     }
 
@@ -70,8 +62,8 @@ def validate_source(config: Dict[str, Any], kind: str = "image") -> List[str]:
     files = image_files(config, kind)
     if len(files) > limit:
         errors.append(f"Too many {kind} files ({len(files)}). The limit is {limit} per run.")
-    if not files and not str(config.get(f"{kind}_column") or "").strip():
-        errors.append(f"Choose {kind} files ('{kind}_files') or set the {kind} column ('{kind}_column') of a connected table.")
+    if not files:
+        errors.append(f"Choose {kind} files ('{kind}_files') from your uploaded files.")
     return errors
 
 
@@ -96,28 +88,19 @@ def require_tenant(config: Dict[str, Any], recipe_name: str, what: str = "images
 
 
 def resolve_source(inputs: Dict[str, Any], config: Dict[str, Any], recipe_name: str, kind: str = "image") -> Tuple[pd.DataFrame, str, bool]:
-    """Returns (dataframe, path_column, from_files)."""
+    """
+    Returns (dataframe, path_column, from_files) for the picked '<kind>_files'.
+    The input is always the picked files (from_files is always True); a connected table is ignored.
+    'inputs' is kept so every recipe calls this the same way.
+    """
     files = image_files(config, kind)
-    table: Optional[pd.DataFrame] = (inputs or {}).get("dataframe")
+    if not files:
+        raise ValueError(f"{recipe_name} needs {kind} files ('{kind}_files') picked from your uploaded files.")
     limit = max_per_run(kind)
-    if files:
-        if table is not None:
-            raise ValueError(f"Use either the connected table or '{kind.title()} Files', not both. Clear one of them.")
-        col = f"{kind}_path"
-        df, from_files = pd.DataFrame({col: files}), True
-    else:
-        if table is None:
-            raise ValueError(f"{recipe_name} needs a connected table or '{kind}_files'.")
-        col = str(config[f"{kind}_column"]).strip()
-        if col not in table.columns:
-            raise ValueError(f"{kind.title()} column '{col}' not found. Available columns: {list(table.columns)}")
-        df, from_files = table, False
-    if len(df) > limit:
-        raise ValueError(
-            f"Too many {kind}s ({len(df)}). The limit is {limit} per run; "
-            "add a Limit node before this one."
-        )
-    return df, col, from_files
+    if len(files) > limit:
+        raise ValueError(f"Too many {kind} files ({len(files)}). The limit is {limit} per run.")
+    col = f"{kind}_path"
+    return pd.DataFrame({col: files}), col, True
 
 
 def is_empty(value: Any) -> bool:
@@ -158,6 +141,34 @@ def read_media_bytes(value: Any, tenant_id: int, from_files: bool, kind: str) ->
 
 def preview_url(key: Any) -> Optional[str]:
     return None if is_empty(key) else f"/api/v1/datasets/media/preview?key={key}"
+
+
+def preview_item(original: Any = None, media: Any = None, text: Any = None, error: Optional[str] = None, **extra: Any) -> Dict[str, Any]:
+    """
+    THE preview contract. Every media recipe (image / video / audio / text) builds its
+    metrics["preview_items"] entries with this function, so the frontend reads the same keys everywhere
+    and picks the viewer (image / video / audio / text) from the file extension of the path:
+
+      original_path / original_preview_url   the input file          (left out when the input is plain text)
+      media_path    / media_preview_url      the main output file    (annotated image, generated audio, a frame...;
+                                                                      left out when the recipe made no file)
+      text                                    text to show           (transcript, OCR text, label, input text...; None if none)
+      error                                   error message or None
+
+    A file pair is only in the dict when there is such a file, so the frontend never sees
+    "media_path": null. Recipe specific values (num_objects, predicted_label, segments, ...) go in **extra.
+    """
+    item: Dict[str, Any] = {}
+    if not is_empty(original):
+        item["original_path"] = str(original)
+        item["original_preview_url"] = preview_url(original)
+    if not is_empty(media):
+        item["media_path"] = str(media)
+        item["media_preview_url"] = preview_url(media)
+    item["text"] = None if text is None else str(text)
+    item["error"] = error
+    item.update(extra)
+    return item
 
 
 def safe_error(exc: Exception) -> str:
