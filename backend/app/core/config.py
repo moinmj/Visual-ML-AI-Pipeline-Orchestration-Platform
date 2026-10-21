@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     #   UM_DATABASE_URL    : async DSN to user_management_db (URL-encode the pw).
     #   SESSION_SECRET_KEY : MUST equal UM's SECRET_KEY (used for the CSRF HMAC).
     UM_DATABASE_URL: Optional[str] = None
-    SESSION_SECRET_KEY: str = "CHANGE_ME_SAME_AS_UM_SECRET_KEY"
+    SESSION_SECRET_KEY: str = "Z73MyQ5WFZNjAQYkIGqjxBR55xAMv7r/v/qv/dMhl121zVQYbC3Y3Hhx"
     SESSION_IDLE_MINUTES: int = 30
     SESSION_CSRF_ENABLED: bool = True
  
