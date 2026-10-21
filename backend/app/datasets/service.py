@@ -147,6 +147,9 @@ class DatasetService:
         folder: str = "all",
         media_type: Optional[str] = None,
         prefix: str = "",
+        include_folders: bool = False,
+        limit: int = 1000,
+        meta: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Lists objects in the caller's tenant space in Ozone, formatted identically
@@ -162,6 +165,9 @@ class DatasetService:
                 scope=scope,
                 folder=folder,
                 media_type=media_type,
+                max_keys=limit,
+                include_folders=include_folders,
+                meta=meta,
             )
         except ValueError as e:
             raise ValidationException(str(e))
@@ -172,8 +178,9 @@ class DatasetService:
             key = obj["key"]
             file_name = obj["file_name"]
             ext = obj["file_format"]
-            stem = file_name.rsplit(".", 1)[0] if "." in file_name else file_name
             m_type = obj.get("media_type")
+            is_folder = m_type == "folder"
+            stem = file_name if is_folder or "." not in file_name else file_name.rsplit(".", 1)[0]
 
             preview_url = None
             if m_type == "image":
@@ -192,7 +199,7 @@ class DatasetService:
             results.append({
                 "id": key,
                 "name": stem,
-                "description": f"Ozone object [{folder_label}]",
+                "description": f"Ozone {'folder' if is_folder else 'object'} [{folder_label}]",
                 "file_name": file_name,
                 "file_format": ext,
                 "file_size_bytes": obj.get("size_bytes", 0),

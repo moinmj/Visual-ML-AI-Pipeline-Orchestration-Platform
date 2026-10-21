@@ -51,7 +51,7 @@ from backend.app.engine.inference import (
     CombinedDatasetRequest,
     CombinedDatasetResponse
 )
-from backend.app.core.security import get_current_user, require_role, require_permission, require_export_access, _decode_token, TokenData
+from backend.app.core.security import get_current_user, require_role, require_permission, require_export_access, resolve_session, TokenData
 from backend.app.core.tenant_context import get_current_tenant_id, tenant_cache_dir, set_current_tenant_id
 
 from backend.app.datasets.models import Dataset
@@ -2278,9 +2278,12 @@ async def execute_workflow_ws(websocket: WebSocket):
         if not isinstance(msg, dict) or msg.get("type") != "start":
             return await _fail(400, "The first message must be {\"type\": \"start\", ...}.", 4400)
 
-        # 2) same checks as the HTTP endpoint: valid token, allowed role, caller's tenant
+        # 2) same checks as the HTTP endpoint: live session, allowed role, caller's tenant.
+        #    The browser sends the HttpOnly `sid` cookie on the WS handshake; fall back to
+        #    an explicit sid in the start frame (service clients / non-browser callers).
+        sid = websocket.cookies.get("sid") or str(msg.get("token") or "").removeprefix("Bearer ").strip()
         try:
-            user = _decode_token(str(msg.get("token") or "").removeprefix("Bearer ").strip())
+            user = await resolve_session(sid)
         except HTTPException as e:
             return await _fail(e.status_code, str(e.detail), 4401)
         if not user.has_role(*_WS_ALLOWED_ROLES):

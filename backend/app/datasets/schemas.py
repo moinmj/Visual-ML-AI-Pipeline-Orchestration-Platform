@@ -33,7 +33,7 @@ class DatasetResponse(DatasetBase):
 
 
 class OzoneObjectResponse(DatasetResponse):
-    media_type: Optional[str] = Field(None, description="Inferred media category: image, audio, video, tabular, other")
+    media_type: Optional[str] = Field(None, description="Inferred media category: image, audio, video, tabular, other, folder")
     preview_url: Optional[str] = Field(None, description="Direct URL to preview/stream image or media file")
     key: Optional[str] = Field(None, description="Full Ozone key")
     relative_path: Optional[str] = Field(None, description="Path relative to tenant root or ml-workflow root")
@@ -63,3 +63,4 @@ class DatasetProfileResponse(BaseModel):
     id: str
     name: str
     profile: Dict[str, Any]
+    

@@ -131,16 +131,19 @@ async def preview_media_file(
     """
     from backend.app.core.config import settings
     from backend.app.core import media_types as mt
-    from backend.app.core.security import _decode_token
+    from backend.app.core.security import resolve_session
     from backend.app.infrastructure.storage.ozone_client import (
         is_in_tenant_prefix, with_prefix, get_file_bytes_from_ozone
     )
 
+    # The browser sends the HttpOnly `sid` cookie automatically on a same-site
+    # <img> request. Fall back to an explicit sid via Authorization: Bearer <sid>
+    # or ?token=<sid> for non-browser callers.
     auth_header = request.headers.get("Authorization")
-    raw_token = None
-    if auth_header and auth_header.startswith("Bearer "):
+    raw_token = request.cookies.get("sid")
+    if not raw_token and auth_header and auth_header.startswith("Bearer "):
         raw_token = auth_header.split(" ", 1)[1].strip()
-    elif token:
+    elif not raw_token and token:
         raw_token = token.strip()
 
     if not raw_token:
@@ -151,7 +154,9 @@ async def preview_media_file(
         )
 
     try:
-        user = _decode_token(raw_token)
+        user = await resolve_session(raw_token)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
