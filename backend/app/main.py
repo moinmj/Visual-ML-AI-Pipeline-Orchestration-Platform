@@ -77,7 +77,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
     # Lets the browser read paging totals (e.g. GET /datasets/?search=...&limit=20).
-    expose_headers=["X-Total-Count"],
+    expose_headers=["X-Total-Count", "X-Truncated"],
 )
 
 

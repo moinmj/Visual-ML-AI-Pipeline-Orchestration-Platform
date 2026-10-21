@@ -175,6 +175,20 @@ def delete_file_from_ozone(ozone_key: str, tenant_id: Optional[int] = None) -> b
         return False
 
 
+MAX_SCANNED_KEYS = 50000  # safety net: one browse call never walks more keys than this
+
+
+def _parent_folders(key: str, base_prefix: str) -> list:
+    """
+    The folders a key sits in, below base_prefix (the tenant folder itself is not returned).
+    'ml-workflow/t1/outputs/ocr/x.jpg' with base 'ml-workflow/t1/' -> ['ml-workflow/t1/outputs/', 'ml-workflow/t1/outputs/ocr/']
+    A placeholder key that ends with '/' is itself a folder.
+    """
+    rel = key[len(base_prefix):] if key.startswith(base_prefix) else ""
+    parts = [p for p in (rel.rstrip("/").split("/") if key.endswith("/") else rel.split("/")[:-1]) if p]
+    return [base_prefix + "/".join(parts[:i]) + "/" for i in range(1, len(parts) + 1)]
+
+
 def list_ozone_objects(
     tenant_id: int,
     prefix: str = "",
@@ -182,71 +196,101 @@ def list_ozone_objects(
     folder: str = "all",
     media_type: Optional[str] = None,
     max_keys: int = 1000,
+    include_folders: bool = False,
+    meta: Optional[dict] = None,
 ):
     """
     Lists objects inside the caller's tenant space in Ozone.
-    - scope="all_tenant_data": lists under 't<tenant_id>/' (entire tenant space).
+    - scope="all_tenant_data": the WHOLE tenant space = the platform folder 'ml-workflow/t<tenant_id>/'
+      (datasets, unstructured, outputs ...) PLUS the bucket-level folder 't<tenant_id>/'. 'relative_path' is the full key.
     - scope="ml_workflow": lists under 'ml-workflow/t<tenant_id>/', with optional
       folder='datasets' (structured data) or folder='unstructured' (unstructured media).
-    - media_type: optional filter by 'image', 'audio', 'video', 'tabular', or 'all'.
+    - media_type: optional filter by 'image', 'audio', 'video', 'tabular', 'other', 'folder' or 'all'.
+    - include_folders: also return the folders (media_type='folder'), including empty ones.
+    - max_keys: the most files returned. meta['truncated'] is set to True when there were more.
+    Other tenants and the rest of the bucket are never listed (the prefixes end with '/').
     """
     from backend.app.core import media_types as mt
 
     bucket = settings.OZONE_BUCKET
     clean_prefix = (prefix or "").strip().lstrip("/")
+    wanted = (media_type or "").lower().strip()
+    want_files = wanted != "folder"
+    want_folders = wanted == "folder" or (include_folders and wanted in ("", "all"))
 
     if scope == "all_tenant_data":
-        base_prefix = tenant_root_prefix(tenant_id)
-        full_prefix = f"{base_prefix}{clean_prefix}"
+        roots = list(dict.fromkeys([tenant_ml_workflow_prefix(tenant_id), tenant_root_prefix(tenant_id)]))
+        scans = [(root, f"{root}{clean_prefix}") for root in roots]
     else:
         base_prefix = tenant_ml_workflow_prefix(tenant_id)
-        if folder == "datasets":
-            folder_part = "datasets/"
-        elif folder == "unstructured":
-            folder_part = "unstructured/"
-        else:
-            folder_part = ""
-        full_prefix = f"{base_prefix}{folder_part}{clean_prefix}"
+        folder_part = {"datasets": "datasets/", "unstructured": "unstructured/"}.get(folder, "")
+        scans = [(base_prefix, f"{base_prefix}{folder_part}{clean_prefix}")]
 
     s3 = get_s3_client()
-    items = []
-    continuation_token = None
-    while True:
-        kwargs = {"Bucket": bucket, "Prefix": full_prefix, "MaxKeys": min(max_keys - len(items), 1000)}
-        if continuation_token:
-            kwargs["ContinuationToken"] = continuation_token
-        response = s3.list_objects_v2(**kwargs)
-        for obj in response.get("Contents", []):
-            key = obj["Key"]
-            if key.endswith("/"):
-                continue  # skip 'folder' placeholder objects
+    items, folders = [], {}
+    scanned, truncated = 0, False
+    for base_prefix, full_prefix in scans:
+        token = None
+        while not truncated:
+            kwargs = {"Bucket": bucket, "Prefix": full_prefix, "MaxKeys": 1000}
+            if token:
+                kwargs["ContinuationToken"] = token
+            response = s3.list_objects_v2(**kwargs)
+            for obj in response.get("Contents", []):
+                key = obj["Key"]
+                scanned += 1
+                if want_folders:
+                    for f in _parent_folders(key, base_prefix):
+                        if f.startswith(full_prefix):
+                            folders.setdefault(f, base_prefix)
+                if key.endswith("/") or not want_files:
+                    continue  # 'folder' placeholder objects are folders, not files
 
-            ext = mt.extension_of(key)
-            kind = mt.kind_for_extension(ext)
-            if ext in ("csv", "tsv", "xlsx", "xls", "json", "parquet"):
-                detected_kind = "tabular"
-            elif kind:
-                detected_kind = kind
-            else:
-                detected_kind = "other"
+                ext = mt.extension_of(key)
+                kind = mt.kind_for_extension(ext)
+                if ext in ("csv", "tsv", "xlsx", "xls", "json", "parquet"):
+                    detected_kind = "tabular"
+                elif kind:
+                    detected_kind = kind
+                else:
+                    detected_kind = "other"
 
-            if media_type:
-                m_lower = media_type.lower().strip()
-                if m_lower not in ("", "all") and detected_kind != m_lower:
+                if wanted not in ("", "all") and detected_kind != wanted:
                     continue
 
-            rel_path = key[len(base_prefix):] if key.startswith(base_prefix) else key
-            file_name = key.rsplit("/", 1)[-1]
-            items.append({
-                "key": key,
-                "relative_path": rel_path,
-                "file_name": file_name,
-                "file_format": ext or "unknown",
-                "size_bytes": obj["Size"],
-                "media_type": detected_kind,
-                "last_modified": obj["LastModified"].isoformat() if obj.get("LastModified") else None,
-            })
-        if not response.get("IsTruncated") or len(items) >= max_keys:
+                if len(items) >= max_keys:
+                    truncated = True  # a matching file exists beyond the limit
+                    break
+                items.append({
+                    "key": key,
+                    "relative_path": key if scope == "all_tenant_data" else key[len(base_prefix):],
+                    "file_name": key.rsplit("/", 1)[-1],
+                    "file_format": ext or "unknown",
+                    "size_bytes": obj["Size"],
+                    "media_type": detected_kind,
+                    "last_modified": obj["LastModified"].isoformat() if obj.get("LastModified") else None,
+                })
+            if truncated:
+                break
+            if scanned >= MAX_SCANNED_KEYS:
+                truncated = True
+                break
+            if not response.get("IsTruncated"):
+                break
+            token = response.get("NextContinuationToken")
+        if truncated:
             break
-        continuation_token = response.get("NextContinuationToken")
-    return items
+
+    if meta is not None:
+        meta["truncated"] = truncated
+
+    folder_items = [{
+        "key": fkey,
+        "relative_path": fkey if scope == "all_tenant_data" else fkey[len(folders[fkey]):],
+        "file_name": fkey.rstrip("/").rsplit("/", 1)[-1],
+        "file_format": "folder",
+        "size_bytes": 0,
+        "media_type": "folder",
+        "last_modified": None,
+    } for fkey in sorted(folders)]
+    return folder_items + items

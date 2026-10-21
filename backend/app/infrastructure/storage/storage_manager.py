@@ -192,6 +192,8 @@ class StorageManager:
         folder: str = "all",
         media_type: Optional[str] = None,
         max_keys: int = 1000,
+        include_folders: bool = False,
+        meta: Optional[dict] = None,
     ):
         """
         Lists objects in the caller's tenant space in Ozone.
@@ -205,6 +207,8 @@ class StorageManager:
             folder=folder,
             media_type=media_type,
             max_keys=max_keys,
+            include_folders=include_folders,
+            meta=meta,
         )
 
 
