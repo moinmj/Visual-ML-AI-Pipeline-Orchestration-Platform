@@ -57,6 +57,17 @@ _DB_TOUCH_INTERVAL = timedelta(seconds=60)
 _um_sessionmaker: Optional[async_sessionmaker] = None
 
 
+def _to_async_url(url: str) -> str:
+    """Force the asyncpg driver — create_async_engine cannot use psycopg2."""
+    if url.startswith("postgresql+psycopg2://"):
+        return url.replace("postgresql+psycopg2://", "postgresql+asyncpg://", 1)
+    if url.startswith("postgresql://"):
+        return url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    if url.startswith("postgres://"):
+        return url.replace("postgres://", "postgresql+asyncpg://", 1)
+    return url
+
+
 def _um_sm() -> async_sessionmaker:
     global _um_sessionmaker
     if _um_sessionmaker is None:
@@ -66,7 +77,8 @@ def _um_sm() -> async_sessionmaker:
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="UM_DATABASE_URL is not configured.",
             )
-        engine = create_async_engine(url, pool_pre_ping=True, pool_size=5, max_overflow=5)
+        engine = create_async_engine(_to_async_url(url), pool_pre_ping=True,
+                                     pool_size=5, max_overflow=5)
         _um_sessionmaker = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
     return _um_sessionmaker
 
