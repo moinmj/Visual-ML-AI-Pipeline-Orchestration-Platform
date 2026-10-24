@@ -127,6 +127,15 @@ from backend.app.recipes.vision.video_tracking import VideoObjectTrackingRecipe
 from backend.app.recipes.vision.speech_to_text import SpeechToTextRecipe
 from backend.app.recipes.vision.text_to_speech import TextToSpeechRecipe
 
+# Agents & LLM Orchestration recipes
+from backend.app.recipes.agents.prompt_template_manager import PromptTemplateManagerRecipe
+from backend.app.recipes.agents.conversation_memory import ConversationMemoryRecipe
+from backend.app.recipes.agents.structured_output_enforcer import StructuredOutputEnforcerRecipe
+from backend.app.recipes.agents.embedding_generator import EmbeddingGeneratorRecipe
+from backend.app.recipes.agents.vector_db_indexer import VectorDbIndexerRecipe
+from backend.app.recipes.agents.rag_pipeline import RagPipelineRecipe
+
+
 def register_all_recipes():
     recipe_registry.register(CSVLoaderRecipe())
     recipe_registry.register(ExportWriterRecipe())
@@ -251,6 +260,15 @@ def register_all_recipes():
     recipe_registry.register(VideoObjectTrackingRecipe())
     recipe_registry.register(SpeechToTextRecipe())
     recipe_registry.register(TextToSpeechRecipe())
+
+    # Agents & LLM Orchestration
+    recipe_registry.register(PromptTemplateManagerRecipe())
+    recipe_registry.register(ConversationMemoryRecipe())
+    recipe_registry.register(StructuredOutputEnforcerRecipe())
+    recipe_registry.register(EmbeddingGeneratorRecipe())
+    recipe_registry.register(VectorDbIndexerRecipe())
+    recipe_registry.register(RagPipelineRecipe())
+
 
 
 # Automatically register upon module load

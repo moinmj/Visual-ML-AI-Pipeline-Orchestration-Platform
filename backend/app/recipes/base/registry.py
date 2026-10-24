@@ -104,7 +104,16 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "rollback_trigger": ("Evaluation & Governance", "Deployment & Monitoring"),
     "cost_latency_monitor": ("Evaluation & Governance", "Deployment & Monitoring"),
     "cost_attribution_report": ("Evaluation & Governance", "Deployment & Monitoring"),
+
+    # Agents & LLM Orchestration
+    "prompt_template_manager": ("Agents & LLM Orchestration", "Prompt & Memory Management"),
+    "conversation_memory": ("Agents & LLM Orchestration", "Prompt & Memory Management"),
+    "structured_output_enforcer": ("Agents & LLM Orchestration", "Prompt & Memory Management"),
+    "embedding_generator": ("Agents & LLM Orchestration", "RAG & Retrieval"),
+    "vector_db_indexer": ("Agents & LLM Orchestration", "RAG & Retrieval"),
+    "rag_pipeline": ("Agents & LLM Orchestration", "RAG & Retrieval"),
 }
+
 
 
 class RecipeRegistry:
@@ -161,7 +170,14 @@ class RecipeRegistry:
             "x": "twitter_connector",
             "reddit": "reddit_connector",
             "linkedin": "linkedin_connector",
+            "embeddings": "embedding_generator",
+            "vector_embedder": "embedding_generator",
+            "vector_search": "vector_db_indexer",
+            "vector_index": "vector_db_indexer",
+            "rag": "rag_pipeline",
+            "retrieval_pipeline": "rag_pipeline",
         }
+
 
     def register(self, recipe: BaseRecipe):
         self._recipes[recipe.recipe_id] = recipe
