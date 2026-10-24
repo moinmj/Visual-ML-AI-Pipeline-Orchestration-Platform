@@ -7,6 +7,10 @@ from backend.app.recipes.agents.structured_output_enforcer import StructuredOutp
 from backend.app.recipes.agents.embedding_generator import EmbeddingGeneratorRecipe
 from backend.app.recipes.agents.vector_db_indexer import VectorDbIndexerRecipe
 from backend.app.recipes.agents.rag_pipeline import RagPipelineRecipe
+from backend.app.recipes.agents.agent_guardrail import AgentGuardrailRecipe
+from backend.app.recipes.agents.cost_aware_model_router import CostAwareModelRouterRecipe
+from backend.app.recipes.agents.llm_evaluation import LlmEvaluationRecipe
+from backend.app.recipes.agents.fine_tuning_trigger import FineTuningTriggerRecipe
 
 __all__ = [
     "PromptTemplateManagerRecipe",
@@ -15,4 +19,8 @@ __all__ = [
     "EmbeddingGeneratorRecipe",
     "VectorDbIndexerRecipe",
     "RagPipelineRecipe",
+    "AgentGuardrailRecipe",
+    "CostAwareModelRouterRecipe",
+    "LlmEvaluationRecipe",
+    "FineTuningTriggerRecipe",
 ]

@@ -112,7 +112,12 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "embedding_generator": ("Agents & LLM Orchestration", "RAG & Retrieval"),
     "vector_db_indexer": ("Agents & LLM Orchestration", "RAG & Retrieval"),
     "rag_pipeline": ("Agents & LLM Orchestration", "RAG & Retrieval"),
+    "agent_guardrail": ("Agents & LLM Orchestration", "Governance & Ops"),
+    "cost_aware_model_router": ("Agents & LLM Orchestration", "Governance & Ops"),
+    "llm_evaluation": ("Agents & LLM Orchestration", "Governance & Ops"),
+    "fine_tuning_trigger": ("Agents & LLM Orchestration", "Governance & Ops"),
 }
+
 
 
 
@@ -176,7 +181,15 @@ class RecipeRegistry:
             "vector_index": "vector_db_indexer",
             "rag": "rag_pipeline",
             "retrieval_pipeline": "rag_pipeline",
+            "guardrail": "agent_guardrail",
+            "moderation": "agent_guardrail",
+            "model_router": "cost_aware_model_router",
+            "llm_eval": "llm_evaluation",
+            "groundedness_scorer": "llm_evaluation",
+            "fine_tuning": "fine_tuning_trigger",
+            "fine_tune": "fine_tuning_trigger",
         }
+
 
 
     def register(self, recipe: BaseRecipe):

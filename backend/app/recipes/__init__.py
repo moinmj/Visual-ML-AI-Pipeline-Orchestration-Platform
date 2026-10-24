@@ -134,6 +134,11 @@ from backend.app.recipes.agents.structured_output_enforcer import StructuredOutp
 from backend.app.recipes.agents.embedding_generator import EmbeddingGeneratorRecipe
 from backend.app.recipes.agents.vector_db_indexer import VectorDbIndexerRecipe
 from backend.app.recipes.agents.rag_pipeline import RagPipelineRecipe
+from backend.app.recipes.agents.agent_guardrail import AgentGuardrailRecipe
+from backend.app.recipes.agents.cost_aware_model_router import CostAwareModelRouterRecipe
+from backend.app.recipes.agents.llm_evaluation import LlmEvaluationRecipe
+from backend.app.recipes.agents.fine_tuning_trigger import FineTuningTriggerRecipe
+
 
 
 def register_all_recipes():
@@ -268,6 +273,11 @@ def register_all_recipes():
     recipe_registry.register(EmbeddingGeneratorRecipe())
     recipe_registry.register(VectorDbIndexerRecipe())
     recipe_registry.register(RagPipelineRecipe())
+    recipe_registry.register(AgentGuardrailRecipe())
+    recipe_registry.register(CostAwareModelRouterRecipe())
+    recipe_registry.register(LlmEvaluationRecipe())
+    recipe_registry.register(FineTuningTriggerRecipe())
+
 
 
 
