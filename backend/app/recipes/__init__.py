@@ -138,6 +138,14 @@ from backend.app.recipes.agents.agent_guardrail import AgentGuardrailRecipe
 from backend.app.recipes.agents.cost_aware_model_router import CostAwareModelRouterRecipe
 from backend.app.recipes.agents.llm_evaluation import LlmEvaluationRecipe
 from backend.app.recipes.agents.fine_tuning_trigger import FineTuningTriggerRecipe
+from backend.app.recipes.agents.llm_agent import LlmAgentRecipe
+from backend.app.recipes.agents.multi_agent_orchestrator import MultiAgentOrchestratorRecipe
+from backend.app.recipes.agents.agent_handoff_router import AgentHandoffRouterRecipe
+from backend.app.recipes.agents.web_browsing_agent import WebBrowsingAgentRecipe
+from backend.app.recipes.agents.document_qa_agent import DocumentQaAgentRecipe
+from backend.app.recipes.agents.multimodal_agent import MultimodalAgentRecipe
+from backend.app.recipes.agents.code_execution_sandbox import CodeExecutionSandboxRecipe
+from backend.app.recipes.agents.chatbot_endpoint import ChatbotEndpointRecipe
 
 
 
@@ -277,6 +285,14 @@ def register_all_recipes():
     recipe_registry.register(CostAwareModelRouterRecipe())
     recipe_registry.register(LlmEvaluationRecipe())
     recipe_registry.register(FineTuningTriggerRecipe())
+    recipe_registry.register(LlmAgentRecipe())
+    recipe_registry.register(MultiAgentOrchestratorRecipe())
+    recipe_registry.register(AgentHandoffRouterRecipe())
+    recipe_registry.register(WebBrowsingAgentRecipe())
+    recipe_registry.register(DocumentQaAgentRecipe())
+    recipe_registry.register(MultimodalAgentRecipe())
+    recipe_registry.register(CodeExecutionSandboxRecipe())
+    recipe_registry.register(ChatbotEndpointRecipe())
 
 
 

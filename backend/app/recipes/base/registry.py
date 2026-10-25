@@ -116,6 +116,14 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "cost_aware_model_router": ("Agents & LLM Orchestration", "Governance & Ops"),
     "llm_evaluation": ("Agents & LLM Orchestration", "Governance & Ops"),
     "fine_tuning_trigger": ("Agents & LLM Orchestration", "Governance & Ops"),
+    "llm_agent": ("Agents & LLM Orchestration", "Core Agents"),
+    "multi_agent_orchestrator": ("Agents & LLM Orchestration", "Core Agents"),
+    "agent_handoff_router": ("Agents & LLM Orchestration", "Core Agents"),
+    "web_browsing_agent": ("Agents & LLM Orchestration", "Core Agents"),
+    "document_qa_agent": ("Agents & LLM Orchestration", "Core Agents"),
+    "multimodal_agent": ("Agents & LLM Orchestration", "Core Agents"),
+    "code_execution_sandbox": ("Agents & LLM Orchestration", "Core Agents"),
+    "chatbot_endpoint": ("Agents & LLM Orchestration", "Core Agents"),
 }
 
 
@@ -188,6 +196,19 @@ class RecipeRegistry:
             "groundedness_scorer": "llm_evaluation",
             "fine_tuning": "fine_tuning_trigger",
             "fine_tune": "fine_tuning_trigger",
+            "agent": "llm_agent",
+            "react_agent": "llm_agent",
+            "orchestrator": "multi_agent_orchestrator",
+            "multi_agent": "multi_agent_orchestrator",
+            "handoff_router": "agent_handoff_router",
+            "agent_handoff": "agent_handoff_router",
+            "web_agent": "web_browsing_agent",
+            "web_browse": "web_browsing_agent",
+            "doc_qa": "document_qa_agent",
+            "multimodal": "multimodal_agent",
+            "code_sandbox": "code_execution_sandbox",
+            "python_sandbox": "code_execution_sandbox",
+            "chatbot": "chatbot_endpoint",
         }
 
 
