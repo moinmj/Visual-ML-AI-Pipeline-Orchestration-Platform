@@ -1,6 +1,6 @@
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score, confusion_matrix, roc_auc_score,
-    classification_report, log_loss, balanced_accuracy_score,
+    classification_report, log_loss, balanced_accuracy_score, brier_score_loss,
     mean_absolute_error, mean_squared_error, r2_score, mean_absolute_percentage_error
 )
 import numpy as np
@@ -69,6 +69,21 @@ class ModelEvaluatorRecipe(BaseRecipe):
                     "default": 0.0,
                     "minimum": 0.0,
                     "description": "Financial cost of a missed positive (e.g. unprevented fraud loss or customer churn value)."
+                },
+                "min_sample_threshold": {
+                    "type": "integer",
+                    "title": "Minimum Sample Size for Curve Metrics",
+                    "input_type": "number",
+                    "default": 30,
+                    "minimum": 5,
+                    "description": "Minimum validation or test sample size required for reliable aggregate curve metrics (ROC-AUC). When N < threshold, small-sample guardrails flag or suppress unstable metrics."
+                },
+                "suppress_unreliable_curves": {
+                    "type": "boolean",
+                    "title": "Suppress Unreliable Curve Metrics (N < 30)",
+                    "input_type": "checkbox",
+                    "default": False,
+                    "description": "When True, suppresses unstable curve metrics (sets ROC-AUC to null) if sample size falls below threshold. When False, flags unstable metrics with diagnostic reliability warnings."
                 }
             }
         }
@@ -94,10 +109,13 @@ class ModelEvaluatorRecipe(BaseRecipe):
             raise ValueError("ModelEvaluator expects a trained 'model' in inputs. Please connect a Model Trainer node before this Evaluator.")
 
         task_type = inputs.get("task_type") or (context.get("task_type") if isinstance(context, dict) else "classification") or "classification"
+        report_type = config.get("report_type", "Comprehensive (All Metrics + Confusion Matrix)")
         avg_strat = config.get("average_strategy", "weighted")
         decision_threshold = float(config.get("decision_threshold", 0.5))
         cost_fp = float(config.get("cost_false_positive", 0.0))
         cost_fn = float(config.get("cost_false_negative", 0.0))
+        min_sample_threshold = int(config.get("min_sample_threshold", 30))
+        suppress_unreliable = bool(config.get("suppress_unreliable_curves", False))
 
         # Graceful handler for Time-Series models (Prophet/ARIMA) connected into Evaluator.
         # The forecasting recipes themselves perform chronological out-of-sample backtesting
@@ -252,27 +270,13 @@ class ModelEvaluatorRecipe(BaseRecipe):
 
         predictions = model.predict(X_test)
         metrics: Dict[str, Any] = {"task_type": task_type}
+        warnings: list = []
+        report_lines: list = []
+
+        N = len(y_test)
+        is_small_sample = bool(N < min_sample_threshold)
 
         if task_type == "classification":
-            # Check if probability predictions available and apply custom decision threshold
-            if hasattr(model, "predict_proba"):
-                try:
-                    probs = model.predict_proba(X_test)
-                    if probs.shape[1] == 2 and decision_threshold != 0.5:
-                        predictions = (probs[:, 1] >= decision_threshold).astype(int)
-
-                    if probs.shape[1] == 2:
-                        auc = float(round(roc_auc_score(y_test, probs[:, 1]), 4))
-                        metrics["roc_auc"] = auc
-                    elif probs.shape[1] > 2:
-                        auc = float(round(roc_auc_score(y_test, probs, multi_class="ovr", average=avg_strat), 4))
-                        metrics["roc_auc_ovr"] = auc
-
-                    ll = float(round(log_loss(y_test, probs), 4))
-                    metrics["log_loss"] = ll
-                except Exception:
-                    pass
-
             # Align y_test types with predictions if needed
             try:
                 if len(predictions) > 0 and len(y_test) > 0:
@@ -283,6 +287,45 @@ class ModelEvaluatorRecipe(BaseRecipe):
                         y_test = LabelEncoder().fit_transform(y_test)
             except Exception:
                 pass
+
+            unique_classes, class_counts = np.unique(y_test, return_counts=True)
+            class_distribution = {str(c): int(cnt) for c, cnt in zip(unique_classes, class_counts)}
+            min_class_count = int(np.min(class_counts)) if len(class_counts) > 0 else 0
+            num_classes = len(unique_classes)
+
+            if num_classes < 2:
+                warnings.append(
+                    f"[WARNING: SINGLE CLASS] Only class '{unique_classes[0]}' present in y_test (N={N}). "
+                    f"ROC-AUC and multi-class discrimination metrics cannot be computed."
+                )
+
+            probs = None
+            auc = None
+            auc_ovr = None
+            ll = None
+            brier = None
+
+            # Check if probability predictions available and apply custom decision threshold
+            if hasattr(model, "predict_proba"):
+                try:
+                    probs = model.predict_proba(X_test)
+                    if probs.shape[1] == 2 and decision_threshold != 0.5:
+                        predictions = (probs[:, 1] >= decision_threshold).astype(int)
+
+                    if probs.shape[1] == 2 and len(unique_classes) == 2:
+                        auc = float(round(roc_auc_score(y_test, probs[:, 1]), 4))
+                        try:
+                            # Brier score requires binary 0/1 labels
+                            y_bin = (y_test == unique_classes[1]).astype(int)
+                            brier = float(round(brier_score_loss(y_bin, probs[:, 1]), 4))
+                        except Exception:
+                            pass
+                    elif probs.shape[1] > 2 and len(unique_classes) > 1:
+                        auc_ovr = float(round(roc_auc_score(y_test, probs, multi_class="ovr", average=avg_strat), 4))
+
+                    ll = float(round(log_loss(y_test, probs), 4))
+                except Exception:
+                    pass
 
             acc = float(round(accuracy_score(y_test, predictions), 4))
             bal_acc = float(round(balanced_accuracy_score(y_test, predictions), 4))
@@ -296,16 +339,118 @@ class ModelEvaluatorRecipe(BaseRecipe):
             except Exception:
                 clf_rep = {}
 
+            # --- Small-Sample & Calibration Guardrails ---
+            random_chance_log_loss = round(float(-np.log(1.0 / max(2, num_classes))), 4)
+            is_uncalibrated = bool(ll is not None and ll > random_chance_log_loss)
+            is_deceptive_roc_auc = False
+            roc_auc_reliable = True
+
+            effective_auc = auc if auc is not None else auc_ovr
+
+            if is_small_sample or min_class_count < 5:
+                roc_auc_reliable = False
+
+            if effective_auc is not None and effective_auc >= 0.9999 and acc < 1.0:
+                is_deceptive_roc_auc = True
+                roc_auc_reliable = False
+                misclassified_pct = round((1.0 - acc) * 100.0, 2)
+                warnings.append(
+                    f"[ALERT: DECEPTIVE ROC-AUC] The Area Under the ROC Curve is displayed as a perfect {effective_auc:.4f} "
+                    f"despite misclassifying {misclassified_pct}% of test samples (Accuracy: {acc:.4f}). "
+                    f"This artifact occurs due to single-step threshold rank ordering on an under-sampled minority class (N={N}, minority N={min_class_count})."
+                )
+            elif is_small_sample and effective_auc is not None:
+                warnings.append(
+                    f"[WARNING: UNSTABLE ROC-AUC] ROC-AUC ({effective_auc:.4f}) is statistically unverified because evaluation sample size N={N} < {min_sample_threshold}. "
+                    f"Minimum N >= {min_sample_threshold} is required to stabilize aggregate curve metrics."
+                )
+
+            if is_uncalibrated:
+                warnings.append(
+                    f"[ALERT: UNCALIBRATED LOG LOSS] Cross-entropy loss ({ll:.4f}) exceeds random-chance baseline ({random_chance_log_loss:.4f}). "
+                    f"The model exhibits severe overconfidence on misclassified samples without probability calibration checks."
+                )
+
+            if is_small_sample:
+                warnings.insert(
+                    0,
+                    f"[WARNING: SMALL SAMPLE] Evaluation split contains only N={N} sample(s) (minimum recommended: {min_sample_threshold}). "
+                    f"Aggregate curve metrics (ROC-AUC) and loss estimators (Log Loss) are statistically unstable and prone to deceptive rank ordering."
+                )
+
             metrics.update({
                 "accuracy": acc,
                 "balanced_accuracy": bal_acc,
                 "precision": prec,
                 "recall": rec,
                 "f1_score": f1,
+                "sample_size": N,
+                "is_small_sample": is_small_sample,
                 "decision_threshold_used": decision_threshold,
                 "confusion_matrix": cm,
-                "classification_report": clf_rep
+                "classification_report": clf_rep,
+                "random_chance_log_loss": random_chance_log_loss
             })
+
+            # Curve metric handling (suppress or flag)
+            if auc is not None:
+                if suppress_unreliable and not roc_auc_reliable:
+                    metrics["roc_auc"] = None
+                    metrics["roc_auc_raw"] = auc
+                    metrics["roc_auc_suppressed"] = True
+                else:
+                    metrics["roc_auc"] = auc
+                    metrics["roc_auc_reliable"] = roc_auc_reliable
+                    metrics["roc_auc_deceptive"] = is_deceptive_roc_auc
+                    if not roc_auc_reliable:
+                        metrics["roc_auc_warning"] = f"Unreliable estimate: N={N} < {min_sample_threshold} with {min_class_count} minority sample(s)."
+
+            if auc_ovr is not None:
+                if suppress_unreliable and not roc_auc_reliable:
+                    metrics["roc_auc_ovr"] = None
+                    metrics["roc_auc_ovr_raw"] = auc_ovr
+                    metrics["roc_auc_suppressed"] = True
+                else:
+                    metrics["roc_auc_ovr"] = auc_ovr
+                    metrics["roc_auc_reliable"] = roc_auc_reliable
+
+            if ll is not None:
+                metrics["log_loss"] = ll
+                metrics["is_uncalibrated_log_loss"] = is_uncalibrated
+                if brier is not None:
+                    metrics["brier_score"] = brier
+
+            calibration_status = "NO_PROBABILITIES"
+            if ll is not None:
+                if is_uncalibrated:
+                    calibration_status = "UNCALIBRATED_OVERCONFIDENT"
+                elif is_small_sample:
+                    calibration_status = "UNVERIFIED_SMALL_SAMPLE"
+                else:
+                    calibration_status = "WELL_CALIBRATED" if (brier is not None and brier <= 0.15) else "CALIBRATED"
+
+            metrics["small_sample_guardrails"] = {
+                "triggered": bool(is_small_sample or is_deceptive_roc_auc or is_uncalibrated),
+                "sample_size": N,
+                "min_recommended_sample_size": min_sample_threshold,
+                "is_small_sample": is_small_sample,
+                "class_distribution": class_distribution,
+                "minority_class_count": min_class_count,
+                "roc_auc_reliable": roc_auc_reliable,
+                "roc_auc_deceptive": is_deceptive_roc_auc,
+                "log_loss_exceeds_random_chance": is_uncalibrated,
+                "random_chance_baseline_log_loss": random_chance_log_loss,
+                "brier_score": brier,
+                "calibration_status": calibration_status,
+                "recommendations": [
+                    r for r in [
+                        f"Increase test holdout split to N >= {min_sample_threshold} samples to stabilize ROC-AUC and curve statistics." if is_small_sample else None,
+                        "Apply probability calibration via CalibratedClassifierCV (isotonic regression or Platt scaling) to correct overconfident loss." if is_uncalibrated else None,
+                        "Do not rely on single-step 1.0000 ROC-AUC on small test sets; prioritize balanced accuracy and cost-weighted loss." if is_deceptive_roc_auc else None
+                    ] if r is not None
+                ]
+            }
+            metrics["warnings"] = warnings
 
             # Calculate Business Dollar Impact if cost values provided
             if (cost_fp > 0 or cost_fn > 0) and len(cm) == 2 and len(cm[0]) == 2:
@@ -320,7 +465,50 @@ class ModelEvaluatorRecipe(BaseRecipe):
                     "total_estimated_business_loss": total_business_cost
                 }
 
+            report_lines = [
+                f"=== Model Evaluation Report ({report_type}) ===",
+                f"Task Type          : Classification",
+                f"Sample Size (N)    : {N}",
+                f"Accuracy           : {acc:.4f}",
+                f"Balanced Accuracy  : {bal_acc:.4f}",
+                f"F1-Score ({avg_strat:<8}): {f1:.4f}",
+                f"Precision ({avg_strat:<7}): {prec:.4f}",
+                f"Recall ({avg_strat:<10}): {rec:.4f}",
+            ]
+            if auc is not None or auc_ovr is not None:
+                if suppress_unreliable and not roc_auc_reliable:
+                    report_lines.append(f"ROC-AUC            : Suppressed (statistically unreliable, N={N} < {min_sample_threshold})")
+                else:
+                    auc_val = auc if auc is not None else auc_ovr
+                    auc_str = f"{auc_val:.4f}"
+                    if is_deceptive_roc_auc:
+                        auc_str += " [DECEPTIVE - Single-step rank artifact]"
+                    elif not roc_auc_reliable:
+                        auc_str += f" [UNSTABLE - N={N} < {min_sample_threshold}]"
+                    report_lines.append(f"ROC-AUC            : {auc_str}")
+            if ll is not None:
+                ll_str = f"{ll:.4f}"
+                if is_uncalibrated:
+                    ll_str += f" [UNCALIBRATED - Exceeds random baseline {random_chance_log_loss:.4f}]"
+                report_lines.append(f"Log Loss           : {ll_str}")
+            if brier is not None:
+                report_lines.append(f"Brier Score        : {brier:.4f}")
+            report_lines.append(f"Calibration Status : {calibration_status}")
+            if "business_loss_impact" in metrics:
+                b_loss = metrics["business_loss_impact"]
+                report_lines.append(f"Estimated Business Loss : ${b_loss['total_estimated_business_loss']:,.2f}")
+            if warnings:
+                report_lines.append("\n--- Diagnostics & Guardrail Warnings ---")
+                for w in warnings:
+                    report_lines.append(f"- {w}")
+
         else:
+            if is_small_sample:
+                warnings.append(
+                    f"[WARNING: SMALL SAMPLE] Regression evaluation split contains only N={N} sample(s) "
+                    f"(minimum recommended: {min_sample_threshold}). Metric variance (R2, RMSE, MAE) is high."
+                )
+
             mae = float(round(mean_absolute_error(y_test, predictions), 4))
             mse = float(round(mean_squared_error(y_test, predictions), 4))
             rmse = float(round(np.sqrt(mse), 4))
@@ -335,8 +523,35 @@ class ModelEvaluatorRecipe(BaseRecipe):
                 "mse": mse,
                 "rmse": rmse,
                 "r2_score": r2,
-                "mape": mape
+                "mape": mape,
+                "sample_size": N,
+                "is_small_sample": is_small_sample,
+                "warnings": warnings,
+                "small_sample_guardrails": {
+                    "triggered": is_small_sample,
+                    "sample_size": N,
+                    "min_recommended_sample_size": min_sample_threshold,
+                    "is_small_sample": is_small_sample,
+                    "recommendations": [
+                        f"Increase holdout split to N >= {min_sample_threshold} to stabilize regression error statistics."
+                    ] if is_small_sample else []
+                }
             })
+
+            report_lines = [
+                f"=== Model Evaluation Report ({report_type}) ===",
+                f"Task Type          : Regression",
+                f"Sample Size (N)    : {N}",
+                f"MAE                : {mae:.4f}",
+                f"RMSE               : {rmse:.4f}",
+                f"R2 Score           : {r2:.4f}",
+            ]
+            if mape is not None:
+                report_lines.append(f"MAPE               : {mape:.4f}%")
+            if warnings:
+                report_lines.append("\n--- Diagnostics & Guardrail Warnings ---")
+                for w in warnings:
+                    report_lines.append(f"- {w}")
 
             # ── Build Actual vs Predicted trajectory.
             # Priority 1: use the pre-encoding date snapshot captured before safe_prepare_training_data
@@ -456,6 +671,7 @@ class ModelEvaluatorRecipe(BaseRecipe):
 
         ret = {
             "metrics": metrics,
+            "report": "\n".join(report_lines) if report_lines else "",
             "predictions_sample": [float(p) if isinstance(p, (np.floating, float)) else str(p) for p in predictions[:15]]
         }
         if model is not None:
