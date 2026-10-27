@@ -182,7 +182,7 @@ _PLANNED: List[Tuple[str, str, str, List[Tuple[str, str, str, str]]]] = [
         ("next_best_offer", "Market Basket / Next-Best-Offer Recommender", "unsupervised", "Suggests the next product or offer for each customer."),
         ("bayesian_ab_estimator", "Bayesian A/B Test Estimator", "monitor", "Estimates the probability that variant B beats A using Bayesian statistics."),
         ("graph_network_analysis", "Graph / Network Analysis", "transform", "Computes network metrics (centrality, communities) from edge lists."),
-        ("model_explainability", "Model Explainability (SHAP / LIME)", "evaluate", "Explains which features drive each prediction using SHAP or LIME."),
+        #("model_explainability", "Model Explainability (SHAP / LIME)", "evaluate", "Explains which features drive each prediction using SHAP or LIME."),
     ]),
     ("Modeling", "Computer Vision & Audio", "vision_audio", [
         #("object_detection", "Object Detection", "transform", "Detects and locates objects in images with bounding boxes."),

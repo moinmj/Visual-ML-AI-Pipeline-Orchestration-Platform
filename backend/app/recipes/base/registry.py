@@ -49,6 +49,8 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "model_evaluator": ("Evaluation & Governance", "Evaluation"),
     "ab_testing_framework": ("Evaluation & Governance", "Evaluation"),
     "champion_challenger": ("Evaluation & Governance", "Evaluation"),
+    "model_explainability": ("Modeling", "Specialized Models"),
+    "shap_explainer": ("Modeling", "Specialized Models"),
     "object_detection": ("Modeling", "Computer Vision & Audio"),
     "image_classifier": ("Modeling", "Computer Vision & Audio"),
     "ocr": ("Modeling", "Computer Vision & Audio"),
@@ -209,6 +211,11 @@ class RecipeRegistry:
             "code_sandbox": "code_execution_sandbox",
             "python_sandbox": "code_execution_sandbox",
             "chatbot": "chatbot_endpoint",
+            "shap": "model_explainability",
+            "lime": "model_explainability",
+            "explainability": "model_explainability",
+            "feature_attribution": "model_explainability",
+            "shap_explainer": "model_explainability",
         }
 
 
