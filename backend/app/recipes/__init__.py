@@ -28,6 +28,7 @@ from backend.app.recipes.training.random_forest_trainer import RandomForestTrain
 from backend.app.recipes.training.logistic_regression_trainer import LogisticRegressionTrainerRecipe
 from backend.app.recipes.training.lightgbm_trainer import LightGBMTrainerRecipe
 from backend.app.recipes.training.catboost_trainer import CatBoostTrainerRecipe
+from backend.app.recipes.training.model_calibration import ModelCalibrationRecipe
 from backend.app.recipes.evaluation.model_evaluator import ModelEvaluatorRecipe
 from backend.app.recipes.evaluation.ab_testing_framework import ABTestingFrameworkRecipe
 from backend.app.recipes.evaluation.champion_challenger import ChampionChallengerRecipe
@@ -209,6 +210,7 @@ def register_all_recipes():
     recipe_registry.register(LogisticRegressionTrainerRecipe())
     recipe_registry.register(LightGBMTrainerRecipe())
     recipe_registry.register(CatBoostTrainerRecipe())
+    recipe_registry.register(ModelCalibrationRecipe())
     recipe_registry.register(ModelEvaluatorRecipe())
     recipe_registry.register(ABTestingFrameworkRecipe())
     recipe_registry.register(ChampionChallengerRecipe())

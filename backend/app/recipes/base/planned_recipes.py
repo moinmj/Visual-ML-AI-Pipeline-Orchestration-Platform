@@ -174,7 +174,7 @@ _PLANNED: List[Tuple[str, str, str, List[Tuple[str, str, str, str]]]] = [
         ("automl_search", "AutoML / Hyperparameter Search", "trainer", "Automatically tries multiple algorithms and settings and picks the best model."),
         ("hyperparameter_tuner", "Hyperparameter Tuner (standalone node)", "trainer", "Searches the best hyperparameters for a chosen algorithm (grid, random or Bayesian)."),
         ("ensemble_stacker", "Ensemble Stacker", "trainer", "Combines several models into a stacked ensemble for better accuracy."),
-        ("model_calibration", "Model Calibration (Platt / Isotonic)", "model_transform", "Calibrates predicted probabilities so they match real-world frequencies."),
+        #("model_calibration", "Model Calibration (Platt / Isotonic)", "model_transform", "Calibrates predicted probabilities so they match real-world frequencies."),
     ]),
     ("Modeling", "Specialized Models", "training", [
         ("survival_model", "Survival / Time-to-Event Model (Cox)", "trainer", "Models time until an event (e.g. churn, failure) with Cox proportional hazards."),

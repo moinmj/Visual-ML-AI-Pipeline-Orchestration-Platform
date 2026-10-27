@@ -40,6 +40,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "random_forest_trainer": ("Modeling", "Supervised — Tree Ensembles"),
     "lightgbm_trainer": ("Modeling", "Supervised — Tree Ensembles"),
     "catboost_trainer": ("Modeling", "Supervised — Tree Ensembles"),
+    "model_calibration": ("Modeling", "Deep Learning / AutoML"),
     "linear_trainer": ("Modeling", "Supervised — Linear"),
     "lag_feature_engineering": ("Modeling", "Forecasting"),
     "prophet_forecaster": ("Modeling", "Forecasting"),
@@ -216,6 +217,10 @@ class RecipeRegistry:
             "explainability": "model_explainability",
             "feature_attribution": "model_explainability",
             "shap_explainer": "model_explainability",
+            "calibration": "model_calibration",
+            "platt_scaling": "model_calibration",
+            "isotonic_regression": "model_calibration",
+            "calibrator": "model_calibration",
         }
 
 
