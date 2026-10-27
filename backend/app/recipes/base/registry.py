@@ -41,6 +41,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "lightgbm_trainer": ("Modeling", "Supervised — Tree Ensembles"),
     "catboost_trainer": ("Modeling", "Supervised — Tree Ensembles"),
     "model_calibration": ("Modeling", "Deep Learning / AutoML"),
+    "ensemble_stacker": ("Modeling", "Deep Learning / AutoML"),
     "linear_trainer": ("Modeling", "Supervised — Linear"),
     "lag_feature_engineering": ("Modeling", "Forecasting"),
     "prophet_forecaster": ("Modeling", "Forecasting"),
@@ -221,6 +222,11 @@ class RecipeRegistry:
             "platt_scaling": "model_calibration",
             "isotonic_regression": "model_calibration",
             "calibrator": "model_calibration",
+            "stacking": "ensemble_stacker",
+            "stacker": "ensemble_stacker",
+            "stacking_classifier": "ensemble_stacker",
+            "stacking_regressor": "ensemble_stacker",
+            "ensemble_stacking": "ensemble_stacker",
         }
 
 
