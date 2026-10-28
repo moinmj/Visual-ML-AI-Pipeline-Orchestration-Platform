@@ -58,6 +58,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "shap_explainer": ("Modeling", "Specialized Models"),
     "survival_model": ("Modeling", "Specialized Models"),
     "recommendation_engine": ("Modeling", "Specialized Models"),
+    "next_best_offer": ("Modeling", "Specialized Models"),
     "object_detection": ("Modeling", "Computer Vision & Audio"),
     "image_classifier": ("Modeling", "Computer Vision & Audio"),
     "ocr": ("Modeling", "Computer Vision & Audio"),
@@ -261,6 +262,11 @@ class RecipeRegistry:
             "collaborative_filtering": "recommendation_engine",
             "matrix_factorization": "recommendation_engine",
             "content_based_recommender": "recommendation_engine",
+            "nbo": "next_best_offer",
+            "nba": "next_best_offer",
+            "next_best_action": "next_best_offer",
+            "cross_sell_recommender": "next_best_offer",
+            "market_basket_nbo": "next_best_offer",
         }
 
 
