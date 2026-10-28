@@ -36,6 +36,7 @@ from backend.app.recipes.training.neural_network_trainer import NeuralNetworkTra
 from backend.app.recipes.training.survival_model import SurvivalModelRecipe
 from backend.app.recipes.training.recommendation_engine import RecommendationEngineRecipe
 from backend.app.recipes.training.next_best_offer import NextBestOfferRecipe
+from backend.app.recipes.training.graph_network_analysis import GraphNetworkAnalysisRecipe
 from backend.app.recipes.evaluation.model_evaluator import ModelEvaluatorRecipe
 from backend.app.recipes.evaluation.ab_testing_framework import ABTestingFrameworkRecipe
 from backend.app.recipes.evaluation.bayesian_ab_estimator import BayesianABEstimatorRecipe
@@ -226,6 +227,7 @@ def register_all_recipes():
     recipe_registry.register(SurvivalModelRecipe())
     recipe_registry.register(RecommendationEngineRecipe())
     recipe_registry.register(NextBestOfferRecipe())
+    recipe_registry.register(GraphNetworkAnalysisRecipe())
     recipe_registry.register(ModelEvaluatorRecipe())
     recipe_registry.register(ABTestingFrameworkRecipe())
     recipe_registry.register(BayesianABEstimatorRecipe())

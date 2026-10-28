@@ -60,6 +60,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "survival_model": ("Modeling", "Specialized Models"),
     "recommendation_engine": ("Modeling", "Specialized Models"),
     "next_best_offer": ("Modeling", "Specialized Models"),
+    "graph_network_analysis": ("Modeling", "Specialized Models"),
     "object_detection": ("Modeling", "Computer Vision & Audio"),
     "image_classifier": ("Modeling", "Computer Vision & Audio"),
     "ocr": ("Modeling", "Computer Vision & Audio"),
@@ -273,6 +274,13 @@ class RecipeRegistry:
             "bayesian_experimentation": "bayesian_ab_estimator",
             "expected_loss_ab": "bayesian_ab_estimator",
             "posterior_ab_estimator": "bayesian_ab_estimator",
+            "graph_analysis": "graph_network_analysis",
+            "network_analysis": "graph_network_analysis",
+            "networkx": "graph_network_analysis",
+            "pagerank": "graph_network_analysis",
+            "community_detection": "graph_network_analysis",
+            "graph_centrality": "graph_network_analysis",
+            "graph_analytics": "graph_network_analysis",
         }
 
 
