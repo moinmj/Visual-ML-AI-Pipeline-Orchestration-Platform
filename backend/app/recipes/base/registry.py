@@ -42,6 +42,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "catboost_trainer": ("Modeling", "Supervised — Tree Ensembles"),
     "model_calibration": ("Modeling", "Deep Learning / AutoML"),
     "ensemble_stacker": ("Modeling", "Deep Learning / AutoML"),
+    "hyperparameter_tuner": ("Modeling", "Deep Learning / AutoML"),
     "linear_trainer": ("Modeling", "Supervised — Linear"),
     "lag_feature_engineering": ("Modeling", "Forecasting"),
     "prophet_forecaster": ("Modeling", "Forecasting"),
@@ -227,6 +228,12 @@ class RecipeRegistry:
             "stacking_classifier": "ensemble_stacker",
             "stacking_regressor": "ensemble_stacker",
             "ensemble_stacking": "ensemble_stacker",
+            "optuna": "hyperparameter_tuner",
+            "hyperparameter_tuning": "hyperparameter_tuner",
+            "bayesian_optimization": "hyperparameter_tuner",
+            "grid_search": "hyperparameter_tuner",
+            "random_search": "hyperparameter_tuner",
+            "tuner": "hyperparameter_tuner",
         }
 
 
