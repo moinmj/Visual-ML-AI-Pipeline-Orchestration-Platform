@@ -57,6 +57,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "model_explainability": ("Modeling", "Specialized Models"),
     "shap_explainer": ("Modeling", "Specialized Models"),
     "survival_model": ("Modeling", "Specialized Models"),
+    "recommendation_engine": ("Modeling", "Specialized Models"),
     "object_detection": ("Modeling", "Computer Vision & Audio"),
     "image_classifier": ("Modeling", "Computer Vision & Audio"),
     "ocr": ("Modeling", "Computer Vision & Audio"),
@@ -255,6 +256,11 @@ class RecipeRegistry:
             "kaplan_meier": "survival_model",
             "survival_analysis": "survival_model",
             "time_to_event": "survival_model",
+            "recommender": "recommendation_engine",
+            "recommendations": "recommendation_engine",
+            "collaborative_filtering": "recommendation_engine",
+            "matrix_factorization": "recommendation_engine",
+            "content_based_recommender": "recommendation_engine",
         }
 
 
