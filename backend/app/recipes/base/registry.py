@@ -53,6 +53,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "statistical_guardrail": ("Modeling", "Anomaly Detection"),
     "model_evaluator": ("Evaluation & Governance", "Evaluation"),
     "ab_testing_framework": ("Evaluation & Governance", "Evaluation"),
+    "bayesian_ab_estimator": ("Evaluation & Governance", "Evaluation"),
     "champion_challenger": ("Evaluation & Governance", "Evaluation"),
     "model_explainability": ("Modeling", "Specialized Models"),
     "shap_explainer": ("Modeling", "Specialized Models"),
@@ -267,6 +268,11 @@ class RecipeRegistry:
             "next_best_action": "next_best_offer",
             "cross_sell_recommender": "next_best_offer",
             "market_basket_nbo": "next_best_offer",
+            "bayesian_ab": "bayesian_ab_estimator",
+            "bayesian_ab_test": "bayesian_ab_estimator",
+            "bayesian_experimentation": "bayesian_ab_estimator",
+            "expected_loss_ab": "bayesian_ab_estimator",
+            "posterior_ab_estimator": "bayesian_ab_estimator",
         }
 
 

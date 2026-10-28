@@ -38,6 +38,7 @@ from backend.app.recipes.training.recommendation_engine import RecommendationEng
 from backend.app.recipes.training.next_best_offer import NextBestOfferRecipe
 from backend.app.recipes.evaluation.model_evaluator import ModelEvaluatorRecipe
 from backend.app.recipes.evaluation.ab_testing_framework import ABTestingFrameworkRecipe
+from backend.app.recipes.evaluation.bayesian_ab_estimator import BayesianABEstimatorRecipe
 from backend.app.recipes.evaluation.champion_challenger import ChampionChallengerRecipe
 from backend.app.recipes.evaluation.model_explainability import ModelExplainabilityRecipe
 from backend.app.recipes.anomaly.isolation_forest import IsolationForestRecipe
@@ -227,6 +228,7 @@ def register_all_recipes():
     recipe_registry.register(NextBestOfferRecipe())
     recipe_registry.register(ModelEvaluatorRecipe())
     recipe_registry.register(ABTestingFrameworkRecipe())
+    recipe_registry.register(BayesianABEstimatorRecipe())
     recipe_registry.register(ChampionChallengerRecipe())
     recipe_registry.register(ModelExplainabilityRecipe())
     recipe_registry.register(IsolationForestRecipe())
