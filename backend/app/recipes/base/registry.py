@@ -56,6 +56,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "champion_challenger": ("Evaluation & Governance", "Evaluation"),
     "model_explainability": ("Modeling", "Specialized Models"),
     "shap_explainer": ("Modeling", "Specialized Models"),
+    "survival_model": ("Modeling", "Specialized Models"),
     "object_detection": ("Modeling", "Computer Vision & Audio"),
     "image_classifier": ("Modeling", "Computer Vision & Audio"),
     "ocr": ("Modeling", "Computer Vision & Audio"),
@@ -248,6 +249,12 @@ class RecipeRegistry:
             "neural_network": "neural_network_trainer",
             "feedforward_nn": "neural_network_trainer",
             "deep_learning_tabular": "neural_network_trainer",
+            "survival": "survival_model",
+            "cox_ph": "survival_model",
+            "cox_proportional_hazards": "survival_model",
+            "kaplan_meier": "survival_model",
+            "survival_analysis": "survival_model",
+            "time_to_event": "survival_model",
         }
 
 
