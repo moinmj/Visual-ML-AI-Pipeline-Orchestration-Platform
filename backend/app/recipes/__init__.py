@@ -32,6 +32,7 @@ from backend.app.recipes.training.model_calibration import ModelCalibrationRecip
 from backend.app.recipes.training.ensemble_stacker import EnsembleStackerRecipe
 from backend.app.recipes.training.hyperparameter_tuner import HyperparameterTunerRecipe
 from backend.app.recipes.training.automl_search import AutoMLSearchRecipe
+from backend.app.recipes.training.neural_network_trainer import NeuralNetworkTrainerRecipe
 from backend.app.recipes.evaluation.model_evaluator import ModelEvaluatorRecipe
 from backend.app.recipes.evaluation.ab_testing_framework import ABTestingFrameworkRecipe
 from backend.app.recipes.evaluation.champion_challenger import ChampionChallengerRecipe
@@ -217,6 +218,7 @@ def register_all_recipes():
     recipe_registry.register(EnsembleStackerRecipe())
     recipe_registry.register(HyperparameterTunerRecipe())
     recipe_registry.register(AutoMLSearchRecipe())
+    recipe_registry.register(NeuralNetworkTrainerRecipe())
     recipe_registry.register(ModelEvaluatorRecipe())
     recipe_registry.register(ABTestingFrameworkRecipe())
     recipe_registry.register(ChampionChallengerRecipe())

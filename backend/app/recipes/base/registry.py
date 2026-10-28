@@ -44,6 +44,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "ensemble_stacker": ("Modeling", "Deep Learning / AutoML"),
     "hyperparameter_tuner": ("Modeling", "Deep Learning / AutoML"),
     "automl_search": ("Modeling", "Deep Learning / AutoML"),
+    "neural_network_trainer": ("Modeling", "Deep Learning / AutoML"),
     "linear_trainer": ("Modeling", "Supervised — Linear"),
     "lag_feature_engineering": ("Modeling", "Forecasting"),
     "prophet_forecaster": ("Modeling", "Forecasting"),
@@ -241,6 +242,12 @@ class RecipeRegistry:
             "auto_ml": "automl_search",
             "automl_classifier": "automl_search",
             "automl_regressor": "automl_search",
+            "mlp": "neural_network_trainer",
+            "mlp_classifier": "neural_network_trainer",
+            "mlp_regressor": "neural_network_trainer",
+            "neural_network": "neural_network_trainer",
+            "feedforward_nn": "neural_network_trainer",
+            "deep_learning_tabular": "neural_network_trainer",
         }
 
 
