@@ -89,10 +89,12 @@ async def upload_unstructured_files(
 @router.get("/ozone/browse", response_model=List[OzoneObjectResponse])
 async def browse_ozone_datasets(
     user: CurrentUser,
-    scope: Literal["all_tenant_data", "ml_workflow"] = Query(
+    scope: Literal["all_tenant_data", "ml_workflow", "bucket"] = Query(
         "ml_workflow",
         description="Option 1: 'all_tenant_data' (get all data of that tenant in Ozone). "
-                    "Option 2: 'ml_workflow' (get data from ml-workflow/t<tenant_id>/).",
+                    "Option 2: 'ml_workflow' (get data from ml-workflow/t<tenant_id>/). "
+                    "Option 3: 'bucket' (the WHOLE bucket and every sub folder; Tenant Admin only, "
+                    "and only when OZONE_ALLOW_BUCKET_BROWSE=true).",
     ),
     folder: Literal["all", "datasets", "unstructured"] = Query(
         "all",
@@ -104,17 +106,23 @@ async def browse_ozone_datasets(
         description="Optional filter by media type: 'image', 'audio', 'video', 'tabular', or omit for all",
     ),
     prefix: str = Query("", description="Optional key prefix to filter by, relative to the selected scope/folder"),
+    include_folders: bool = Query(False, description="Also return the folders (media_type='folder')"),
+    limit: int = Query(1000, ge=1, le=5000, description="Most items returned"),
 ):
     """
     Lists files sitting in the caller's tenant folder in Ozone.
     Returns objects matching the DatasetResponse JSON shape so the frontend can consume them directly.
     """
+    if scope == "bucket" and not user.has_role("Tenant Admin"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only a Tenant Admin can browse the whole bucket.")
     return dataset_service.browse_ozone(
         tenant_id=user.tenant_id,
         scope=scope,
         folder=folder,
         media_type=media_type,
         prefix=prefix,
+        include_folders=include_folders,
+        limit=limit,
     )
 
 

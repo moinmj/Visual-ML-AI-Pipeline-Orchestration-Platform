@@ -126,6 +126,7 @@ from backend.app.recipes.vision.image_embedding import ImageEmbeddingRecipe
 from backend.app.recipes.vision.video_tracking import VideoObjectTrackingRecipe
 from backend.app.recipes.vision.speech_to_text import SpeechToTextRecipe
 from backend.app.recipes.vision.text_to_speech import TextToSpeechRecipe
+from backend.app.recipes.vision.object_removal import ObjectRemovalRecipe
 
 def register_all_recipes():
     recipe_registry.register(CSVLoaderRecipe())
@@ -249,6 +250,7 @@ def register_all_recipes():
     recipe_registry.register(OCRRecipe())
     recipe_registry.register(ImageEmbeddingRecipe())
     recipe_registry.register(VideoObjectTrackingRecipe())
+    recipe_registry.register(ObjectRemovalRecipe())
     recipe_registry.register(SpeechToTextRecipe())
     recipe_registry.register(TextToSpeechRecipe())
 

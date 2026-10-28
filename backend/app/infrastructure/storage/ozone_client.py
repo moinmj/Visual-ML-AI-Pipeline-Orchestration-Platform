@@ -213,12 +213,16 @@ def list_ozone_objects(
     from backend.app.core import media_types as mt
 
     bucket = settings.OZONE_BUCKET
+    if scope == "bucket" and not getattr(settings, "OZONE_ALLOW_BUCKET_BROWSE", False):
+        raise ValueError("Bucket browsing is switched off. Set OZONE_ALLOW_BUCKET_BROWSE=true in .env to allow it.")
     clean_prefix = (prefix or "").strip().lstrip("/")
     wanted = (media_type or "").lower().strip()
     want_files = wanted != "folder"
     want_folders = wanted == "folder" or (include_folders and wanted in ("", "all"))
 
-    if scope == "all_tenant_data":
+    if scope == "bucket":
+        scans = [("", clean_prefix)]  # the whole bucket; 'relative_path' is the full key
+    elif scope == "all_tenant_data":
         roots = list(dict.fromkeys([tenant_ml_workflow_prefix(tenant_id), tenant_root_prefix(tenant_id)]))
         scans = [(root, f"{root}{clean_prefix}") for root in roots]
     else:
