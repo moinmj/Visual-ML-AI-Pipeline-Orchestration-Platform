@@ -308,11 +308,27 @@ class WorkflowCronScheduler:
                 await preload_workflow_datasets(workflow=graph, db=db, tenant_id=tenant_id)
 
                 exec_id = f"cron_{uuid.uuid4().hex[:12]}"
-                result = DAGExecutor.execute_workflow(
-                    execution_id=exec_id,
+                from backend.app.engine.execution.job_manager import job_manager
+
+                # Execute in background worker pool so the server's API event loop is NEVER blocked
+                job_id = job_manager.submit_job(
                     workflow=graph,
-                    include_node_outputs=False
+                    trigger_type="cron_schedule",
+                    trigger_id=cron_expr,
+                    include_node_outputs=False,
+                    workflow_id=workflow_id,
+                    job_id=exec_id,
                 )
+                future = job_manager.job_futures.get(job_id)
+                if future is not None:
+                    await asyncio.wrap_future(future)
+
+                job = job_manager.get_job(job_id) or {}
+                result = job.get("result")
+                if result is None:
+                    err = job.get("error") or "Scheduled workflow execution failed."
+                    logger.error(f"WorkflowCronScheduler: Execution failed for '{wf.name}': {err}")
+                    return
                 result.workflow_id = workflow_id
 
                 # Save execution result
@@ -362,6 +378,7 @@ class WorkflowCronScheduler:
                     run_label=f"Scheduled Cron Run ({cron_expr})"
                 )
                 logger.info(f"WorkflowCronScheduler: Completed scheduled execution for '{wf.name}' ({result.status}).")
+                job_manager.mark_persisted(job_id, True)
 
         except Exception as ex:
             logger.error(f"WorkflowCronScheduler: Failed scheduled execution for workflow '{workflow_id}': {ex}", exc_info=True)

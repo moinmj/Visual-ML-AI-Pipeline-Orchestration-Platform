@@ -39,6 +39,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated, List, Optional, Tuple
 
 from fastapi import Depends, HTTPException, Request, status
+from fastapi.security import APIKeyCookie, APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -50,8 +51,10 @@ COOKIE_NAME    = "sid"
 CSRF_HEADER    = "X-CSRF-Token"
 SESSION_HEADER = "X-Session-Id"          # service clients (Airflow) send the sid here
 SAFE_METHODS   = {"GET", "HEAD", "OPTIONS"}
-IDLE_TIMEOUT   = timedelta(minutes=int(getattr(settings, "SESSION_IDLE_MINUTES", 30)))
+IDLE_TIMEOUT   = timedelta(minutes=int(getattr(settings, "SESSION_IDLE_MINUTES", 1440)))
 _DB_TOUCH_INTERVAL = timedelta(seconds=60)
+
+_cookie_sec = APIKeyCookie(name=COOKIE_NAME, auto_error=False, description="Session ID cookie ('sid')")
 
 # ── read-only async connection to the User-Management database ────────────────
 _um_sessionmaker: Optional[async_sessionmaker] = None
@@ -77,8 +80,15 @@ def _um_sm() -> async_sessionmaker:
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="UM_DATABASE_URL is not configured.",
             )
-        engine = create_async_engine(_to_async_url(url), pool_pre_ping=True,
-                                     pool_size=5, max_overflow=5)
+        engine = create_async_engine(
+            _to_async_url(url),
+            pool_pre_ping=True,
+            pool_recycle=getattr(settings, "DB_POOL_RECYCLE", 1800),
+            pool_size=getattr(settings, "UM_DB_POOL_SIZE", 15),
+            max_overflow=getattr(settings, "UM_DB_MAX_OVERFLOW", 20),
+            pool_timeout=getattr(settings, "DB_POOL_TIMEOUT", 60),
+        )
+
         _um_sessionmaker = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
     return _um_sessionmaker
 
@@ -133,22 +143,27 @@ _SESSION_SQL = text("""
     FROM user_sessions s
     JOIN user_details u  ON u.user_id   = s.user_id
     LEFT JOIN tenant_master t ON t.tenant_id = s.tenant_id
-    WHERE s.session_hash = :h
+    WHERE (
+        CAST(s.id AS TEXT) = :sid
+        OR s.session_hash = :sid
+        OR s.session_hash = :h
+    )
 """)
 
-_TOUCH_SQL = text(
-    "UPDATE user_sessions SET last_seen_at = :now "
-    "WHERE session_hash = :h AND revoked_at IS NULL"
-)
+_TOUCH_SQL = text("""
+    UPDATE user_sessions SET last_seen_at = :now 
+    WHERE (CAST(id AS TEXT) = :sid OR session_hash = :sid OR session_hash = :h) AND revoked_at IS NULL
+""")
 
 
 async def _load_session(sid: str) -> Optional[dict]:
     """Return the validated session row (as a dict) for a raw cookie value, or None."""
-    h = _hash(sid)
+    clean_sid = sid.strip()
+    h = _hash(clean_sid)
     now = _utcnow()
     try:
         async with _um_sm()() as db:
-            row = (await db.execute(_SESSION_SQL, {"h": h})).mappings().first()
+            row = (await db.execute(_SESSION_SQL, {"sid": clean_sid, "h": h})).mappings().first()
             if row is None:
                 return None
             if row["revoked_at"] is not None:
@@ -166,7 +181,7 @@ async def _load_session(sid: str) -> Optional[dict]:
 
             # keep the shared session alive across services (throttled write)
             if now - row["last_seen_at"] >= _DB_TOUCH_INTERVAL:
-                await db.execute(_TOUCH_SQL, {"now": now, "h": h})
+                await db.execute(_TOUCH_SQL, {"now": now, "sid": clean_sid, "h": h})
                 await db.commit()
             return dict(row)
     except HTTPException:
@@ -183,25 +198,37 @@ def _unauth(detail: str) -> HTTPException:
     return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=detail)
 
 
-def _row_to_token_data(row: dict) -> TokenData:
-    tenant_id = row["tenant_id"]
-    if tenant_id is None:
-        # Same stance as before: a session without a tenant is rejected so it can
-        # never silently land in (and see) another tenant's data.
-        raise _unauth("Tenant missing on session.")
+def _row_to_token_data(row: dict, x_tenant_id: Optional[int] = None) -> TokenData:
     roles = row["roles"] or []
     perms = row["permissions"] or []
+    roles_list = list(roles) if isinstance(roles, list) else [roles]
+    is_super_admin = any(isinstance(r, str) and r.lower() == "super admin" for r in roles_list)
+
+    tenant_id = row["tenant_id"]
+    if tenant_id is not None:
+        tenant_id = int(tenant_id)
+    elif x_tenant_id is not None and is_super_admin:
+        try:
+            tenant_id = int(x_tenant_id)
+        except (ValueError, TypeError):
+            tenant_id = 1
+    elif is_super_admin:
+        tenant_id = 1
+    else:
+        # A non-super-admin session without a tenant is rejected so it cannot access another tenant's data
+        raise _unauth("Tenant missing on session.")
+
     return TokenData(
         sub=str(row["user_id"]),
-        tenant_id=int(tenant_id),
-        roles=list(roles) if isinstance(roles, list) else [roles],
+        tenant_id=tenant_id,
+        roles=roles_list,
         permissions=list(perms) if isinstance(perms, list) else [],
         email=row["email"],
         sid=str(row["session_id"]),
     )
 
 
-async def resolve_session(sid: str, *, set_context: bool = True) -> TokenData:
+async def resolve_session(sid: str, *, x_tenant_id: Optional[int] = None, set_context: bool = True) -> TokenData:
     """
     Validate a RAW session id (the cookie value) and return the caller.
 
@@ -214,7 +241,7 @@ async def resolve_session(sid: str, *, set_context: bool = True) -> TokenData:
     row = await _load_session(sid)
     if row is None:
         raise _unauth("Session expired or not logged in.")
-    user = _row_to_token_data(row)
+    user = _row_to_token_data(row, x_tenant_id=x_tenant_id)
     if set_context:
         set_current_tenant_id(user.tenant_id)
         set_current_user_id(user.sub)
@@ -222,31 +249,53 @@ async def resolve_session(sid: str, *, set_context: bool = True) -> TokenData:
 
 
 def _extract_sid(request: Request) -> Tuple[Optional[str], bool]:
-    """Return (sid, from_cookie). Cookie first (browser), then header / Bearer (services)."""
+    """Return (sid, from_cookie). Cookie first (browser), then header / Bearer / query param."""
     sid = request.cookies.get(COOKIE_NAME)
     if sid:
-        return sid, True
+        return sid.strip(), True
     hdr = request.headers.get(SESSION_HEADER)
     if hdr:
         return hdr.strip(), False
     auth = request.headers.get("authorization", "")
     if auth.lower().startswith("bearer "):
         return auth[7:].strip(), False
+    param = request.query_params.get("sid") or request.query_params.get("session_id")
+    if param:
+        return param.strip(), False
     return None, False
 
 
-async def get_current_user(request: Request) -> TokenData:
+async def get_current_user(
+    request: Request,
+    cookie_sid: Annotated[Optional[str], Depends(_cookie_sec)] = None,
+) -> TokenData:
     """
-    FastAPI dependency: validates the session cookie/header, returns the caller.
+    FastAPI dependency: validates the session cookie 'sid', returns the caller.
 
     Downstream code always reads tenant_id from this object (never from a path/
     query param) so a caller can't request another tenant's data by changing an ID.
     """
-    sid, from_cookie = _extract_sid(request)
+    sid = cookie_sid if isinstance(cookie_sid, str) else None
+    from_cookie = bool(sid)
     if not sid:
-        raise _unauth("Authentication credentials were not provided")
+        sid, from_cookie = _extract_sid(request)
+    if not sid:
+        raise _unauth("Not authenticated. Valid session cookie ('sid') required.")
 
-    user = await resolve_session(sid)   # loads, validates, sets tenant/user context
+    # Extract optional X-Tenant-ID for Super Admins
+    x_tenant_hdr = (
+        request.headers.get("X-Tenant-ID")
+        or request.headers.get("x-tenant-id")
+        or request.query_params.get("tenant_id")
+    )
+    x_tenant_id = None
+    if x_tenant_hdr:
+        try:
+            x_tenant_id = int(x_tenant_hdr)
+        except (ValueError, TypeError):
+            pass
+
+    user = await resolve_session(sid, x_tenant_id=x_tenant_id)   # loads, validates, sets tenant/user context
 
     # CSRF — only for cookie-borne unsafe requests (browser). Service clients that
     # send the sid via header/Bearer aren't subject to CSRF.

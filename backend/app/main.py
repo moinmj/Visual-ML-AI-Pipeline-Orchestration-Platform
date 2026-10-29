@@ -21,6 +21,7 @@ from backend.app.infrastructure.database.tenant_session import init_tenant_db
 import backend.app.datasets.models
 import backend.app.workflows.models
 import backend.app.tenant_data.models
+import backend.app.credentials.models
 # Tenant isolation for workflows / executions / datasets (registers SQLAlchemy hooks).
 import backend.app.infrastructure.database.tenant_guard  # noqa: F401
 
@@ -28,23 +29,28 @@ import backend.app.infrastructure.database.tenant_guard  # noqa: F401
 from backend.app.datasets.router import router as datasets_router
 from backend.app.recipes.router import router as recipes_router
 from backend.app.workflows.router import router as workflows_router, ws_router as workflows_ws_router
+from backend.app.workflows.endpoint_router import endpoint_router
 from backend.app.recommendation.router import router as recommendation_router
 from backend.app.templates.router import router as templates_router
 from backend.app.auth.router import router as auth_router
 from backend.app.tenant_data.router import router as tenant_data_router
+from backend.app.credentials.router import router as credentials_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
     setup_logging()
-    logger.info("Initializing platform database...")
-    await init_db()
-    logger.info("Platform database initialized successfully.")
-    if settings.TENANT_DB_AUTO_CREATE:
-        logger.info("Initializing tenant metadata database...")
-        await init_tenant_db()
-        logger.info("Tenant metadata database initialized successfully.")
+    try:
+        logger.info("Initializing platform database...")
+        await init_db()
+        logger.info("Platform database initialized successfully.")
+        if settings.TENANT_DB_AUTO_CREATE:
+            logger.info("Initializing tenant metadata database...")
+            await init_tenant_db()
+            logger.info("Tenant metadata database initialized successfully.")
+    except Exception as e:
+        logger.warning(f"ML_Pipeline database initialization warning (DB may not be ready yet): {e}")
 
     # Start automated background Cron Scheduler daemon
     import asyncio
@@ -54,8 +60,11 @@ async def lifespan(app: FastAPI):
 
     yield
     # Shutdown
-    workflow_scheduler.stop()
-    scheduler_task.cancel()
+    try:
+        workflow_scheduler.stop()
+        scheduler_task.cancel()
+    except Exception:
+        pass
     logger.info("Platform shutting down.")
 
 
@@ -67,6 +76,7 @@ app = FastAPI(
     redoc_url="/redoc",
     openapi_url=f"{settings.API_V1_STR}/openapi.json",
     lifespan=lifespan,
+    swagger_ui_parameters={"persistAuthorization": True, "withCredentials": True},
 )
 
 # CORS configuration for future frontend integration
@@ -82,8 +92,8 @@ app.add_middleware(
 
 
 def _custom_openapi():
-    """Injects the global Bearer security scheme so Swagger's Authorize button
-    auto-sends 'Authorization: Bearer <token>' on every protected endpoint."""
+    """Injects the global SessionAuth security scheme so Swagger's Authorize button
+    auto-sends 'X-Session-Id: <sid>' on every protected endpoint."""
     if app.openapi_schema:
         return app.openapi_schema
     from fastapi.openapi.utils import get_openapi
@@ -93,14 +103,22 @@ def _custom_openapi():
         description=app.description,
         routes=app.routes,
     )
-    schema.setdefault("components", {}).setdefault("securitySchemes", {})["bearerAuth"] = {
-        "type": "http",
-        "scheme": "bearer",
-        "bearerFormat": "JWT",
-        "description": "Paste your JWT token (get one from POST /api/v1/auth/login).",
+    schema.setdefault("components", {})["securitySchemes"] = {
+        "SessionAuth": {
+            "type": "apiKey",
+            "in": "header",
+            "name": "X-Session-Id",
+            "description": "Session ID (sid cookie value). Automatically sent with requests.",
+        }
     }
-    # Apply globally — Swagger will include the Authorization header on every call.
-    schema["security"] = [{"bearerAuth": []}]
+    schema["security"] = [{"SessionAuth": []}]
+
+    # Ensure all endpoints in Swagger UI bind to SessionAuth so the header is always sent
+    for path_item in schema.get("paths", {}).values():
+        for op in path_item.values():
+            if isinstance(op, dict):
+                op["security"] = [{"SessionAuth": []}]
+
     app.openapi_schema = schema
     return schema
 
@@ -149,3 +167,6 @@ app.include_router(recommendation_router, prefix=settings.API_V1_STR)
 app.include_router(templates_router, prefix=settings.API_V1_STR)
 app.include_router(auth_router, prefix=settings.API_V1_STR)
 app.include_router(tenant_data_router, prefix=settings.API_V1_STR)
+app.include_router(credentials_router, prefix=settings.API_V1_STR)
+app.include_router(endpoint_router)
+app.include_router(endpoint_router, prefix=settings.API_V1_STR)

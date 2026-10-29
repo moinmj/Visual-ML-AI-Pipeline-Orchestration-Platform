@@ -189,25 +189,53 @@ class FuzzyMatchDeduplicationRecipe(BaseRecipe):
                 parent[root_j] = root_i
 
         pairs_matched = []
-        for i in range(n):
-            s1 = composite_strings[i]
-            if not s1.strip():
-                continue
-            for j in range(i + 1, n):
-                s2 = composite_strings[j]
-                if not s2.strip():
+        if n <= 100:
+            for i in range(n):
+                s1 = composite_strings[i]
+                if not s1.strip():
                     continue
+                for j in range(i + 1, n):
+                    s2 = composite_strings[j]
+                    if not s2.strip():
+                        continue
+                    len1, len2 = len(s1), len(s2)
+                    if max(len1, len2) > 0 and min(len1, len2) / max(len1, len2) < (threshold * 0.7):
+                        continue
+                    sim = _token_sort_ratio(s1, s2) if algorithm == "Token Sort Ratio" else _sequence_similarity(s1, s2, case_sensitive=case_sensitive)
+                    if sim >= threshold:
+                        union(i, j)
+                        pairs_matched.append({"row_a": i, "row_b": j, "similarity": round(sim, 4)})
+        else:
+            # Token and character n-gram inverted index blocking to avoid O(N^2) comparison bottleneck
+            import re
+            from collections import defaultdict
+            block_map = defaultdict(list)
+            for idx in range(n):
+                s = composite_strings[idx]
+                tokens = re.findall(r"[a-zA-Z0-9]+", s.lower() if not case_sensitive else s)
+                blocks = set(tokens)
+                for tok in tokens:
+                    if len(tok) >= 3:
+                        for k in range(len(tok) - 2):
+                            blocks.add(tok[k:k+3])
+                for b in blocks:
+                    block_map[b].append(idx)
 
-                # Fast length heuristic check
+            candidate_pairs = set()
+            max_cluster_size = max(50, int(n * 0.3))
+            for b, idxs in block_map.items():
+                if 1 < len(idxs) <= max_cluster_size:
+                    for i_pos, i in enumerate(idxs):
+                        for j in idxs[i_pos + 1:]:
+                            candidate_pairs.add((min(i, j), max(i, j)))
+
+            for i, j in candidate_pairs:
+                s1 = composite_strings[i]
+                s2 = composite_strings[j]
                 len1, len2 = len(s1), len(s2)
                 if max(len1, len2) > 0 and min(len1, len2) / max(len1, len2) < (threshold * 0.7):
                     continue
-
-                if algorithm == "Token Sort Ratio":
-                    sim = _token_sort_ratio(s1, s2)
-                else:
-                    sim = _sequence_similarity(s1, s2, case_sensitive=case_sensitive)
-
+                sim = _token_sort_ratio(s1, s2) if algorithm == "Token Sort Ratio" else _sequence_similarity(s1, s2, case_sensitive=case_sensitive)
                 if sim >= threshold:
                     union(i, j)
                     pairs_matched.append({"row_a": i, "row_b": j, "similarity": round(sim, 4)})

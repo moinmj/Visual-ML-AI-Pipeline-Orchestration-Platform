@@ -14,7 +14,13 @@ class Settings(BaseSettings):
 
     # Database
     DATABASE_URL: str = "sqlite+aiosqlite:///./data/platform.db"
-
+    DB_POOL_SIZE: int = 20
+    DB_MAX_OVERFLOW: int = 30
+    DB_POOL_TIMEOUT: int = 60
+    DB_POOL_RECYCLE: int = 1800
+    UM_DB_POOL_SIZE: int = 15
+    UM_DB_MAX_OVERFLOW: int = 20
+ 
     # Storage Settings
     STORAGE_BACKEND: str = "ozone"  # datasets are always stored in Ozone (OZONE_PREFIX folder)
     LOCAL_STORAGE_DIR: str = "./data/storage"
@@ -99,6 +105,33 @@ class Settings(BaseSettings):
     DRUID_OVERLORD_PORT: Optional[int] = 8081
     DRUID_COORDINATOR_PORT: Optional[int] = 8081
 
+    # OAuth & Integration Credentials
+    DISCORD_CLIENT_ID: Optional[str] = None
+    DISCORD_CLIENT_SECRET: Optional[str] = None
+    DISCORD_REDIRECT_URI: Optional[str] = None
+    TEAMS_CLIENT_ID: Optional[str] = None
+    TEAMS_CLIENT_SECRET: Optional[str] = None
+    TEAMS_TENANT_ID: Optional[str] = None
+    TEAMS_REDIRECT_URI: Optional[str] = None
+    AZURE_CLIENT_ID: Optional[str] = None
+    AZURE_CLIENT_SECRET: Optional[str] = None
+    AZURE_TENANT_ID: Optional[str] = None
+
+    # SMS & Twilio Credentials
+    SMS_PROVIDER: Optional[str] = "twilio"
+    TWILIO_ACCOUNT_SID: Optional[str] = None
+    TWILIO_AUTH_TOKEN: Optional[str] = None
+    TWILIO_PHONE_NUMBER: Optional[str] = None
+
+    # Maps & Location API Keys
+    GOOGLE_MAPS_API_KEY: Optional[str] = None
+    MAPBOX_ACCESS_TOKEN: Optional[str] = None
+
+    # CRM & Business Integration API Keys
+    SALESFORCE_ACCESS_TOKEN: Optional[str] = None
+    SALESFORCE_INSTANCE_URL: Optional[str] = None
+    HUBSPOT_ACCESS_TOKEN: Optional[str] = None
+ 
     model_config = {
         "env_file": ".env",
         "extra": "ignore"
