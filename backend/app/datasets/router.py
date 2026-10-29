@@ -16,7 +16,11 @@ from backend.app.datasets.service import dataset_service
 # Every route here requires a valid Bearer token. The tenant is ALWAYS taken from
 # the token (user.tenant_id) - never from the path, query or body - so a caller can
 # only ever list, preview, register or delete their own tenant's data.
-router = APIRouter(prefix="/datasets", tags=["Datasets"])
+router = APIRouter(
+    prefix="/datasets",
+    tags=["Datasets"],
+    dependencies=[Depends(get_current_user)],
+)
 
 CurrentUser = Annotated[TokenData, Depends(get_current_user)]
 

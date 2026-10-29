@@ -48,7 +48,16 @@ def _get_source_engine():
     url = _to_sync_url(raw_url)
     if url not in _source_engine_cache:
         connect_args = {"check_same_thread": False} if "sqlite" in url else {}
-        _source_engine_cache[url] = create_engine(url, connect_args=connect_args)
+        engine_kwargs = {"connect_args": connect_args}
+        if "sqlite" not in url:
+            engine_kwargs.update({
+                "pool_pre_ping": True,
+                "pool_recycle": getattr(settings, "DB_POOL_RECYCLE", 1800),
+                "pool_size": getattr(settings, "DB_POOL_SIZE", 20),
+                "max_overflow": getattr(settings, "DB_MAX_OVERFLOW", 30),
+                "pool_timeout": getattr(settings, "DB_POOL_TIMEOUT", 60),
+            })
+        _source_engine_cache[url] = create_engine(url, **engine_kwargs)
     return _source_engine_cache[url]
 
 

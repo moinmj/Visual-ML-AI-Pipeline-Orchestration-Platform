@@ -1,4 +1,5 @@
 import os
+import asyncio
 import json
 import time
 import shutil
@@ -427,8 +428,9 @@ class NodeStepExecutor:
                                     ds_obj.storage_path,
                                     tenant_id if tenant_id is not None else ds_obj.tenant_id
                                 )
-                                if sample_size:
-                                    load_df = load_df.head(sample_size)
+                                effective_cap = sample_size or 5000
+                                if effective_cap and len(load_df) > effective_cap:
+                                    load_df = load_df.head(effective_cap)
                                 node_inputs["dataframe"] = load_df
                         except Exception as ex:
                             logger.warning(f"Could not preload dataset '{dataset_id}': {ex}")
@@ -532,7 +534,12 @@ class NodeStepExecutor:
             try:
                 # Session Context for model/scaler propagation
                 session_context = dict(node_inputs)
-                outputs = recipe.execute(inputs=node_inputs, config=with_tenant_config(merged_config), context=session_context)
+                outputs = await asyncio.to_thread(
+                    recipe.execute,
+                    inputs=node_inputs,
+                    config=with_tenant_config(merged_config),
+                    context=session_context
+                )
                 duration_ms = round((time.time() - n_start) * 1000.0, 2)
 
                 # Save output to session cache

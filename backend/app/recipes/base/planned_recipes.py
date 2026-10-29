@@ -174,7 +174,7 @@ _PLANNED: List[Tuple[str, str, str, List[Tuple[str, str, str, str]]]] = [
         ("automl_search", "AutoML / Hyperparameter Search", "trainer", "Automatically tries multiple algorithms and settings and picks the best model."),
         ("hyperparameter_tuner", "Hyperparameter Tuner (standalone node)", "trainer", "Searches the best hyperparameters for a chosen algorithm (grid, random or Bayesian)."),
         ("ensemble_stacker", "Ensemble Stacker", "trainer", "Combines several models into a stacked ensemble for better accuracy."),
-        ("model_calibration", "Model Calibration (Platt / Isotonic)", "model_transform", "Calibrates predicted probabilities so they match real-world frequencies."),
+        #("model_calibration", "Model Calibration (Platt / Isotonic)", "model_transform", "Calibrates predicted probabilities so they match real-world frequencies."),
     ]),
     ("Modeling", "Specialized Models", "training", [
         ("survival_model", "Survival / Time-to-Event Model (Cox)", "trainer", "Models time until an event (e.g. churn, failure) with Cox proportional hazards."),
@@ -182,7 +182,7 @@ _PLANNED: List[Tuple[str, str, str, List[Tuple[str, str, str, str]]]] = [
         ("next_best_offer", "Market Basket / Next-Best-Offer Recommender", "unsupervised", "Suggests the next product or offer for each customer."),
         ("bayesian_ab_estimator", "Bayesian A/B Test Estimator", "monitor", "Estimates the probability that variant B beats A using Bayesian statistics."),
         ("graph_network_analysis", "Graph / Network Analysis", "transform", "Computes network metrics (centrality, communities) from edge lists."),
-        ("model_explainability", "Model Explainability (SHAP / LIME)", "evaluate", "Explains which features drive each prediction using SHAP or LIME."),
+        #("model_explainability", "Model Explainability (SHAP / LIME)", "evaluate", "Explains which features drive each prediction using SHAP or LIME."),
     ]),
     ("Modeling", "Computer Vision & Audio", "vision_audio", [
         #("object_detection", "Object Detection", "transform", "Detects and locates objects in images with bounding boxes."),
@@ -235,8 +235,8 @@ _PLANNED: List[Tuple[str, str, str, List[Tuple[str, str, str, str]]]] = [
         ("mapbox_connector", "Mapbox Connector", "transform", "Enriches rows with geocodes and routing data from Mapbox."),
     ]),
     ("Apps & Integrations", "CRM / Support / Business", "integrations", [
-        ("salesforce_connector", "Salesforce CRM Connector", "source", "Reads Salesforce objects such as accounts, leads and opportunities."),
-        ("hubspot_connector", "HubSpot CRM Connector", "source", "Reads HubSpot contacts, companies and deals."),
+
+
         ("zendesk_connector", "Zendesk Connector", "source", "Reads Zendesk tickets, users and satisfaction ratings."),
         ("freshdesk_connector", "Freshdesk Connector", "source", "Reads Freshdesk tickets and contacts."),
         ("intercom_connector", "Intercom Connector", "source", "Reads Intercom conversations, users and companies."),

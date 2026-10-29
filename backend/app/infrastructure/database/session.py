@@ -35,7 +35,10 @@ else:
         echo=False,
         future=True,
         pool_pre_ping=True,
-        pool_recycle=1800,
+        pool_recycle=getattr(settings, "DB_POOL_RECYCLE", 1800),
+        pool_size=getattr(settings, "DB_POOL_SIZE", 20),
+        max_overflow=getattr(settings, "DB_MAX_OVERFLOW", 30),
+        pool_timeout=getattr(settings, "DB_POOL_TIMEOUT", 60),
     )
 
 # Async session factory

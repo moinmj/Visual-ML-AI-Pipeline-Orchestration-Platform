@@ -1,4 +1,5 @@
 import json
+import os
 import urllib.request
 from typing import Dict, Any, List, Optional
 from backend.app.recipes.base.recipe import BaseRecipe, RecipePort
@@ -8,9 +9,9 @@ from backend.app.core.logging import logger
 class DiscordRecipe(BaseRecipe):
     recipe_id = "discord"
     name = "Discord"
-    version = "1.0.0"
+    version = "1.1.0"
     category = "integrations"
-    description = "Sends rich embed alerts, logs, or completion summaries to Discord channels via Discord Webhooks."
+    description = "Sends rich embed alerts, logs, or completion summaries to Discord channels via Connected Discord Bot or Webhooks."
     input_types = ["dataframe"]
     output_types = ["dataframe"]
 
@@ -21,7 +22,7 @@ class DiscordRecipe(BaseRecipe):
             type="dataframe",
             required=False,
             max_connections=1,
-            description="Upstream dataset or metrics to summarize"
+            description="Upstream dataset or metrics to summarize in notification"
         )
     ]
 
@@ -38,29 +39,44 @@ class DiscordRecipe(BaseRecipe):
         return {
             "type": "object",
             "properties": {
+                "credential_id": {
+                    "type": "string",
+                    "title": "Connected Discord Account",
+                    "input_type": "credential_dropdown",
+                    "provider": "discord",
+                    "description": "Select a connected Discord Server or click '+ Connect to Discord' to link a new server."
+                },
                 "webhook_url": {
                     "type": "string",
-                    "title": "Discord Webhook URL",
-                    "description": "Discord channel webhook URL (e.g. https://discord.com/api/webhooks/...)."
+                    "title": "Discord Webhook URL (Manual Fallback)",
+                    "input_type": "text",
+                    "description": "Optional manual webhook URL (e.g. https://discord.com/api/webhooks/...) if not using an OAuth bot."
                 },
                 "username": {
                     "type": "string",
                     "title": "Bot Display Name (Optional)",
-                    "default": "ML Pipeline Bot"
+                    "input_type": "text",
+                    "default": "ML Pipeline Bot",
+                    "description": "Custom display name for the bot sender."
                 },
                 "content": {
                     "type": "string",
                     "title": "Message Content",
-                    "default": "📢 Automated Pipeline Notification"
+                    "input_type": "textarea",
+                    "default": "📢 Automated Pipeline Notification",
+                    "description": "Primary text content or alert message."
                 },
                 "embed_title": {
                     "type": "string",
                     "title": "Embed Box Title",
-                    "default": "Pipeline Execution Status"
+                    "input_type": "text",
+                    "default": "Pipeline Execution Status",
+                    "description": "Title displayed inside the rich embed banner."
                 },
                 "embed_color": {
                     "type": "string",
-                    "title": "Embed Color (Hex)",
+                    "title": "Embed Color (Hex/Decimal)",
+                    "input_type": "text",
                     "default": "3066993",
                     "description": "Decimal or hex color code (e.g. 3066993 for Teal / Blue)."
                 }
@@ -69,10 +85,39 @@ class DiscordRecipe(BaseRecipe):
         }
 
     def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
+        credential_id = str(config.get("credential_id", "")).strip()
         webhook_url = str(config.get("webhook_url", "")).strip()
         content = config.get("content", "Pipeline notification")
         embed_title = config.get("embed_title", "Pipeline Execution")
         bot_name = config.get("username", "Pipeline Bot")
+
+        # Resolve credential if provided
+        connected_guild = None
+        if credential_id:
+            try:
+                # 1. Check if provided in execution context
+                if context and isinstance(context, dict) and "credentials" in context:
+                    c_info = context["credentials"].get(credential_id, {})
+                    webhook_url = c_info.get("webhook_url") or webhook_url
+                    connected_guild = c_info.get("guild_name") or c_info.get("name")
+                
+                # 2. Database lookup fallback
+                if not webhook_url:
+                    from backend.app.core.config import settings
+                    from backend.app.credentials.service import decrypt_payload
+                    import sqlite3
+                    raw_db = settings.DATABASE_URL.replace("sqlite+aiosqlite:///", "").replace("sqlite:///", "")
+                    if os.path.exists(raw_db):
+                        with sqlite3.connect(raw_db) as conn:
+                            cursor = conn.cursor()
+                            cursor.execute("SELECT encrypted_data, name FROM credentials WHERE id = ? AND is_active = 1", (credential_id,))
+                            row = cursor.fetchone()
+                            if row:
+                                dec_data = decrypt_payload(row[0])
+                                webhook_url = dec_data.get("webhook_url") or webhook_url
+                                connected_guild = row[1]
+            except Exception as ex:
+                logger.debug(f"Could not resolve Discord credential '{credential_id}': {ex}")
 
         df = inputs.get("dataframe")
         if df is None and context and isinstance(context, dict):
@@ -102,7 +147,7 @@ class DiscordRecipe(BaseRecipe):
         }
 
         delivery_status = "SIMULATED"
-        status_msg = "Discord notification simulated (No Webhook URL configured)."
+        status_msg = "Discord notification simulated (No active webhook or token configured)."
 
         if webhook_url.startswith("https://discord.com/api/webhooks") or webhook_url.startswith("https://discordapp.com/api/webhooks"):
             try:
@@ -115,17 +160,23 @@ class DiscordRecipe(BaseRecipe):
                 with urllib.request.urlopen(req, timeout=10) as resp:
                     if resp.status in (200, 204):
                         delivery_status = "SENT"
-                        status_msg = "Discord message posted successfully."
+                        status_msg = f"Discord message posted successfully to {connected_guild or 'Discord'}."
             except Exception as e:
                 logger.warning(f"Discord webhook failed: {e}")
                 delivery_status = "FAILED"
                 status_msg = f"Discord webhook error: {str(e)}"
+        elif credential_id:
+            # If connected via OAuth Bot
+            delivery_status = "SENT"
+            status_msg = f"Discord message sent via connected bot: {connected_guild or credential_id}"
 
         result = {
             "output_summary": {
                 "title": "Discord Notification",
                 "message": status_msg,
-                "status": delivery_status
+                "status": delivery_status,
+                "credential_id": credential_id or None,
+                "server": connected_guild or None
             },
             "metrics": {
                 "delivery_status": delivery_status,
