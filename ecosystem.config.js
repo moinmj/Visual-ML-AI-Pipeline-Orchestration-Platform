@@ -7,7 +7,7 @@ module.exports = {
 
       script: "/home/serverguy/apps/Datalect_POC/AI_POC/venv/bin/python",
 
-      args: "-m uvicorn backend.app.main:app --host 127.0.0.1 --port 9368",
+      args: "-m uvicorn backend.app.main:app --host 127.0.0.1 --port 9369",
 
       interpreter: "none",
 
