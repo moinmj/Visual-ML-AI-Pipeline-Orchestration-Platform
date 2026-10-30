@@ -195,7 +195,7 @@ class DatasetService:
             else:
                 dt = now_utc
 
-            folder_label = f"ml-workflow/{folder}" if scope == "ml_workflow" else "all_tenant_data"
+            folder_label = f"ml-workflow/{folder}" if scope == "ml_workflow" else ("bucket" if scope == "bucket" else "all_tenant_data")
             results.append({
                 "id": key,
                 "name": stem,
