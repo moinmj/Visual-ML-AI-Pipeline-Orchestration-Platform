@@ -59,6 +59,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "bias_fairness_audit": ("Evaluation & Governance", "Fairness & Compliance"),
     "fairness_slicing_report": ("Evaluation & Governance", "Fairness & Compliance"),
     "audit_log_exporter": ("Evaluation & Governance", "Fairness & Compliance"),
+    "model_card_generator": ("Evaluation & Governance", "Fairness & Compliance"),
     "model_explainability": ("Modeling", "Specialized Models"),
     "shap_explainer": ("Modeling", "Specialized Models"),
     "survival_model": ("Modeling", "Specialized Models"),
@@ -321,6 +322,11 @@ class RecipeRegistry:
             "compliance_trail": "audit_log_exporter",
             "audit_exporter": "audit_log_exporter",
             "lineage_exporter": "audit_log_exporter",
+            "model_card": "model_card_generator",
+            "model_cards": "model_card_generator",
+            "model_documentation": "model_card_generator",
+            "model_card_report": "model_card_generator",
+            "mitchell_model_card": "model_card_generator",
         }
 
 
