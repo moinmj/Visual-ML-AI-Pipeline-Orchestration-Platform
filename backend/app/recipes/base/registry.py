@@ -10,6 +10,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "email_trigger_imap": ("Ingestion & Orchestration", "Triggers"),
     "csv_loader": ("Ingestion & Orchestration", "Load"),
     "export_writer": ("Ingestion & Orchestration", "Output"),
+    "api_response_endpoint": ("Ingestion & Orchestration", "Output"),
     "dataset_join": ("Data Preparation & Transformation", "Combine/Structure"),
     "column_selector": ("Data Preparation & Transformation", "Combine/Structure"),
     "data_type_converter": ("Data Preparation & Transformation", "Cleanup & Quality"),
@@ -66,6 +67,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "ocr": ("Modeling", "Computer Vision & Audio"),
     "image_embedding_generator": ("Modeling", "Computer Vision & Audio"),
     "video_object_tracking": ("Modeling", "Computer Vision & Audio"),
+    "object_removal": ("Modeling", "Computer Vision & Audio"),
     "speech_to_text": ("Modeling", "Computer Vision & Audio"),
     "text_to_speech": ("Modeling", "Computer Vision & Audio"),
     "mlflow_tracker": ("Evaluation & Governance", "Tracking & Registry"),
@@ -101,6 +103,14 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "twitter_connector": ("Apps & Integrations", "Social & Comms"),
     "reddit_connector": ("Apps & Integrations", "Social & Comms"),
     "linkedin_connector": ("Apps & Integrations", "Social & Comms"),
+    "ms_teams_notifier": ("Apps & Integrations", "Communication"),
+    "sms_sender": ("Apps & Integrations", "Social & Comms"),
+    "push_notification_sender": ("Apps & Integrations", "Social & Comms"),
+    "twilio_connector": ("Apps & Integrations", "Social & Comms"),
+    "google_maps_connector": ("Apps & Integrations", "Maps & Location"),
+    "mapbox_connector": ("Apps & Integrations", "Maps & Location"),
+    "salesforce_connector": ("Apps & Integrations", "CRM / Support / Business"),
+    "hubspot_connector": ("Apps & Integrations", "CRM / Support / Business"),
 
     # Unsupervised & Dimensionality Reduction
     "clustering": ("Modeling", "Unsupervised & Dimensionality Reduction"),
@@ -195,6 +205,17 @@ class RecipeRegistry:
             "x": "twitter_connector",
             "reddit": "reddit_connector",
             "linkedin": "linkedin_connector",
+<<<<<<< HEAD
+=======
+            "salesforce": "salesforce_connector",
+            "sfdc": "salesforce_connector",
+            "hubspot": "hubspot_connector",
+            "msteams": "ms_teams_notifier",
+            "teams": "ms_teams_notifier",
+            "twilio": "twilio_connector",
+            "google_maps": "google_maps_connector",
+            "mapbox": "mapbox_connector",
+>>>>>>> origin/development
             "embeddings": "embedding_generator",
             "vector_embedder": "embedding_generator",
             "vector_search": "vector_db_indexer",
@@ -281,6 +302,10 @@ class RecipeRegistry:
             "community_detection": "graph_network_analysis",
             "graph_centrality": "graph_network_analysis",
             "graph_analytics": "graph_network_analysis",
+            "api_endpoint": "api_response_endpoint",
+            "webhook_response": "api_response_endpoint",
+            "api_response": "api_response_endpoint",
+            "flow_endpoint": "api_response_endpoint",
         }
 
 

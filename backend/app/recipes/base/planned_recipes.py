@@ -235,8 +235,8 @@ _PLANNED: List[Tuple[str, str, str, List[Tuple[str, str, str, str]]]] = [
         ("mapbox_connector", "Mapbox Connector", "transform", "Enriches rows with geocodes and routing data from Mapbox."),
     ]),
     ("Apps & Integrations", "CRM / Support / Business", "integrations", [
-        ("salesforce_connector", "Salesforce CRM Connector", "source", "Reads Salesforce objects such as accounts, leads and opportunities."),
-        ("hubspot_connector", "HubSpot CRM Connector", "source", "Reads HubSpot contacts, companies and deals."),
+
+
         ("zendesk_connector", "Zendesk Connector", "source", "Reads Zendesk tickets, users and satisfaction ratings."),
         ("freshdesk_connector", "Freshdesk Connector", "source", "Reads Freshdesk tickets and contacts."),
         ("intercom_connector", "Intercom Connector", "source", "Reads Intercom conversations, users and companies."),

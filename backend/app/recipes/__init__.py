@@ -1,6 +1,7 @@
 from backend.app.recipes.base.registry import recipe_registry
 from backend.app.recipes.ingestion.csv_loader import CSVLoaderRecipe
 from backend.app.recipes.ingestion.export_writer import ExportWriterRecipe
+from backend.app.recipes.ingestion.api_response_endpoint import ApiResponseEndpointRecipe
 from backend.app.recipes.preprocessing.custom_python_step import CustomPythonStepRecipe
 from backend.app.recipes.preprocessing.missing_values import MissingValueImputerRecipe
 from backend.app.recipes.preprocessing.scaling import FeatureScalerRecipe
@@ -111,6 +112,14 @@ from backend.app.recipes.integrations.open_data_api import OpenDataApiRecipe
 from backend.app.recipes.integrations.twitter_connector import TwitterConnectorRecipe
 from backend.app.recipes.integrations.reddit_connector import RedditConnectorRecipe
 from backend.app.recipes.integrations.linkedin_connector import LinkedInConnectorRecipe
+from backend.app.recipes.integrations.ms_teams_notifier import MSTeamsNotifierRecipe
+from backend.app.recipes.integrations.sms_sender import SMSSenderRecipe
+from backend.app.recipes.integrations.push_notification_sender import PushNotificationSenderRecipe
+from backend.app.recipes.integrations.twilio_connector import TwilioConnectorRecipe
+from backend.app.recipes.integrations.google_maps_connector import GoogleMapsConnectorRecipe
+from backend.app.recipes.integrations.mapbox_connector import MapboxConnectorRecipe
+from backend.app.recipes.integrations.salesforce_connector import SalesforceConnectorRecipe
+from backend.app.recipes.integrations.hubspot_connector import HubSpotConnectorRecipe
 
 # Unsupervised & Dimensionality Reduction Recipes
 from backend.app.recipes.unsupervised.clustering import ClusteringRecipe
@@ -137,6 +146,29 @@ from backend.app.recipes.vision.image_embedding import ImageEmbeddingRecipe
 from backend.app.recipes.vision.video_tracking import VideoObjectTrackingRecipe
 from backend.app.recipes.vision.speech_to_text import SpeechToTextRecipe
 from backend.app.recipes.vision.text_to_speech import TextToSpeechRecipe
+from backend.app.recipes.vision.object_removal import ObjectRemovalRecipe
+
+# Agents & LLM Orchestration recipes
+from backend.app.recipes.agents.prompt_template_manager import PromptTemplateManagerRecipe
+from backend.app.recipes.agents.conversation_memory import ConversationMemoryRecipe
+from backend.app.recipes.agents.structured_output_enforcer import StructuredOutputEnforcerRecipe
+from backend.app.recipes.agents.embedding_generator import EmbeddingGeneratorRecipe
+from backend.app.recipes.agents.vector_db_indexer import VectorDbIndexerRecipe
+from backend.app.recipes.agents.rag_pipeline import RagPipelineRecipe
+from backend.app.recipes.agents.agent_guardrail import AgentGuardrailRecipe
+from backend.app.recipes.agents.cost_aware_model_router import CostAwareModelRouterRecipe
+from backend.app.recipes.agents.llm_evaluation import LlmEvaluationRecipe
+from backend.app.recipes.agents.fine_tuning_trigger import FineTuningTriggerRecipe
+from backend.app.recipes.agents.llm_agent import LlmAgentRecipe
+from backend.app.recipes.agents.multi_agent_orchestrator import MultiAgentOrchestratorRecipe
+from backend.app.recipes.agents.agent_handoff_router import AgentHandoffRouterRecipe
+from backend.app.recipes.agents.web_browsing_agent import WebBrowsingAgentRecipe
+from backend.app.recipes.agents.document_qa_agent import DocumentQaAgentRecipe
+from backend.app.recipes.agents.multimodal_agent import MultimodalAgentRecipe
+from backend.app.recipes.agents.code_execution_sandbox import CodeExecutionSandboxRecipe
+from backend.app.recipes.agents.chatbot_endpoint import ChatbotEndpointRecipe
+
+
 
 # Agents & LLM Orchestration recipes
 from backend.app.recipes.agents.prompt_template_manager import PromptTemplateManagerRecipe
@@ -163,6 +195,7 @@ from backend.app.recipes.agents.chatbot_endpoint import ChatbotEndpointRecipe
 def register_all_recipes():
     recipe_registry.register(CSVLoaderRecipe())
     recipe_registry.register(ExportWriterRecipe())
+    recipe_registry.register(ApiResponseEndpointRecipe())
     recipe_registry.register(DatasetJoinRecipe())
     recipe_registry.register(WebhookTriggerRecipe())
     recipe_registry.register(CronScheduleTriggerRecipe())
@@ -271,6 +304,14 @@ def register_all_recipes():
     recipe_registry.register(TwitterConnectorRecipe())
     recipe_registry.register(RedditConnectorRecipe())
     recipe_registry.register(LinkedInConnectorRecipe())
+    recipe_registry.register(MSTeamsNotifierRecipe())
+    recipe_registry.register(SMSSenderRecipe())
+    recipe_registry.register(PushNotificationSenderRecipe())
+    recipe_registry.register(TwilioConnectorRecipe())
+    recipe_registry.register(GoogleMapsConnectorRecipe())
+    recipe_registry.register(MapboxConnectorRecipe())
+    recipe_registry.register(SalesforceConnectorRecipe())
+    recipe_registry.register(HubSpotConnectorRecipe())
 
     # Unsupervised & Dimensionality Reduction
     recipe_registry.register(ClusteringRecipe())
@@ -293,6 +334,7 @@ def register_all_recipes():
     recipe_registry.register(OCRRecipe())
     recipe_registry.register(ImageEmbeddingRecipe())
     recipe_registry.register(VideoObjectTrackingRecipe())
+    recipe_registry.register(ObjectRemovalRecipe())
     recipe_registry.register(SpeechToTextRecipe())
     recipe_registry.register(TextToSpeechRecipe())
 

@@ -55,6 +55,7 @@ from backend.app.core.security import get_current_user, require_role, require_pe
 from backend.app.core.tenant_context import get_current_tenant_id, tenant_cache_dir, set_current_tenant_id
 
 from backend.app.datasets.models import Dataset
+from backend.app.workflows.endpoint_router import endpoint_router  # noqa: F401
 
 # Tenant isolation: every route needs a valid Bearer token (router-level dependency),
 # and the caller's tenant (from the token) is applied automatically to every
