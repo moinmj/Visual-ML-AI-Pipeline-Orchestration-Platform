@@ -170,6 +170,28 @@ from backend.app.recipes.agents.chatbot_endpoint import ChatbotEndpointRecipe
 
 
 
+# Agents & LLM Orchestration recipes
+from backend.app.recipes.agents.prompt_template_manager import PromptTemplateManagerRecipe
+from backend.app.recipes.agents.conversation_memory import ConversationMemoryRecipe
+from backend.app.recipes.agents.structured_output_enforcer import StructuredOutputEnforcerRecipe
+from backend.app.recipes.agents.embedding_generator import EmbeddingGeneratorRecipe
+from backend.app.recipes.agents.vector_db_indexer import VectorDbIndexerRecipe
+from backend.app.recipes.agents.rag_pipeline import RagPipelineRecipe
+from backend.app.recipes.agents.agent_guardrail import AgentGuardrailRecipe
+from backend.app.recipes.agents.cost_aware_model_router import CostAwareModelRouterRecipe
+from backend.app.recipes.agents.llm_evaluation import LlmEvaluationRecipe
+from backend.app.recipes.agents.fine_tuning_trigger import FineTuningTriggerRecipe
+from backend.app.recipes.agents.llm_agent import LlmAgentRecipe
+from backend.app.recipes.agents.multi_agent_orchestrator import MultiAgentOrchestratorRecipe
+from backend.app.recipes.agents.agent_handoff_router import AgentHandoffRouterRecipe
+from backend.app.recipes.agents.web_browsing_agent import WebBrowsingAgentRecipe
+from backend.app.recipes.agents.document_qa_agent import DocumentQaAgentRecipe
+from backend.app.recipes.agents.multimodal_agent import MultimodalAgentRecipe
+from backend.app.recipes.agents.code_execution_sandbox import CodeExecutionSandboxRecipe
+from backend.app.recipes.agents.chatbot_endpoint import ChatbotEndpointRecipe
+
+
+
 def register_all_recipes():
     recipe_registry.register(CSVLoaderRecipe())
     recipe_registry.register(ExportWriterRecipe())
