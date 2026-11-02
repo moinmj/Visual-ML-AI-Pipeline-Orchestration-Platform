@@ -194,7 +194,7 @@ _PLANNED: List[Tuple[str, str, str, List[Tuple[str, str, str, str]]]] = [
 
     # ------------------------------------------------------------------ 4. Evaluation & Governance (10)
     ("Evaluation & Governance", "Fairness & Compliance", "governance", [
-        ("bias_fairness_audit", "Bias & Fairness Audit", "evaluate", "Measures model bias across groups using standard fairness metrics."),
+        #("bias_fairness_audit", "Bias & Fairness Audit", "evaluate", "Measures model bias across groups using standard fairness metrics."),
         ("fairness_slicing_report", "Fairness Slicing Report (by protected group)", "evaluate", "Breaks down model performance by protected attributes (e.g. gender, age band)."),
         ("audit_log_exporter", "Audit Log / Compliance Trail Exporter", "sink", "Exports a compliance audit trail of pipeline runs, data and model versions."),
         ("model_card_generator", "Model Card Generator", "model_report", "Generates a model card documenting purpose, data, metrics and limitations."),

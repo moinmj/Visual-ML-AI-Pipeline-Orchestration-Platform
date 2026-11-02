@@ -56,6 +56,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "ab_testing_framework": ("Evaluation & Governance", "Evaluation"),
     "bayesian_ab_estimator": ("Evaluation & Governance", "Evaluation"),
     "champion_challenger": ("Evaluation & Governance", "Evaluation"),
+    "bias_fairness_audit": ("Evaluation & Governance", "Fairness & Compliance"),
     "model_explainability": ("Modeling", "Specialized Models"),
     "shap_explainer": ("Modeling", "Specialized Models"),
     "survival_model": ("Modeling", "Specialized Models"),
@@ -303,6 +304,11 @@ class RecipeRegistry:
             "webhook_response": "api_response_endpoint",
             "api_response": "api_response_endpoint",
             "flow_endpoint": "api_response_endpoint",
+            "fairness_audit": "bias_fairness_audit",
+            "bias_audit": "bias_fairness_audit",
+            "disparate_impact": "bias_fairness_audit",
+            "demographic_parity": "bias_fairness_audit",
+            "equal_opportunity": "bias_fairness_audit",
         }
 
 
