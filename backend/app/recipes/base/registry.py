@@ -205,8 +205,6 @@ class RecipeRegistry:
             "x": "twitter_connector",
             "reddit": "reddit_connector",
             "linkedin": "linkedin_connector",
-<<<<<<< HEAD
-=======
             "salesforce": "salesforce_connector",
             "sfdc": "salesforce_connector",
             "hubspot": "hubspot_connector",
@@ -215,7 +213,6 @@ class RecipeRegistry:
             "twilio": "twilio_connector",
             "google_maps": "google_maps_connector",
             "mapbox": "mapbox_connector",
->>>>>>> origin/development
             "embeddings": "embedding_generator",
             "vector_embedder": "embedding_generator",
             "vector_search": "vector_db_indexer",
