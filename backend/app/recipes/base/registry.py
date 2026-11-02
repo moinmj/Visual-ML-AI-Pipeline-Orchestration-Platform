@@ -57,6 +57,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "bayesian_ab_estimator": ("Evaluation & Governance", "Evaluation"),
     "champion_challenger": ("Evaluation & Governance", "Evaluation"),
     "bias_fairness_audit": ("Evaluation & Governance", "Fairness & Compliance"),
+    "fairness_slicing_report": ("Evaluation & Governance", "Fairness & Compliance"),
     "model_explainability": ("Modeling", "Specialized Models"),
     "shap_explainer": ("Modeling", "Specialized Models"),
     "survival_model": ("Modeling", "Specialized Models"),
@@ -309,6 +310,11 @@ class RecipeRegistry:
             "disparate_impact": "bias_fairness_audit",
             "demographic_parity": "bias_fairness_audit",
             "equal_opportunity": "bias_fairness_audit",
+            "fairness_slicing": "fairness_slicing_report",
+            "demographic_slicing": "fairness_slicing_report",
+            "slice_evaluator": "fairness_slicing_report",
+            "model_slicing": "fairness_slicing_report",
+            "performance_slicing": "fairness_slicing_report",
         }
 
 

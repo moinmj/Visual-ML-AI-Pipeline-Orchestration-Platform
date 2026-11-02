@@ -44,6 +44,7 @@ from backend.app.recipes.evaluation.bayesian_ab_estimator import BayesianABEstim
 from backend.app.recipes.evaluation.champion_challenger import ChampionChallengerRecipe
 from backend.app.recipes.evaluation.model_explainability import ModelExplainabilityRecipe
 from backend.app.recipes.evaluation.bias_fairness_audit import BiasFairnessAuditRecipe
+from backend.app.recipes.evaluation.fairness_slicing_report import FairnessSlicingReportRecipe
 from backend.app.recipes.anomaly.isolation_forest import IsolationForestRecipe
 from backend.app.recipes.anomaly.statistical_guardrail import StatisticalGuardrailRecipe
 from backend.app.recipes.forecasting.lag_features import LagFeatureEngineeringRecipe
@@ -268,6 +269,7 @@ def register_all_recipes():
     recipe_registry.register(ChampionChallengerRecipe())
     recipe_registry.register(ModelExplainabilityRecipe())
     recipe_registry.register(BiasFairnessAuditRecipe())
+    recipe_registry.register(FairnessSlicingReportRecipe())
     recipe_registry.register(IsolationForestRecipe())
     recipe_registry.register(StatisticalGuardrailRecipe())
     recipe_registry.register(LagFeatureEngineeringRecipe())
