@@ -1,3 +1,5 @@
+import re
+import json
 import pandas as pd
 import numpy as np
 from typing import Dict, Any, List, Optional, Union, Tuple
@@ -383,15 +385,35 @@ class DatasetJoinRecipe(BaseRecipe):
                 "<=": "<=", "lte": "<="
             }
 
+            root_op = str(config.get("operator", "=")).strip()
+            mapped_root_op = op_map.get(root_op.lower(), "=")
+
+            if isinstance(conditions, str):
+                try:
+                    import json
+                    loaded = json.loads(conditions)
+                    if isinstance(loaded, (list, dict)):
+                        conditions = loaded if isinstance(loaded, list) else [loaded]
+                except Exception:
+                    # String like "col_a > col_b" or "col_a != col_b"
+                    cond_items = [s.strip() for s in conditions.split(",") if s.strip()]
+                    parsed_from_str = []
+                    for itm in cond_items:
+                        m = re.match(r"^([\w\.\-]+)\s*([=><!]+)\s*([\w\.\-]+)$", itm)
+                        if m:
+                            parsed_from_str.append({"left": m.group(1), "operator": m.group(2), "right": m.group(3)})
+                    if parsed_from_str:
+                        conditions = parsed_from_str
+
             parsed_conditions: List[Dict[str, str]] = []
 
             if conditions and isinstance(conditions, list):
                 for c in conditions:
                     if isinstance(c, dict):
-                        l_col = c.get("left") or c.get("left_column")
-                        r_col = c.get("right") or c.get("right_column")
-                        raw_op = str(c.get("operator", "=")).strip()
-                        op = op_map.get(raw_op.lower(), "=")
+                        l_col = c.get("left") or c.get("left_column") or c.get("left_key") or c.get("left_col") or c.get("col1")
+                        r_col = c.get("right") or c.get("right_column") or c.get("right_key") or c.get("right_col") or c.get("col2")
+                        raw_op = str(c.get("operator") or config.get("operator") or "=").strip()
+                        op = op_map.get(raw_op.lower(), mapped_root_op)
                         if l_col and r_col:
                             parsed_conditions.append({
                                 "left": str(l_col).strip(),
@@ -401,12 +423,12 @@ class DatasetJoinRecipe(BaseRecipe):
             elif on:
                 parsed_on = _parse_keys(on) or []
                 for k in parsed_on:
-                    parsed_conditions.append({"left": k, "operator": "=", "right": k})
+                    parsed_conditions.append({"left": k, "operator": mapped_root_op, "right": k})
             else:
                 l_keys = _parse_keys(left_on) or []
                 r_keys = _parse_keys(right_on) or []
                 for l_k, r_k in zip(l_keys, r_keys):
-                    parsed_conditions.append({"left": l_k, "operator": "=", "right": r_k})
+                    parsed_conditions.append({"left": l_k, "operator": mapped_root_op, "right": r_k})
 
             if not parsed_conditions:
                 raise ValueError("Dataset Join: Missing join keys. Please specify 'conditions', 'on', or 'left_on'/'right_on'.")
@@ -484,7 +506,7 @@ class DatasetJoinRecipe(BaseRecipe):
                 for cond in parsed_conditions:
                     on_clauses.append(f'left_tbl."{cond["left"]}" {cond["operator"]} right_tbl."{cond["right"]}"')
 
-                sql_join = "FULL OUTER JOIN" if join_type in ["split", "outer"] else f"{join_type.upper()} JOIN"
+                sql_join = "FULL OUTER JOIN" if join_type in ["split", "outer", "left_anti", "right_anti", "left_semi", "right_semi"] else f"{join_type.upper()} JOIN"
                 sql = f'''
                 SELECT {", ".join(select_items)}
                 FROM left_tbl
