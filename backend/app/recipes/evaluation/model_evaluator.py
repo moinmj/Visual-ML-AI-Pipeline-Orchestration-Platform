@@ -155,13 +155,25 @@ class ModelEvaluatorRecipe(BaseRecipe):
                 else:
                     eval_note = "Evaluation metrics sourced from forecasting recipe output."
             metrics["evaluation_note"] = eval_note
+            mape_val = metrics.get("mape")
+            mape_display_val = metrics.get("mape_display")
+            if mape_display_val:
+                mape_line_val = mape_display_val
+            elif mape_val is not None:
+                mape_str_raw = str(mape_val)
+                mape_line_val = mape_str_raw if mape_str_raw.endswith("%") else f"{mape_str_raw}%"
+            else:
+                mape_line_val = "N/A"
+
             report_lines = [
                 f"Algorithm : {metrics.get('algorithm', 'N/A')}",
                 f"Eval Type : {eval_type}",
                 f"MAE       : {metrics.get('mae', 'N/A')}",
                 f"RMSE      : {metrics.get('rmse', 'N/A')}",
-                f"MAPE      : {metrics.get('mape', 'N/A')}%",
+                f"MAPE      : {mape_line_val}",
             ]
+            if "smape" in metrics and metrics["smape"] is not None:
+                report_lines.append(f"SMAPE     : {metrics['smape']}%")
             if "coverage_95pct" in metrics:
                 report_lines.append(f"95% CI Cov: {metrics['coverage_95pct']}%")
             if "aic" in metrics:
@@ -513,10 +525,57 @@ class ModelEvaluatorRecipe(BaseRecipe):
             mse = float(round(mean_squared_error(y_test, predictions), 4))
             rmse = float(round(np.sqrt(mse), 4))
             r2 = float(round(r2_score(y_test, predictions), 4))
+            # Zero-division guardrail for percentage metrics (MAPE / SMAPE)
+            y_arr = np.asarray(y_test, dtype=float).ravel()
+            pred_arr = np.asarray(predictions, dtype=float).ravel()
+            has_zero_actuals = bool(np.any(np.isclose(y_arr, 0.0, atol=1e-9)))
+
+            # Compute SMAPE (Symmetric Mean Absolute Percentage Error) as a robust zero-safe alternative:
+            # Formula: (100% / n) * sum( 2 * |y - y_hat| / (|y| + |y_hat|) )
             try:
-                mape = float(round(mean_absolute_percentage_error(y_test, predictions), 4))
+                denom = np.abs(y_arr) + np.abs(pred_arr)
+                zero_denom = np.isclose(denom, 0.0, atol=1e-9)
+                smape_elements = np.zeros_like(y_arr, dtype=float)
+                if np.any(~zero_denom):
+                    smape_elements[~zero_denom] = (2.0 * np.abs(y_arr[~zero_denom] - pred_arr[~zero_denom])) / denom[~zero_denom]
+                smape = float(round(float(np.mean(smape_elements)) * 100.0, 4))
             except Exception:
+                smape = None
+
+            if has_zero_actuals:
                 mape = None
+                mape_display = "N/A (Contains zeros)"
+                mape_status = "UNDEFINED_ZERO_DIVISION"
+                warnings.append(
+                    f"[WARNING: ZERO IN ACTUALS] One or more actual target values in the evaluation set are zero. "
+                    f"Standard MAPE is mathematically undefined (division by zero) and reported as 'N/A (Contains zeros)'. "
+                    f"SMAPE ({smape:.2f}%) was computed as a robust zero-safe alternative."
+                    if smape is not None else
+                    "[WARNING: ZERO IN ACTUALS] One or more actual target values in the evaluation set are zero. "
+                    "Standard MAPE is mathematically undefined (division by zero) and reported as 'N/A (Contains zeros)'."
+                )
+            else:
+                try:
+                    mape_raw = float(mean_absolute_percentage_error(y_test, predictions))
+                    if np.isnan(mape_raw) or np.isinf(mape_raw) or mape_raw > 1000.0:
+                        mape = None
+                        mape_display = "N/A (Near-zero actuals)"
+                        mape_status = "EXPLOSIVE_NEAR_ZERO_DIVISION"
+                        warnings.append(
+                            f"[WARNING: RUNAWAY MAPE] Standard MAPE exploded (> 100,000%) due to actual values close to zero. "
+                            f"Reported as 'N/A (Near-zero actuals)'. SMAPE ({smape:.2f}%) should be used instead."
+                            if smape is not None else
+                            "[WARNING: RUNAWAY MAPE] Standard MAPE exploded (> 100,000%) due to actual values close to zero. "
+                            "Reported as 'N/A (Near-zero actuals)'."
+                        )
+                    else:
+                        mape = float(round(mape_raw, 4))
+                        mape_display = f"{mape * 100.0:.2f}%"
+                        mape_status = "VALID"
+                except Exception:
+                    mape = None
+                    mape_display = "N/A"
+                    mape_status = "CALCULATION_ERROR"
 
             metrics.update({
                 "mae": mae,
@@ -524,17 +583,24 @@ class ModelEvaluatorRecipe(BaseRecipe):
                 "rmse": rmse,
                 "r2_score": r2,
                 "mape": mape,
+                "mape_display": mape_display,
+                "mape_status": mape_status,
+                "has_zero_actuals": has_zero_actuals,
+                "smape": smape,
+                "smape_display": f"{smape:.2f}%" if smape is not None else "N/A",
                 "sample_size": N,
                 "is_small_sample": is_small_sample,
                 "warnings": warnings,
                 "small_sample_guardrails": {
-                    "triggered": is_small_sample,
+                    "triggered": is_small_sample or has_zero_actuals,
                     "sample_size": N,
                     "min_recommended_sample_size": min_sample_threshold,
                     "is_small_sample": is_small_sample,
-                    "recommendations": [
-                        f"Increase holdout split to N >= {min_sample_threshold} to stabilize regression error statistics."
-                    ] if is_small_sample else []
+                    "has_zero_actuals": has_zero_actuals,
+                    "recommendations": (
+                        ([f"Increase holdout split to N >= {min_sample_threshold} to stabilize regression error statistics."] if is_small_sample else []) +
+                        (["Use SMAPE or MAE instead of MAPE because actual ground truth contains zero values."] if has_zero_actuals else [])
+                    )
                 }
             })
 
@@ -545,9 +611,10 @@ class ModelEvaluatorRecipe(BaseRecipe):
                 f"MAE                : {mae:.4f}",
                 f"RMSE               : {rmse:.4f}",
                 f"R2 Score           : {r2:.4f}",
+                f"MAPE               : {mape_display}",
             ]
-            if mape is not None:
-                report_lines.append(f"MAPE               : {mape:.4f}%")
+            if smape is not None:
+                report_lines.append(f"SMAPE (Zero-Safe)  : {smape:.4f}%")
             if warnings:
                 report_lines.append("\n--- Diagnostics & Guardrail Warnings ---")
                 for w in warnings:
