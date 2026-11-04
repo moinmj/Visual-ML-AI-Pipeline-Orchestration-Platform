@@ -271,7 +271,7 @@ class SemanticDeduplicationRecipe(BaseRecipe):
             rows_removed = len(to_drop)
 
         output_summary = {
-            "title": "Semantic Deduplication (embedding similarity)",
+            "title": "Semantic Deduplication Summary",
             "message": f"Identified {len(dup_clusters)} semantic duplicate clusters ({total_dup_rows} redundant rows) at {threshold*100:.0f}% cosine similarity threshold.",
             "metrics": {
                 "original_rows": orig_rows,

@@ -43,6 +43,8 @@ from backend.app.recipes.evaluation.ab_testing_framework import ABTestingFramewo
 from backend.app.recipes.evaluation.bayesian_ab_estimator import BayesianABEstimatorRecipe
 from backend.app.recipes.evaluation.champion_challenger import ChampionChallengerRecipe
 from backend.app.recipes.evaluation.model_explainability import ModelExplainabilityRecipe
+from backend.app.recipes.evaluation.bias_fairness_audit import BiasFairnessAuditRecipe
+from backend.app.recipes.evaluation.fairness_slicing_report import FairnessSlicingReportRecipe
 from backend.app.recipes.anomaly.isolation_forest import IsolationForestRecipe
 from backend.app.recipes.anomaly.statistical_guardrail import StatisticalGuardrailRecipe
 from backend.app.recipes.forecasting.lag_features import LagFeatureEngineeringRecipe
@@ -189,7 +191,8 @@ from backend.app.recipes.agents.document_qa_agent import DocumentQaAgentRecipe
 from backend.app.recipes.agents.multimodal_agent import MultimodalAgentRecipe
 from backend.app.recipes.agents.code_execution_sandbox import CodeExecutionSandboxRecipe
 from backend.app.recipes.agents.chatbot_endpoint import ChatbotEndpointRecipe
-
+from backend.app.recipes.governance.audit_log_exporter import AuditLogExporterRecipe
+from backend.app.recipes.governance.model_card_generator import ModelCardGeneratorRecipe
 
 
 def register_all_recipes():
@@ -266,6 +269,10 @@ def register_all_recipes():
     recipe_registry.register(BayesianABEstimatorRecipe())
     recipe_registry.register(ChampionChallengerRecipe())
     recipe_registry.register(ModelExplainabilityRecipe())
+    recipe_registry.register(BiasFairnessAuditRecipe())
+    recipe_registry.register(FairnessSlicingReportRecipe())
+    recipe_registry.register(AuditLogExporterRecipe())
+    recipe_registry.register(ModelCardGeneratorRecipe())
     recipe_registry.register(IsolationForestRecipe())
     recipe_registry.register(StatisticalGuardrailRecipe())
     recipe_registry.register(LagFeatureEngineeringRecipe())

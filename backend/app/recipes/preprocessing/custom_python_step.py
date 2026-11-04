@@ -381,7 +381,11 @@ class CustomPythonStepRecipe(BaseRecipe):
             "dataframe": result_df,
             "feature_names": list(result_df.columns),
             "output_summary": {
-                "row_count": len(result_df),
+                "title": "Custom Python Execution Summary",
+                "badge": "DATA LOGIC",
+                "message": f"Executed custom script producing {len(result_df):,} rows and {len(result_df.columns)} columns.",
+                "row_count": int(len(result_df)),
+                "column_count": int(len(result_df.columns)),
                 "columns": list(result_df.columns),
                 "installed_packages": installed_packages,
                 "console_output": console_output.strip() if console_output else None

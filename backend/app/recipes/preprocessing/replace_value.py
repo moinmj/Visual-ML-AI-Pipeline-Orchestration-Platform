@@ -125,6 +125,7 @@ class ReplaceValueRecipe(BaseRecipe):
                 },
                 "new_column_suffix": {
                     "type": "string",
+                    "input_type": "text",
                     "title": "New Column Suffix",
                     "default": "_replaced",
                     "description": "Suffix for new columns if output_mode is 'new_column'."
@@ -184,7 +185,7 @@ class ReplaceValueRecipe(BaseRecipe):
         replace_empty_strings = config.get("replace_empty_strings", False)
         empty_replacement_value = config.get("empty_replacement_value", "None")
         output_mode = config.get("output_mode", "in_place")
-        suffix = config.get("new_column_suffix", "_replaced")
+        suffix = config.get("new_column_suffix") or config.get("column_suffix") or config.get("suffix") or "_replaced" 
 
         # Determine target columns
         if apply_to_all or not cols_config:
@@ -284,12 +285,14 @@ class ReplaceValueRecipe(BaseRecipe):
                 columns_modified += 1
                 total_replacements += changes_in_col
 
+        tot_rep_int = int(total_replacements)
+        col_mod_int = int(columns_modified)
         output_summary = {
-            "title": "Replace Value",
-            "message": f"Replaced {total_replacements:,} value occurrences across {columns_modified} column(s).",
+            "title": "Replace Value Summary",
+            "message": f"Replaced {tot_rep_int:,} value occurrences across {col_mod_int} column(s).",
             "metrics": {
-                "total_replacements": total_replacements,
-                "columns_modified": columns_modified,
+                "total_replacements": tot_rep_int,
+                "columns_modified": col_mod_int,
                 "target_columns": target_cols
             }
         }

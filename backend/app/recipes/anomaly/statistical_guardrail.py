@@ -57,7 +57,14 @@ class StatisticalGuardrailRecipe(BaseRecipe):
                 raise ValueError("StatisticalGuardrail expects 'dataframe' in inputs.")
 
         df_out = df.copy()
-        method = config.get("method", "z_score")
+        method = str(config.get("method", "z_score")).lower().replace("-", "_").replace(" ", "")
+        if "z" in method:
+            method = "z_score"
+        elif "iqr" in method:
+            method = "iqr"
+        else:
+            method = "z_score"
+
         threshold = float(config.get("threshold", 3.0 if method == "z_score" else 1.5))
         action = config.get("action", "flag")
         target_cols = config.get("columns", [])
@@ -90,15 +97,13 @@ class StatisticalGuardrailRecipe(BaseRecipe):
             if len(series) == 0:
                 continue
 
+            col_mask = pd.Series(False, index=df_out.index)
             if method == "z_score":
                 mean = series.mean()
                 std = series.std()
                 if std > 0:
                     z_scores = (df_out[col] - mean).abs() / std
                     col_mask = z_scores > threshold
-                else:
-                    col_mask = pd.Series(False, index=df_out.index)
-
             elif method == "iqr":
                 q1 = series.quantile(0.25)
                 q3 = series.quantile(0.75)

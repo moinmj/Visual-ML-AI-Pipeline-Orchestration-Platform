@@ -2641,7 +2641,7 @@ async def export_workflow_node_dataset(
             detail=f"Could not find output tabular data for node '{target_node_id or 'unknown'}' in execution '{execution_id or 'unknown'}'."
         )
 
-    df_clean = df_to_save.drop(columns=["_merge"], errors="ignore")
+    df_clean = df_to_save
 
     new_ds_id = str(uuid.uuid4())
     ds_name = custom_name.strip() if custom_name and str(custom_name).strip() else f"Exported_{target_node_id or 'Dataset'}_{int(time.time())}"
@@ -2927,7 +2927,6 @@ async def get_test_step_table_preview(
             detail=f"No tabular test output found for node '{node_id}' in session '{session_id}'."
         )
 
-    df = df.drop(columns=["_merge"], errors="ignore")
     total_rows = len(df)
     total_cols = len(df.columns)
     total_pages = math.ceil(total_rows / limit) if (limit > 0 and total_rows > 0) else 1
@@ -2987,8 +2986,6 @@ async def get_node_table_data(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Tabular output for node '{node_id}' in execution '{execution_id}' not found."
         )
-
-    df = df.drop(columns=["_merge"], errors="ignore")
 
     total_rows = len(df)
     total_cols = len(df.columns)
@@ -3125,7 +3122,6 @@ async def export_node_data_to_csv(
             detail=f"Tabular output for node '{node_id}' in execution '{execution_id}' not found."
         )
 
-    df = df.drop(columns=["_merge"], errors="ignore")
     if limit is not None:
         df = df.head(limit)
 

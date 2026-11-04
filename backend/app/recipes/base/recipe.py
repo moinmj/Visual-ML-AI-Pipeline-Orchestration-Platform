@@ -169,7 +169,7 @@ class BaseRecipe(ABC):
                 else:
                     prop_data["input_type"] = "tags"
             else:
-                is_excluded_col = any(low_name.endswith(sfx) for sfx in ("_format", "_name", "_prefix", "_suffix", "_unit", "_type", "_mode", "_action", "_style", "_strategy", "_method", "_provider", "_delim", "_delimiter", "_val", "_value"))
+                is_excluded_col = any(low_name.endswith(sfx) for sfx in ("_format", "_name", "_prefix", "_suffix", "_unit", "_type", "_mode", "_action", "_style", "_strategy", "_method", "_provider", "_delim", "_delimiter", "_val", "_value")) or any(k in low_name for k in ("suffix", "prefix", "new_col", "new_name", "output_col", "new_column"))
                 if not is_excluded_col and (
                     low_name in ("column", "target", "label", "date_column", "time_column", "timestamp_column", "target_column")
                     or low_name.endswith(("_column", "_col", "_field"))

@@ -52,6 +52,7 @@ class FormulaCalculatorRecipe(BaseRecipe):
             "properties": {
                 "target_column": {
                     "type": "string",
+                    "input_type": "text",
                     "title": "Target Column Name",
                     "description": "Name of the new or existing column to store the formula result.",
                     "default": "calculated_metric"
@@ -79,13 +80,62 @@ class FormulaCalculatorRecipe(BaseRecipe):
                 "on_error": {
                     "type": "string",
                     "title": "Error Handling Action",
-                    "enum": ["set_null", "raise_error", "keep_original"],
+                    "enum": ["set_null", "raise_error", "stop_on_error", "keep_original"],
                     "default": "set_null",
                     "description": "Action when a formula evaluation fails (e.g. division by zero or invalid type)."
                 }
             },
             "required": []
         }
+
+    @staticmethod
+    def _parse_batch_formulas(raw: Any) -> List[Dict[str, str]]:
+        if not raw:
+            return []
+        if isinstance(raw, str):
+            raw = raw.strip()
+            if not raw:
+                return []
+            try:
+                import json
+                parsed = json.loads(raw)
+                if isinstance(parsed, (list, dict)):
+                    return FormulaCalculatorRecipe._parse_batch_formulas(parsed)
+            except Exception:
+                pass
+            lines = [ln.strip() for ln in re.split(r"[\r\n;]+", raw) if ln.strip()]
+            return FormulaCalculatorRecipe._parse_batch_formulas(lines)
+        if isinstance(raw, dict):
+            return [{"target_column": str(k).strip(), "formula": str(v).strip()} for k, v in raw.items() if str(k).strip() and str(v).strip()]
+        if isinstance(raw, (list, tuple)):
+            tasks = []
+            for item in raw:
+                if isinstance(item, dict):
+                    t = item.get("target_column") or item.get("column") or item.get("target") or item.get("name") or item.get("col")
+                    f = item.get("formula") or item.get("expression") or item.get("expr") or item.get("calc")
+                    if t and f:
+                        tasks.append({"target_column": str(t).strip(), "formula": str(f).strip()})
+                elif isinstance(item, str):
+                    s = item.strip()
+                    if s.startswith("{") and s.endswith("}"):
+                        try:
+                            import json
+                            d = json.loads(s)
+                            if isinstance(d, dict):
+                                tasks.extend(FormulaCalculatorRecipe._parse_batch_formulas(d))
+                                continue
+                        except Exception:
+                            pass
+                    if "=" in s:
+                        t, f = s.split("=", 1)
+                        if t.strip() and f.strip():
+                            tasks.append({"target_column": t.strip(), "formula": f.strip()})
+                    elif ":" in s:
+                        t, f = s.split(":", 1)
+                        if t.strip() and f.strip():
+                            tasks.append({"target_column": t.strip(), "formula": f.strip()})
+            return tasks
+        return []
 
     def _resolve_bracket_tokens(self, formula: str, df: pd.DataFrame) -> Tuple[str, Dict[str, str]]:
         """
@@ -156,15 +206,28 @@ class FormulaCalculatorRecipe(BaseRecipe):
                 scope[col] = df[col]
 
         # First attempt: eval with full vectorized scope
+        is_strict_error = str(on_error).lower().strip() in ("raise_error", "stop_on_error", "stop", "raise", "error")
         try:
             res = eval(transformed_expr, {"__builtins__": {}}, scope)
-            if isinstance(res, pd.Series):
-                return res
-            elif isinstance(res, np.ndarray):
-                return pd.Series(res, index=df.index)
-            else:
-                # Scalar result (e.g. 42 or 'constant')
-                return pd.Series([res] * len(df), index=df.index)
+            if not isinstance(res, pd.Series):
+                if isinstance(res, np.ndarray):
+                    res = pd.Series(res, index=df.index)
+                else:
+                    res = pd.Series([res] * len(df), index=df.index)
+
+            # Strict error checking: detect division by zero producing inf / -inf
+            if is_strict_error and pd.api.types.is_numeric_dtype(res):
+                if np.isinf(res).any():
+                    raise ZeroDivisionError(f"Division by zero encountered while evaluating formula '{formula}'")
+            elif not is_strict_error and pd.api.types.is_numeric_dtype(res):
+                # In non-strict modes, convert inf/-inf to nan
+                res = res.replace([np.inf, -np.inf], np.nan)
+
+            return res
+        except ZeroDivisionError:
+            if is_strict_error:
+                raise
+            return pd.Series([np.nan] * len(df), index=df.index)
         except Exception as e:
             # Second attempt: row-wise evaluation for complex string or branching expressions
             try:
@@ -186,8 +249,12 @@ class FormulaCalculatorRecipe(BaseRecipe):
                     return eval(transformed_expr, {"__builtins__": {}}, row_scope)
 
                 return df.apply(row_eval, axis=1)
+            except ZeroDivisionError:
+                if is_strict_error:
+                    raise
+                return pd.Series([np.nan] * len(df), index=df.index)
             except Exception as e2:
-                if on_error == "raise_error":
+                if is_strict_error:
                     raise ValueError(f"Failed to evaluate formula '{formula}': {str(e2)}")
                 return pd.Series([np.nan] * len(df), index=df.index)
 
@@ -219,13 +286,11 @@ class FormulaCalculatorRecipe(BaseRecipe):
 
         batch_tasks: List[Dict[str, str]] = []
         if target_column and formula:
-            batch_tasks.append({"target_column": target_column, "formula": formula})
+            batch_tasks.append({"target_column": str(target_column).strip(), "formula": str(formula).strip()})
 
-        for item in formulas_list:
-            t = item.get("target_column")
-            f = item.get("formula")
-            if t and f:
-                batch_tasks.append({"target_column": t, "formula": f})
+        # Robust parser for batch formulas supporting JSON strings, line-by-line equations, or list of dicts/strings
+        parsed_batch = self._parse_batch_formulas(formulas_list)
+        batch_tasks.extend(parsed_batch)
 
         computed_cols = []
         for task in batch_tasks:
@@ -241,13 +306,15 @@ class FormulaCalculatorRecipe(BaseRecipe):
                 df[col_name] = res_series
             computed_cols.append(col_name)
 
+        formulas_count = int(len(computed_cols))
+        rows_count = int(len(df))
         output_summary = {
-            "title": "Formula Calculator",
-            "message": f"Successfully calculated {len(computed_cols)} column(s): {', '.join(computed_cols) if computed_cols else 'None'}.",
+            "title": "Formula Calculator Summary",
+            "message": f"Successfully calculated {formulas_count} column(s): {', '.join(computed_cols) if computed_cols else 'None'}.",
             "metrics": {
-                "formulas_evaluated": len(computed_cols),
+                "formulas_evaluated": formulas_count,
                 "columns_computed": computed_cols,
-                "rows_processed": len(df)
+                "rows_processed": rows_count
             }
         }
 

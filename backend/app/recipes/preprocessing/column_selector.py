@@ -65,10 +65,29 @@ class ColumnSelectorRecipe(BaseRecipe):
             if drop_cols:
                 df_out = df_out.drop(columns=drop_cols)
 
+        orig_col_count = int(len(df.columns))
+        final_col_count = int(len(df_out.columns))
+        final_row_count = int(len(df_out))
+        dropped_col_count = int(max(0, orig_col_count - final_col_count))
+
+        output_summary = {
+            "title": "Column Selection & Structure Summary",
+            "badge": "DATA PREPARATION",
+            "message": f"Retained {final_col_count} of {orig_col_count} columns across {final_row_count:,} rows (pruned {dropped_col_count} columns).",
+            "metrics": {
+                "total_columns": final_col_count,
+                "row_count": final_row_count,
+                "original_columns_count": orig_col_count,
+                "dropped_columns_count": dropped_col_count,
+                "selected_columns": list(df_out.columns)
+            }
+        }
+
         return {
             "dataframe": df_out,
             "feature_names": list(df_out.columns),
-            "output_summary": {"row_count": len(df_out), "columns": list(df_out.columns)}
+            "metrics": output_summary["metrics"],
+            "output_summary": output_summary
         }
 
     def to_code(self, config: Dict[str, Any]) -> str:

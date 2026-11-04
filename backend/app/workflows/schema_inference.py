@@ -248,11 +248,28 @@ class WorkflowSchemaInferencer:
         right_keys: List[str] = []
 
         conditions = config.get("conditions")
+        if isinstance(conditions, str):
+            try:
+                import json
+                loaded = json.loads(conditions)
+                if isinstance(loaded, (list, dict)):
+                    conditions = loaded if isinstance(loaded, list) else [loaded]
+            except Exception:
+                import re
+                cond_items = [s.strip() for s in conditions.split(",") if s.strip()]
+                parsed_from_str = []
+                for itm in cond_items:
+                    m = re.match(r"^([\w\.\-]+)\s*([=><!]+)\s*([\w\.\-]+)$", itm)
+                    if m:
+                        parsed_from_str.append({"left": m.group(1), "right": m.group(3)})
+                if parsed_from_str:
+                    conditions = parsed_from_str
+
         if conditions and isinstance(conditions, list):
             for c in conditions:
                 if isinstance(c, dict):
-                    lk = c.get("left") or c.get("left_column")
-                    rk = c.get("right") or c.get("right_column")
+                    lk = c.get("left") or c.get("left_column") or c.get("left_key") or c.get("left_col") or c.get("col1")
+                    rk = c.get("right") or c.get("right_column") or c.get("right_key") or c.get("right_col") or c.get("col2")
                     if lk:
                         left_keys.append(str(lk).strip())
                     if rk:
@@ -301,9 +318,16 @@ class WorkflowSchemaInferencer:
             d = right_detail_map.get(c)
             joined_details.append(NodeColumnInfo(name=final_name, type=d.type if d else "string"))
 
-        # Add _merge column if indicator is enabled
-        raw_indicator = config.get("indicator", False)
-        indicator = (raw_indicator.strip().lower() in ("true", "1", "yes")) if isinstance(raw_indicator, str) else bool(raw_indicator)
+        indicator_keys = [
+            "indicator", "merge_indicator", "add_merge_indicator", "show_merge_indicator",
+            "include_indicator", "enable_merge_indicator", "indicator_column", "merge_indicator_column"
+        ]
+        raw_indicator = False
+        for ik in indicator_keys:
+            if ik in config and config[ik] is not None:
+                raw_indicator = config[ik]
+                break
+        indicator = (raw_indicator.strip().lower() in ("true", "1", "yes", "on")) if isinstance(raw_indicator, str) else bool(raw_indicator)
         if indicator:
             joined_columns.append("_merge")
             joined_details.append(NodeColumnInfo(name="_merge", type="categorical"))

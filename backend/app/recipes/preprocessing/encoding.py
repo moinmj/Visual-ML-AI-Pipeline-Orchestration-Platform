@@ -73,6 +73,16 @@ class CategoricalEncoderRecipe(BaseRecipe):
             "required": ["method"]
         }
 
+    def validate_config(self, config: Dict[str, Any]) -> List[str]:
+        errors = []
+        method = str(config.get("method", "one_hot")).lower().strip()
+        # Conditionally require target_column only for supervised methods
+        if method in ["target", "woe"]:
+            tgt = config.get("target_column")
+            if tgt is not None and str(tgt).strip() in ["-- Select Column --", "(None)"]:
+                errors.append(f"Target column 'target_column' is required for supervised '{method}' encoding.")
+        return errors
+
     def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
         df: pd.DataFrame = inputs.get("dataframe")
         if df is None:
@@ -166,8 +176,25 @@ class CategoricalEncoderRecipe(BaseRecipe):
 
         elif method == "target":
             if target_series is not None:
-                numeric_target = pd.to_numeric(target_series, errors="coerce").fillna(0)
-                global_mean = numeric_target.mean()
+                if pd.api.types.is_numeric_dtype(target_series):
+                    numeric_target = pd.to_numeric(target_series, errors="coerce").fillna(0.0)
+                else:
+                    # Discrete string / categorical target: binarize or label-encode to avoid zero-fill collapse
+                    clean_s = target_series.dropna().astype(str).str.strip()
+                    unique_classes = list(pd.unique(clean_s))
+                    if len(unique_classes) == 2:
+                        pos_candidates = {"1", "true", "yes", "churn", "positive", "fraud", "default", "y", "t"}
+                        pos_class = unique_classes[1]
+                        for c_val in unique_classes:
+                            if c_val.lower() in pos_candidates:
+                                pos_class = c_val
+                                break
+                        numeric_target = (target_series.astype(str).str.strip() == pos_class).astype(float)
+                    else:
+                        le = LabelEncoder()
+                        numeric_target = pd.Series(le.fit_transform(target_series.astype(str)), index=target_series.index, dtype=float)
+
+                global_mean = float(numeric_target.mean())
                 for col in target_cols:
                     means = numeric_target.groupby(df[col]).mean().to_dict()
                     df[col] = df[col].map(means).fillna(global_mean).astype(float)
@@ -189,8 +216,25 @@ class CategoricalEncoderRecipe(BaseRecipe):
 
         elif method == "woe":
             if target_series is not None:
-                numeric_target = pd.to_numeric(target_series, errors="coerce").fillna(0)
-                bin_target = (numeric_target > numeric_target.median()).astype(int)
+                if pd.api.types.is_numeric_dtype(target_series):
+                    numeric_target = pd.to_numeric(target_series, errors="coerce").fillna(0.0)
+                    bin_target = (numeric_target > numeric_target.median()).astype(int)
+                else:
+                    clean_s = target_series.dropna().astype(str).str.strip()
+                    unique_classes = list(pd.unique(clean_s))
+                    if len(unique_classes) == 2:
+                        pos_candidates = {"1", "true", "yes", "churn", "positive", "fraud", "default", "y", "t"}
+                        pos_class = unique_classes[1]
+                        for c_val in unique_classes:
+                            if c_val.lower() in pos_candidates:
+                                pos_class = c_val
+                                break
+                        bin_target = (target_series.astype(str).str.strip() == pos_class).astype(int)
+                    else:
+                        le = LabelEncoder()
+                        codes = le.fit_transform(target_series.astype(str))
+                        bin_target = (codes > np.median(codes)).astype(int)
+
                 total_pos = (bin_target == 1).sum() or 1
                 total_neg = (bin_target == 0).sum() or 1
 
@@ -211,11 +255,21 @@ class CategoricalEncoderRecipe(BaseRecipe):
                     freq_map = df[col].value_counts(normalize=True).to_dict()
                     df[col] = df[col].map(freq_map).fillna(0.0).astype(float)
 
-        return {
-            "dataframe": df,
+        encoded_int_count = int(len(target_cols))
+        final_col_count = int(len(df.columns))
+        output_summary = {
+            "title": "Categorical Encoder Summary",
+            "message": f"Successfully encoded {encoded_int_count} column(s) using {method.upper()} technique.",
             "metrics": {
                 "method_applied": method,
                 "encoded_columns": target_cols,
-                "final_column_count": len(df.columns)
+                "encoded_columns_count": encoded_int_count,
+                "final_column_count": final_col_count
             }
+        }
+
+        return {
+            "dataframe": df,
+            "metrics": output_summary["metrics"],
+            "output_summary": output_summary
         }

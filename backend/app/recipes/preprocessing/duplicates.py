@@ -114,6 +114,12 @@ class CategorySanitizerRecipe(BaseRecipe):
                     "title": "Remove Special Characters",
                     "default": False
                 },
+                "replace_with_space": {
+                    "type": "boolean",
+                    "title": "Replace Punctuation with Space",
+                    "default": False,
+                    "description": "If enabled, replaces stripped punctuation and hyphens with a space to prevent compound words from concatenating."
+                },
                 "columns": {
                     "type": "array",
                     "items": {"type": "string"},
@@ -139,25 +145,46 @@ class CategorySanitizerRecipe(BaseRecipe):
         elif isinstance(target_cols, str):
             target_cols = [c.strip() for c in target_cols.split(",") if c.strip() in df.columns]
 
+        replace_with_space = bool(
+            config.get("replace_with_space")
+            or config.get("replace_punctuation_with_space")
+            or config.get("punctuation_replacement") == " "
+        )
+
         modified_cols = []
         for col in target_cols:
             if col in df.columns and (df[col].dtype == "object" or str(df[col].dtype) == "category"):
                 s = df[col].astype(str)
-                if do_strip:
-                    s = s.str.strip()
                 if do_lower:
                     s = s.str.lower()
                 if do_punct:
-                    s = s.str.replace(r"[^\w\s]", "", regex=True)
+                    # Protect hyphens between words: replace with space to avoid word concatenation (e.g. multi-state -> multi state)
+                    s = s.str.replace(r"(?<=[a-zA-Z0-9])-(?=[a-zA-Z0-9])", " ", regex=True)
+                    # Protect decimal points in numbers stored as text (e.g. 29.85 -> 29.85)
+                    punct_pattern = r"(?<!\d)\.|\.(?!\d)|[^\w\s\.]"
+                    replacement = " " if replace_with_space else ""
+                    s = s.str.replace(punct_pattern, replacement, regex=True)
+                    if replace_with_space:
+                        s = s.str.replace(r"\s+", " ", regex=True)
+                if do_strip:
+                    s = s.str.strip()
                 df[col] = s
                 modified_cols.append(col)
 
-        return {
-            "dataframe": df,
+        sanitized_int_count = int(len(modified_cols))
+        output_summary = {
+            "title": "Categorical Sanitizer Summary",
+            "message": f"Successfully sanitized {sanitized_int_count} categorical/text column(s).",
             "metrics": {
                 "columns_sanitized": modified_cols,
-                "sanitized_count": len(modified_cols)
+                "sanitized_count": sanitized_int_count
             }
+        }
+
+        return {
+            "dataframe": df,
+            "metrics": output_summary["metrics"],
+            "output_summary": output_summary
         }
 
 
@@ -210,13 +237,22 @@ class CorrelationFilterRecipe(BaseRecipe):
             dropped_cols = [column for column in upper_tri.columns if any(upper_tri[column] > thresh)]
             df = df.drop(columns=dropped_cols)
 
-        return {
-            "dataframe": df,
+        dropped_int_count = int(len(dropped_cols))
+        output_summary = {
+            "title": "Feature Correlation Summary",
+            "badge": "UNSUPERVISED",
+            "message": f"Evaluated pairwise correlations ({method}); dropped {dropped_int_count} redundant column(s) exceeding {thresh} threshold.",
             "metrics": {
                 "threshold": thresh,
                 "dropped_redundant_columns": dropped_cols,
-                "columns_dropped_count": len(dropped_cols)
+                "columns_dropped_count": dropped_int_count
             }
+        }
+
+        return {
+            "dataframe": df,
+            "metrics": output_summary["metrics"],
+            "output_summary": output_summary
         }
 
 
@@ -263,11 +299,20 @@ class VarianceFilterRecipe(BaseRecipe):
             if dropped_cols:
                 df = df.drop(columns=dropped_cols)
 
-        return {
-            "dataframe": df,
+        dropped_int_count = int(len(dropped_cols))
+        output_summary = {
+            "title": "Variance Summary",
+            "badge": "UNSUPERVISED",
+            "message": f"Evaluated feature variance; dropped {dropped_int_count} constant or low-variance column(s) exceeding {max_pct*100:.1f}% threshold.",
             "metrics": {
                 "max_dominant_percentage": max_pct,
                 "dropped_constant_columns": dropped_cols,
-                "columns_dropped_count": len(dropped_cols)
+                "columns_dropped_count": dropped_int_count
             }
+        }
+
+        return {
+            "dataframe": df,
+            "metrics": output_summary["metrics"],
+            "output_summary": output_summary
         }

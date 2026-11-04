@@ -1,3 +1,5 @@
+import re
+import json
 import pandas as pd
 import numpy as np
 from typing import Dict, Any, List, Optional, Union, Tuple
@@ -218,9 +220,14 @@ class DatasetJoinRecipe(BaseRecipe):
                 errors.append("Dataset Join requires join criteria: configure 'conditions' (column pairs), 'on', or both 'left_on' and 'right_on'.")
 
             if conditions and isinstance(conditions, list):
+                valid_ops = {"=", "==", "!=", "<>", ">", "<", ">=", "<=", "eq", "ne", "gt", "lt", "gte", "lte"}
                 for idx, c in enumerate(conditions):
                     if not isinstance(c, dict) or not (c.get("left") or c.get("left_column")) or not (c.get("right") or c.get("right_column")):
                         errors.append(f"Join condition #{idx+1} is missing 'left' or 'right' column mapping.")
+                    else:
+                        op = str(c.get("operator", "=")).strip().lower()
+                        if op not in valid_ops:
+                            errors.append(f"Join condition #{idx+1} has invalid operator '{op}'. Allowed operators: =, !=, >, <, >=, <=")
 
         return errors
 
@@ -275,16 +282,41 @@ class DatasetJoinRecipe(BaseRecipe):
         else:
             suffix_tuple = ("_left", "_right")
 
-        raw_indicator = config.get("indicator", False)
+        # Support all indicator toggle alias keys
+        indicator_keys = [
+            "indicator",
+            "merge_indicator",
+            "add_merge_indicator",
+            "show_merge_indicator",
+            "include_indicator",
+            "enable_merge_indicator",
+            "indicator_column",
+            "merge_indicator_column"
+        ]
+        raw_indicator = False
+        for k in indicator_keys:
+            if k in config and config[k] is not None:
+                raw_indicator = config[k]
+                break
+
         if isinstance(raw_indicator, str):
-            indicator_requested = raw_indicator.strip().lower() in ("true", "1", "yes")
+            indicator_requested = raw_indicator.strip().lower() in ("true", "1", "yes", "on")
         else:
             indicator_requested = bool(raw_indicator)
+
+        # Safeguard: if input datasets already contain an internal '_merge' column, rename it to prevent collision
+        if "_merge" in left_df.columns:
+            left_df = left_df.rename(columns={"_merge": "_merge_left_upstream"})
+        if "_merge" in right_df.columns:
+            right_df = right_df.rename(columns={"_merge": "_merge_right_upstream"})
 
         rename_left = self._parse_rename_mapping(config.get("rename_columns_left"))
         rename_right = self._parse_rename_mapping(config.get("rename_columns_right"))
         selected_left = config.get("selected_columns_left")
         selected_right = config.get("selected_columns_right")
+
+        left_prefix = str(config.get("left_prefix") or config.get("prefix_left") or "").strip()
+        right_prefix = str(config.get("right_prefix") or config.get("prefix_right") or "").strip()
 
         if join_type == "cross":
             if selected_left and isinstance(selected_left, list) and len(selected_left) > 0:
@@ -297,6 +329,11 @@ class DatasetJoinRecipe(BaseRecipe):
             if rename_right:
                 right_df = right_df.rename(columns=rename_right)
 
+            if left_prefix:
+                left_df = left_df.rename(columns={c: f"{left_prefix}{c}" for c in left_df.columns})
+            if right_prefix:
+                right_df = right_df.rename(columns={c: f"{right_prefix}{c}" for c in right_df.columns})
+
             try:
                 merged_full = pd.merge(
                     left_df,
@@ -307,6 +344,9 @@ class DatasetJoinRecipe(BaseRecipe):
             except Exception as e:
                 logger.error(f"pd.merge cross failed: {str(e)}")
                 raise ValueError(f"Failed to join datasets with join_type='cross': {str(e)}")
+
+            if indicator_requested:
+                merged_full["_merge"] = pd.Series(["both"] * len(merged_full), dtype="category")
 
             final_df = merged_full.copy()
             matched_df = merged_full.copy()
@@ -336,30 +376,74 @@ class DatasetJoinRecipe(BaseRecipe):
                     return [str(s).strip() for s in k if str(s).strip()]
                 return None
 
-            left_keys: List[str] = []
-            right_keys: List[str] = []
+            op_map = {
+                "=": "=", "==": "=", "eq": "=", "equal": "=", "equals": "=",
+                "!=": "!=", "<>": "!=", "ne": "!=", "neq": "!=", "not_equal": "!=", "not_equals": "!=",
+                ">": ">", "gt": ">", "greater": ">", "greater_than": ">",
+                "<": "<", "lt": "<", "less": "<", "less_than": "<",
+                ">=": ">=", "gte": ">=", "ge": ">=", "greater_than_or_equal": ">=", "greater_or_equal": ">=",
+                "<=": "<=", "lte": "<=", "le": "<=", "less_than_or_equal": "<=", "less_or_equal": "<="
+            }
+
+            root_op = str(config.get("operator") or config.get("comparison_operator") or "=").strip()
+            mapped_root_op = op_map.get(root_op.lower(), "=")
+
+            if isinstance(conditions, str):
+                try:
+                    import json
+                    loaded = json.loads(conditions)
+                    if isinstance(loaded, (list, dict)):
+                        conditions = loaded if isinstance(loaded, list) else [loaded]
+                except Exception:
+                    # String like "col_a > col_b" or "col_a != col_b"
+                    cond_items = [s.strip() for s in conditions.split(",") if s.strip()]
+                    parsed_from_str = []
+                    for itm in cond_items:
+                        m = re.match(r"^([\w\.\-]+)\s*([=><!]+)\s*([\w\.\-]+)$", itm)
+                        if m:
+                            parsed_from_str.append({"left": m.group(1), "operator": m.group(2), "right": m.group(3)})
+                    if parsed_from_str:
+                        conditions = parsed_from_str
+
+            parsed_conditions: List[Dict[str, str]] = []
 
             if conditions and isinstance(conditions, list):
                 for c in conditions:
                     if isinstance(c, dict):
-                        l_col = c.get("left") or c.get("left_column")
-                        r_col = c.get("right") or c.get("right_column")
+                        l_col = c.get("left") or c.get("left_column") or c.get("left_key") or c.get("left_col") or c.get("col1")
+                        r_col = c.get("right") or c.get("right_column") or c.get("right_key") or c.get("right_col") or c.get("col2")
+                        raw_op = str(
+                            c.get("operator")
+                            or c.get("op")
+                            or c.get("operation")
+                            or c.get("comparison")
+                            or c.get("comparator")
+                            or config.get("operator")
+                            or config.get("comparison_operator")
+                            or "="
+                        ).strip()
+                        op = op_map.get(raw_op.lower(), mapped_root_op)
                         if l_col and r_col:
-                            left_keys.append(str(l_col).strip())
-                            right_keys.append(str(r_col).strip())
+                            parsed_conditions.append({
+                                "left": str(l_col).strip(),
+                                "operator": op,
+                                "right": str(r_col).strip()
+                            })
             elif on:
                 parsed_on = _parse_keys(on) or []
-                left_keys = list(parsed_on)
-                right_keys = list(parsed_on)
+                for k in parsed_on:
+                    parsed_conditions.append({"left": k, "operator": mapped_root_op, "right": k})
             else:
-                left_keys = _parse_keys(left_on) or []
-                right_keys = _parse_keys(right_on) or []
+                l_keys = _parse_keys(left_on) or []
+                r_keys = _parse_keys(right_on) or []
+                for l_k, r_k in zip(l_keys, r_keys):
+                    parsed_conditions.append({"left": l_k, "operator": mapped_root_op, "right": r_k})
 
-            if not left_keys or not right_keys:
+            if not parsed_conditions:
                 raise ValueError("Dataset Join: Missing join keys. Please specify 'conditions', 'on', or 'left_on'/'right_on'.")
 
-            if len(left_keys) != len(right_keys):
-                raise ValueError(f"Dataset Join: Number of left keys ({len(left_keys)}) does not match right keys ({len(right_keys)}).")
+            left_keys = [c["left"] for c in parsed_conditions]
+            right_keys = [c["right"] for c in parsed_conditions]
 
             # Verify key presence before any transformation
             for k in left_keys:
@@ -383,122 +467,222 @@ class DatasetJoinRecipe(BaseRecipe):
             # C. Apply Renaming
             if rename_left:
                 left_df = left_df.rename(columns=rename_left)
-                # Update left_keys if any join key was renamed
-                left_keys = [rename_left.get(k, k) for k in left_keys]
+                for c in parsed_conditions:
+                    c["left"] = rename_left.get(c["left"], c["left"])
+                left_keys = [c["left"] for c in parsed_conditions]
 
             if rename_right:
                 right_df = right_df.rename(columns=rename_right)
-                # Update right_keys if any join key was renamed
-                right_keys = [rename_right.get(k, k) for k in right_keys]
+                for c in parsed_conditions:
+                    c["right"] = rename_right.get(c["right"], c["right"])
+                right_keys = [c["right"] for c in parsed_conditions]
 
-            # 4. Perform the Merge
-            use_indicator = True
-            how_method = "outer" if join_type in ["split", "outer"] else join_type
+            if left_prefix:
+                left_renames = {c: f"{left_prefix}{c}" for c in left_df.columns if c not in left_keys}
+                left_df = left_df.rename(columns=left_renames)
+            if right_prefix:
+                right_renames = {c: f"{right_prefix}{c}" for c in right_df.columns if c not in right_keys}
+                right_df = right_df.rename(columns=right_renames)
 
-            # Align mismatched join key data types & temporal granularities automatically
-            left_join_keys = list(left_keys)
-            right_join_keys = list(right_keys)
-            temp_cols_to_drop: List[str] = []
+            # 4. Check if Non-Equi operators are present
+            has_non_equi = any(c["operator"] != "=" for c in parsed_conditions)
+            how_method = "outer" if join_type in ["split", "outer", "left_anti", "right_anti", "left_semi", "right_semi"] else join_type
 
-            for i, (l_k, r_k) in enumerate(zip(left_keys, right_keys)):
-                l_s = left_df[l_k]
-                r_s = right_df[r_k]
-                l_is_dt = pd.api.types.is_datetime64_any_dtype(l_s)
-                r_is_dt = pd.api.types.is_datetime64_any_dtype(r_s)
+            if has_non_equi:
+                # --- Non-Equi Join Execution (DuckDB Engine with Pandas Fallback) ---
+                l_df = left_df.copy()
+                r_df = right_df.copy()
+                l_df["__row_id_left__"] = np.arange(len(l_df))
+                r_df["__row_id_right__"] = np.arange(len(r_df))
 
-                # Case 1: Temporal join (one or both are datetime, or string date vs datetime)
-                if l_is_dt or r_is_dt:
-                    l_dt = l_s if l_is_dt else pd.to_datetime(l_s, format="mixed", dayfirst=True, errors="coerce")
-                    r_dt = r_s if r_is_dt else pd.to_datetime(r_s, format="mixed", dayfirst=True, errors="coerce")
+                select_items = []
+                for c in left_df.columns:
+                    if c in right_df.columns:
+                        select_items.append(f'left_tbl."{c}" AS "{c}{suffix_tuple[0]}"')
+                    else:
+                        select_items.append(f'left_tbl."{c}" AS "{c}"')
 
-                    if pd.api.types.is_datetime64_any_dtype(l_dt) and pd.api.types.is_datetime64_any_dtype(r_dt):
-                        l_has_time = bool((l_dt.dt.hour != 0).any() or (l_dt.dt.minute != 0).any() or (l_dt.dt.second != 0).any())
-                        r_has_time = bool((r_dt.dt.hour != 0).any() or (r_dt.dt.minute != 0).any() or (r_dt.dt.second != 0).any())
+                for c in right_df.columns:
+                    if c in left_df.columns:
+                        select_items.append(f'right_tbl."{c}" AS "{c}{suffix_tuple[1]}"')
+                    else:
+                        select_items.append(f'right_tbl."{c}" AS "{c}"')
 
-                        # If one has time component and the other does not (date-only), match at day-level
-                        if l_has_time != r_has_time:
+                select_items.append('left_tbl.__row_id_left__')
+                select_items.append('right_tbl.__row_id_right__')
+
+                on_clauses = []
+                for cond in parsed_conditions:
+                    on_clauses.append(f'left_tbl."{cond["left"]}" {cond["operator"]} right_tbl."{cond["right"]}"')
+
+                sql_join = "FULL OUTER JOIN" if join_type in ["split", "outer", "left_anti", "right_anti", "left_semi", "right_semi"] else f"{join_type.upper()} JOIN"
+                sql = f'''
+                SELECT {", ".join(select_items)}
+                FROM left_tbl
+                {sql_join} right_tbl ON {" AND ".join(on_clauses)}
+                '''
+
+                try:
+                    import duckdb
+                    con = duckdb.connect(database=":memory:")
+                    con.register("left_tbl", l_df)
+                    con.register("right_tbl", r_df)
+                    merged_full = con.execute(sql).df()
+                    con.close()
+                except Exception as duck_err:
+                    logger.warning(f"DuckDB non-equi join execution fallback: {duck_err}")
+                    cross_df = pd.merge(l_df, r_df, how="cross", suffixes=suffix_tuple)
+                    mask = pd.Series([True] * len(cross_df), index=cross_df.index)
+                    for cond in parsed_conditions:
+                        l_c = cond["left"] + (suffix_tuple[0] if cond["left"] in r_df.columns else "")
+                        r_c = cond["right"] + (suffix_tuple[1] if cond["right"] in l_df.columns else "")
+                        op = cond["operator"]
+                        if op == "=":
+                            mask &= (cross_df[l_c] == cross_df[r_c])
+                        elif op == "!=":
+                            mask &= (cross_df[l_c] != cross_df[r_c])
+                        elif op == ">":
+                            mask &= (cross_df[l_c] > cross_df[r_c])
+                        elif op == "<":
+                            mask &= (cross_df[l_c] < cross_df[r_c])
+                        elif op == ">=":
+                            mask &= (cross_df[l_c] >= cross_df[r_c])
+                        elif op == "<=":
+                            mask &= (cross_df[l_c] <= cross_df[r_c])
+
+                    matched_part = cross_df[mask].copy()
+                    matched_left_ids = set(matched_part["__row_id_left__"])
+                    matched_right_ids = set(matched_part["__row_id_right__"])
+
+                    unmatched_left = l_df[~l_df["__row_id_left__"].isin(matched_left_ids)].copy()
+                    unmatched_right = r_df[~r_df["__row_id_right__"].isin(matched_right_ids)].copy()
+
+                    if join_type in ["inner"]:
+                        merged_full = matched_part
+                    elif join_type == "left":
+                        merged_full = pd.concat([matched_part, unmatched_left], ignore_index=True)
+                    elif join_type == "right":
+                        merged_full = pd.concat([matched_part, unmatched_right], ignore_index=True)
+                    else:  # outer or split
+                        merged_full = pd.concat([matched_part, unmatched_left, unmatched_right], ignore_index=True)
+
+                has_left = merged_full["__row_id_left__"].notna()
+                has_right = merged_full["__row_id_right__"].notna()
+
+                merge_series = pd.Series("both", index=merged_full.index, dtype="category")
+                merge_series[has_left & ~has_right] = "left_only"
+                merge_series[~has_left & has_right] = "right_only"
+                merged_full["_merge"] = merge_series
+
+                merged_full = merged_full.drop(columns=["__row_id_left__", "__row_id_right__"], errors="ignore")
+            else:
+                # --- Equi-Join Execution (Standard Pandas) ---
+                use_indicator = True
+
+                # Align mismatched join key data types & temporal granularities automatically
+                left_join_keys = list(left_keys)
+                right_join_keys = list(right_keys)
+                temp_cols_to_drop: List[str] = []
+
+                for i, (l_k, r_k) in enumerate(zip(left_keys, right_keys)):
+                    l_s = left_df[l_k]
+                    r_s = right_df[r_k]
+                    l_is_dt = pd.api.types.is_datetime64_any_dtype(l_s)
+                    r_is_dt = pd.api.types.is_datetime64_any_dtype(r_s)
+
+                    # Case 1: Temporal join (one or both are datetime, or string date vs datetime)
+                    if l_is_dt or r_is_dt:
+                        l_dt = l_s if l_is_dt else pd.to_datetime(l_s, format="mixed", dayfirst=True, errors="coerce")
+                        r_dt = r_s if r_is_dt else pd.to_datetime(r_s, format="mixed", dayfirst=True, errors="coerce")
+
+                        if pd.api.types.is_datetime64_any_dtype(l_dt) and pd.api.types.is_datetime64_any_dtype(r_dt):
+                            l_has_time = bool((l_dt.dt.hour != 0).any() or (l_dt.dt.minute != 0).any() or (l_dt.dt.second != 0).any())
+                            r_has_time = bool((r_dt.dt.hour != 0).any() or (r_dt.dt.minute != 0).any() or (r_dt.dt.second != 0).any())
+
+                            # If one has time component and the other does not (date-only), match at day-level
+                            if l_has_time != r_has_time:
+                                temp_l = f"__temp_join_{l_k}_{i}"
+                                temp_r = f"__temp_join_{r_k}_{i}"
+                                left_df[temp_l] = l_dt.dt.normalize()
+                                right_df[temp_r] = r_dt.dt.normalize()
+                                left_join_keys[i] = temp_l
+                                right_join_keys[i] = temp_r
+                                temp_cols_to_drop.extend([temp_l, temp_r])
+                            else:
+                                if not l_is_dt:
+                                    temp_l = f"__temp_join_{l_k}_{i}"
+                                    left_df[temp_l] = l_dt
+                                    left_join_keys[i] = temp_l
+                                    temp_cols_to_drop.append(temp_l)
+                                if not r_is_dt:
+                                    temp_r = f"__temp_join_{r_k}_{i}"
+                                    right_df[temp_r] = r_dt
+                                    right_join_keys[i] = temp_r
+                                    temp_cols_to_drop.append(temp_r)
+                        else:
+                            # Fallback to string-based match if datetime conversion fails
                             temp_l = f"__temp_join_{l_k}_{i}"
                             temp_r = f"__temp_join_{r_k}_{i}"
-                            left_df[temp_l] = l_dt.dt.normalize()
-                            right_df[temp_r] = r_dt.dt.normalize()
+                            left_df[temp_l] = l_s.astype(str)
+                            right_df[temp_r] = r_s.astype(str)
                             left_join_keys[i] = temp_l
                             right_join_keys[i] = temp_r
                             temp_cols_to_drop.extend([temp_l, temp_r])
-                        else:
-                            if not l_is_dt:
-                                temp_l = f"__temp_join_{l_k}_{i}"
-                                left_df[temp_l] = l_dt
-                                left_join_keys[i] = temp_l
-                                temp_cols_to_drop.append(temp_l)
-                            if not r_is_dt:
+
+                    # Case 2: Numeric vs String
+                    elif pd.api.types.is_numeric_dtype(l_s) != pd.api.types.is_numeric_dtype(r_s):
+                        try:
+                            if pd.api.types.is_numeric_dtype(l_s):
                                 temp_r = f"__temp_join_{r_k}_{i}"
-                                right_df[temp_r] = r_dt
+                                right_df[temp_r] = pd.to_numeric(r_s, errors="coerce")
                                 right_join_keys[i] = temp_r
                                 temp_cols_to_drop.append(temp_r)
-                    else:
-                        # Fallback to string-based match if datetime conversion fails
-                        temp_l = f"__temp_join_{l_k}_{i}"
-                        temp_r = f"__temp_join_{r_k}_{i}"
-                        left_df[temp_l] = l_s.astype(str)
-                        right_df[temp_r] = r_s.astype(str)
-                        left_join_keys[i] = temp_l
-                        right_join_keys[i] = temp_r
-                        temp_cols_to_drop.extend([temp_l, temp_r])
-
-                # Case 2: Numeric vs String
-                elif pd.api.types.is_numeric_dtype(l_s) != pd.api.types.is_numeric_dtype(r_s):
-                    try:
-                        if pd.api.types.is_numeric_dtype(l_s):
-                            temp_r = f"__temp_join_{r_k}_{i}"
-                            right_df[temp_r] = pd.to_numeric(r_s, errors="coerce")
-                            right_join_keys[i] = temp_r
-                            temp_cols_to_drop.append(temp_r)
-                        else:
+                            else:
+                                temp_l = f"__temp_join_{l_k}_{i}"
+                                left_df[temp_l] = pd.to_numeric(l_s, errors="coerce")
+                                left_join_keys[i] = temp_l
+                                temp_cols_to_drop.append(temp_l)
+                        except Exception:
                             temp_l = f"__temp_join_{l_k}_{i}"
-                            left_df[temp_l] = pd.to_numeric(l_s, errors="coerce")
+                            temp_r = f"__temp_join_{r_k}_{i}"
+                            left_df[temp_l] = l_s.astype(str)
+                            right_df[temp_r] = r_s.astype(str)
                             left_join_keys[i] = temp_l
-                            temp_cols_to_drop.append(temp_l)
-                    except Exception:
-                        temp_l = f"__temp_join_{l_k}_{i}"
-                        temp_r = f"__temp_join_{r_k}_{i}"
-                        left_df[temp_l] = l_s.astype(str)
-                        right_df[temp_r] = r_s.astype(str)
-                        left_join_keys[i] = temp_l
-                        right_join_keys[i] = temp_r
-                        temp_cols_to_drop.extend([temp_l, temp_r])
+                            right_join_keys[i] = temp_r
+                            temp_cols_to_drop.extend([temp_l, temp_r])
 
-            # Check if identical keys on both sides
-            is_same_keys = (left_join_keys == right_join_keys)
+                # Check if identical keys on both sides
+                is_same_keys = (left_join_keys == right_join_keys)
 
-            try:
-                if is_same_keys:
-                    merged_full = pd.merge(
-                        left_df,
-                        right_df,
-                        how=how_method,
-                        on=left_join_keys if len(left_join_keys) > 1 else left_join_keys[0],
-                        suffixes=suffix_tuple,
-                        indicator=use_indicator
-                    )
-                else:
-                    merged_full = pd.merge(
-                        left_df,
-                        right_df,
-                        how=how_method,
-                        left_on=left_join_keys if len(left_join_keys) > 1 else left_join_keys[0],
-                        right_on=right_join_keys if len(right_join_keys) > 1 else right_join_keys[0],
-                        suffixes=suffix_tuple,
-                        indicator=use_indicator
-                    )
-            except Exception as e:
-                logger.error(f"pd.merge execution failed: {str(e)}")
-                raise ValueError(f"Failed to join datasets with join_type='{join_type}': {str(e)}")
+                try:
+                    if is_same_keys:
+                        merged_full = pd.merge(
+                            left_df,
+                            right_df,
+                            how=how_method,
+                            on=left_join_keys if len(left_join_keys) > 1 else left_join_keys[0],
+                            suffixes=suffix_tuple,
+                            indicator=use_indicator
+                        )
+                    else:
+                        merged_full = pd.merge(
+                            left_df,
+                            right_df,
+                            how=how_method,
+                            left_on=left_join_keys if len(left_join_keys) > 1 else left_join_keys[0],
+                            right_on=right_join_keys if len(right_join_keys) > 1 else right_join_keys[0],
+                            suffixes=suffix_tuple,
+                            indicator=use_indicator
+                        )
+                except Exception as e:
+                    logger.error(f"pd.merge execution failed: {str(e)}")
+                    raise ValueError(f"Failed to join datasets with join_type='{join_type}': {str(e)}")
 
-            if temp_cols_to_drop:
-                drop_targets = [c for c in merged_full.columns if any(c == tc or c.startswith(f"{tc}_") for tc in temp_cols_to_drop)]
-                merged_full = merged_full.drop(columns=drop_targets, errors="ignore")
-                left_df = left_df.drop(columns=[c for c in temp_cols_to_drop if c in left_df.columns], errors="ignore")
-                right_df = right_df.drop(columns=[c for c in temp_cols_to_drop if c in right_df.columns], errors="ignore")
+                if temp_cols_to_drop:
+                    drop_targets = [c for c in merged_full.columns if any(c == tc or c.startswith(f"{tc}_") for tc in temp_cols_to_drop)]
+                    merged_full = merged_full.drop(columns=drop_targets, errors="ignore")
+                    left_df = left_df.drop(columns=[c for c in temp_cols_to_drop if c in left_df.columns], errors="ignore")
+                    right_df = right_df.drop(columns=[c for c in temp_cols_to_drop if c in right_df.columns], errors="ignore")
 
             # 5. Partition Matching (Split Join Support)
             matched_mask = merged_full["_merge"] == "both"
@@ -521,23 +705,81 @@ class DatasetJoinRecipe(BaseRecipe):
             right_unmatched_df = merged_full[right_only_mask].copy()
 
             # Resolve primary returned dataframe
-            if join_type == "split" or join_type == "inner":
+            if join_type in ("split", "inner"):
                 final_df = matched_df
             elif join_type == "left":
                 final_df = merged_full[matched_mask | left_only_mask].copy()
             elif join_type == "right":
                 final_df = merged_full[matched_mask | right_only_mask].copy()
+            elif join_type == "left_anti":
+                final_df = left_unmatched_df
+                cleaned_cols = {}
+                keep_cols = []
+                for c in left_df.columns:
+                    if c in final_df.columns:
+                        keep_cols.append(c)
+                    elif f"{c}{suffix_tuple[0]}" in final_df.columns:
+                        keep_cols.append(f"{c}{suffix_tuple[0]}")
+                        cleaned_cols[f"{c}{suffix_tuple[0]}"] = c
+                if indicator_requested and "_merge" in final_df.columns:
+                    keep_cols.append("_merge")
+                final_df = final_df[keep_cols].rename(columns=cleaned_cols).copy()
+            elif join_type == "right_anti":
+                final_df = right_unmatched_df
+                cleaned_cols = {}
+                keep_cols = []
+                for c in right_df.columns:
+                    if c in final_df.columns:
+                        keep_cols.append(c)
+                    elif f"{c}{suffix_tuple[1]}" in final_df.columns:
+                        keep_cols.append(f"{c}{suffix_tuple[1]}")
+                        cleaned_cols[f"{c}{suffix_tuple[1]}"] = c
+                if indicator_requested and "_merge" in final_df.columns:
+                    keep_cols.append("_merge")
+                final_df = final_df[keep_cols].rename(columns=cleaned_cols).copy()
+            elif join_type == "left_semi":
+                final_df = matched_df
+                cleaned_cols = {}
+                keep_cols = []
+                for c in left_df.columns:
+                    if c in final_df.columns:
+                        keep_cols.append(c)
+                    elif f"{c}{suffix_tuple[0]}" in final_df.columns:
+                        keep_cols.append(f"{c}{suffix_tuple[0]}")
+                        cleaned_cols[f"{c}{suffix_tuple[0]}"] = c
+                if indicator_requested and "_merge" in final_df.columns:
+                    keep_cols.append("_merge")
+                final_df = final_df[keep_cols].rename(columns=cleaned_cols).copy()
+            elif join_type == "right_semi":
+                final_df = matched_df
+                cleaned_cols = {}
+                keep_cols = []
+                for c in right_df.columns:
+                    if c in final_df.columns:
+                        keep_cols.append(c)
+                    elif f"{c}{suffix_tuple[1]}" in final_df.columns:
+                        keep_cols.append(f"{c}{suffix_tuple[1]}")
+                        cleaned_cols[f"{c}{suffix_tuple[1]}"] = c
+                if indicator_requested and "_merge" in final_df.columns:
+                    keep_cols.append("_merge")
+                final_df = final_df[keep_cols].rename(columns=cleaned_cols).copy()
             else:  # outer
                 final_df = merged_full.copy()
 
-            # Clean _merge indicator if user didn't explicitly request it
+            # Enforce _merge provenance column generation: keep when toggled, remove when not requested
             if not indicator_requested:
                 final_df = final_df.drop(columns=["_merge"], errors="ignore")
                 matched_df = matched_df.drop(columns=["_merge"], errors="ignore")
                 left_unmatched_df = left_unmatched_df.drop(columns=["_merge"], errors="ignore")
                 right_unmatched_df = right_unmatched_df.drop(columns=["_merge"], errors="ignore")
+            else:
+                if "_merge" not in final_df.columns:
+                    if join_type in ("inner", "split"):
+                        final_df["_merge"] = pd.Series(["both"] * len(final_df), index=final_df.index, dtype="category")
+                    elif "_merge" in merged_full.columns:
+                        final_df["_merge"] = merged_full.loc[final_df.index, "_merge"]
 
-            key_repr = ", ".join(left_keys) if is_same_keys else f"[{', '.join(left_keys)}] = [{', '.join(right_keys)}]"
+            key_repr = " AND ".join(f"{c['left']} {c['operator']} {c['right']}" for c in parsed_conditions)
 
         # 6. Optional: Persist Merged Dataset into Datasets Library
         raw_save = config.get("save_as_dataset", False)

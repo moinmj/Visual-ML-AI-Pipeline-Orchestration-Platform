@@ -163,7 +163,7 @@ class FuzzyMatchDeduplicationRecipe(BaseRecipe):
             return {
                 "dataframe": df_out,
                 "metrics": {"original_rows": orig_rows, "final_rows": orig_rows, "duplicates_removed": 0},
-                "output_summary": {"title": "Fuzzy-Match Deduplication", "message": "No valid key columns found for fuzzy matching."}
+                "output_summary": {"title": "Fuzzy Deduplication Summary", "message": "No valid key columns found for fuzzy matching."}
             }
 
         # 3. Create composite string representation for each row
@@ -309,7 +309,7 @@ class FuzzyMatchDeduplicationRecipe(BaseRecipe):
             })
 
         output_summary = {
-            "title": "Fuzzy-Match Deduplication",
+            "title": "Fuzzy Deduplication Summary",
             "message": f"Detected {len(duplicate_clusters)} fuzzy near-duplicate clusters ({total_dup_rows} redundant rows) using {algorithm} at {threshold*100:.0f}% threshold.",
             "metrics": {
                 "original_rows": orig_rows,
