@@ -100,6 +100,7 @@ class TextVectorizerRecipe(BaseRecipe):
                 )
 
         corpus = df[target_col].fillna("").astype(str).tolist()
+        vectorizer = None
 
         if method == "tfidf":
             vectorizer = TfidfVectorizer(max_features=max_feat, ngram_range=ngram_tuple)
@@ -116,10 +117,10 @@ class TextVectorizerRecipe(BaseRecipe):
         elif method == "word2vec":
             # Attempt Gensim Word2Vec; fallback to SVD Latent Semantic Analysis (LSA)
             gensim_w2v = False
+            w2v_model = None
             try:
                 from gensim.models import Word2Vec
                 tokens_list = [text.lower().split() for text in corpus]
-                # Filter non-empty
                 train_tokens = [t for t in tokens_list if len(t) > 0]
                 if len(train_tokens) > 0:
                     vec_size = min(max_feat, 100)
@@ -136,6 +137,7 @@ class TextVectorizerRecipe(BaseRecipe):
                     feature_names = [f"w2v_dim_{i}" for i in range(vec_size)]
                     feat_df = pd.DataFrame(doc_vectors, columns=feature_names, index=df.index)
                     gensim_w2v = True
+                    vectorizer = w2v_model
             except Exception:
                 gensim_w2v = False
 
@@ -149,23 +151,34 @@ class TextVectorizerRecipe(BaseRecipe):
                     dense_vecs = svd.fit_transform(tfidf_mat)
                     feature_names = [f"w2v_emb_{i}" for i in range(n_components)]
                     feat_df = pd.DataFrame(dense_vecs, columns=feature_names, index=df.index)
+                    vectorizer = svd
                 else:
                     feat_df = pd.DataFrame(tfidf_mat.toarray(), columns=[f"w2v_bow_{i}" for i in range(tfidf_mat.shape[1])], index=df.index)
+                    vectorizer = tfidf_vec
 
         # Merge vectors into original DataFrame
         if drop_orig:
             df = df.drop(columns=[target_col])
 
         out_df = pd.concat([df, feat_df], axis=1)
+        vec_feat_count = int(len(feat_df.columns))
+        total_cols_count = int(len(out_df.columns))
+
+        output_summary = {
+            "title": "Text Vectorizer Summary",
+            "message": f"Successfully vectorized '{target_col}' into {vec_feat_count} feature dimensions using {method.upper()}.",
+            "metrics": {
+                "method_applied": method,
+                "target_column": target_col,
+                "vector_features_created": vec_feat_count,
+                "total_columns": total_cols_count
+            }
+        }
 
         return {
             "dataframe": out_df,
             "vectorizer": vectorizer,
             "text_column": target_col,
-            "metrics": {
-                "method_applied": method,
-                "target_column": target_col,
-                "vector_features_created": len(feat_df.columns),
-                "total_columns": len(out_df.columns)
-            }
+            "metrics": output_summary["metrics"],
+            "output_summary": output_summary
         }

@@ -225,6 +225,8 @@ class RecipeRegistry:
             "retrieval_pipeline": "rag_pipeline",
             "guardrail": "agent_guardrail",
             "moderation": "agent_guardrail",
+            "guardrails_validator": "data_guardrails",
+            "schema_contract_validator": "schema_contract_validation",
             "model_router": "cost_aware_model_router",
             "llm_eval": "llm_evaluation",
             "groundedness_scorer": "llm_evaluation",

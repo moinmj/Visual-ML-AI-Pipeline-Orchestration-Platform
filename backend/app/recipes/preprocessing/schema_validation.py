@@ -265,7 +265,7 @@ class SchemaContractValidationRecipe(BaseRecipe):
             final_df = df_out
 
         output_summary = {
-            "title": "Schema / Contract Validation",
+            "title": "Schema & Contract Validation Summary",
             "message": f"Contract Validation {'PASSED' if contract_passed else 'VIOLATED'}: {compliance_pct}% rows compliant. ({valid_rows_count:,} valid, {invalid_rows_count:,} invalid).",
             "metrics": {
                 "contract_passed": contract_passed,

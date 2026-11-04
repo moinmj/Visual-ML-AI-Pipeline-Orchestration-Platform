@@ -109,6 +109,12 @@ class TextPreprocessorRecipe(BaseRecipe):
                     "default": True,
                     "description": "Strips common filler words (the, is, at, which...)."
                 },
+                "preserve_negations": {
+                    "type": "boolean",
+                    "title": "Protect Negation Words (No/Not)",
+                    "default": True,
+                    "description": "Protects critical sentiment negation words like 'no', 'not', 'never' from being deleted during stopwords removal."
+                },
                 "normalization": {
                     "type": "string",
                     "title": "Word Normalization",
@@ -145,16 +151,42 @@ class TextPreprocessorRecipe(BaseRecipe):
         else:
             target_cols = []
 
+        preserve_negations = bool(config.get("preserve_negations", True))
+        negation_words = {"no", "not", "nor", "neither", "never", "none", "nobody", "nowhere", "nothing", "cannot", "without"}
+        active_stopwords = (DEFAULT_STOPWORDS - negation_words) if preserve_negations else DEFAULT_STOPWORDS
+
+        skipped_numeric_cols = []
         if not target_cols:
-            target_cols = [c for c in df.columns if df[c].dtype == "object" or str(df[c].dtype) == "string"]
+            all_candidate_cols = [c for c in df.columns if df[c].dtype == "object" or str(df[c].dtype) == "string"]
+            safe_target_cols = []
+            for c in all_candidate_cols:
+                # Detect and safeguard numeric text columns (e.g. prices, billing totals, ID codes) from global text wipeout
+                s_non_null = df[c].dropna().astype(str).str.strip()
+                if len(s_non_null) > 0:
+                    cleaned_nums = s_non_null.str.replace(r"[$,£€¥% ]", "", regex=True)
+                    num_ratio = pd.to_numeric(cleaned_nums, errors="coerce").notna().mean()
+                    if num_ratio >= 0.7:
+                        skipped_numeric_cols.append(c)
+                        continue
+                safe_target_cols.append(c)
+            target_cols = safe_target_cols
 
         if not target_cols:
-            return {"dataframe": df, "metrics": {"processed_columns": []}}
+            output_summary = {
+                "title": "Text Preprocessor Summary",
+                "message": "No text columns found to preprocess." + (f" Safeguarded {len(skipped_numeric_cols)} numeric column(s)." if skipped_numeric_cols else ""),
+                "metrics": {
+                    "processed_columns_count": 0,
+                    "processed_columns": [],
+                    "skipped_numeric_columns": skipped_numeric_cols
+                }
+            }
+            return {"dataframe": df, "metrics": output_summary["metrics"], "output_summary": output_summary}
 
         # Regex patterns
         url_pattern = re.compile(r"https?://\S+|www\.\S+")
         html_pattern = re.compile(r"<.*?>")
-        punct_pattern = re.compile(r"[^\w\s]")
+        punct_pattern = re.compile(r"(?<!\d)\.|\.(?!\d)|[^\w\s\.]")
         number_pattern = re.compile(r"\d+")
 
         # Check for NLTK stemmer / lemmatizer availability
@@ -189,7 +221,7 @@ class TextPreprocessorRecipe(BaseRecipe):
             tokens = s.split()
 
             if do_stopwords:
-                tokens = [t for t in tokens if t not in DEFAULT_STOPWORDS]
+                tokens = [t for t in tokens if t not in active_stopwords]
 
             if norm_mode == "stemming":
                 if stemmer:
@@ -210,11 +242,22 @@ class TextPreprocessorRecipe(BaseRecipe):
         for col in target_cols:
             df[col] = df[col].apply(clean_text)
 
+        processed_int_count = int(len(target_cols))
+        output_summary = {
+            "title": "Text Preprocessor Summary",
+            "message": f"Preprocessed {processed_int_count} text column(s) ({norm_mode})." + (f" Safeguarded {len(skipped_numeric_cols)} numeric text column(s)." if skipped_numeric_cols else ""),
+            "metrics": {
+                "processed_columns_count": processed_int_count,
+                "processed_columns": target_cols,
+                "skipped_numeric_columns": skipped_numeric_cols,
+                "normalization_applied": norm_mode,
+                "stopwords_removed": do_stopwords,
+                "negations_preserved": preserve_negations
+            }
+        }
+
         return {
             "dataframe": df,
-            "metrics": {
-                "processed_columns": target_cols,
-                "normalization_applied": norm_mode,
-                "stopwords_removed": do_stopwords
-            }
+            "metrics": output_summary["metrics"],
+            "output_summary": output_summary
         }

@@ -377,15 +377,15 @@ class DatasetJoinRecipe(BaseRecipe):
                 return None
 
             op_map = {
-                "=": "=", "==": "=", "eq": "=",
-                "!=": "!=", "<>": "!=", "ne": "!=",
-                ">": ">", "gt": ">",
-                "<": "<", "lt": "<",
-                ">=": ">=", "gte": ">=",
-                "<=": "<=", "lte": "<="
+                "=": "=", "==": "=", "eq": "=", "equal": "=", "equals": "=",
+                "!=": "!=", "<>": "!=", "ne": "!=", "neq": "!=", "not_equal": "!=", "not_equals": "!=",
+                ">": ">", "gt": ">", "greater": ">", "greater_than": ">",
+                "<": "<", "lt": "<", "less": "<", "less_than": "<",
+                ">=": ">=", "gte": ">=", "ge": ">=", "greater_than_or_equal": ">=", "greater_or_equal": ">=",
+                "<=": "<=", "lte": "<=", "le": "<=", "less_than_or_equal": "<=", "less_or_equal": "<="
             }
 
-            root_op = str(config.get("operator", "=")).strip()
+            root_op = str(config.get("operator") or config.get("comparison_operator") or "=").strip()
             mapped_root_op = op_map.get(root_op.lower(), "=")
 
             if isinstance(conditions, str):
@@ -412,7 +412,16 @@ class DatasetJoinRecipe(BaseRecipe):
                     if isinstance(c, dict):
                         l_col = c.get("left") or c.get("left_column") or c.get("left_key") or c.get("left_col") or c.get("col1")
                         r_col = c.get("right") or c.get("right_column") or c.get("right_key") or c.get("right_col") or c.get("col2")
-                        raw_op = str(c.get("operator") or config.get("operator") or "=").strip()
+                        raw_op = str(
+                            c.get("operator")
+                            or c.get("op")
+                            or c.get("operation")
+                            or c.get("comparison")
+                            or c.get("comparator")
+                            or config.get("operator")
+                            or config.get("comparison_operator")
+                            or "="
+                        ).strip()
                         op = op_map.get(raw_op.lower(), mapped_root_op)
                         if l_col and r_col:
                             parsed_conditions.append({
@@ -763,6 +772,12 @@ class DatasetJoinRecipe(BaseRecipe):
                 matched_df = matched_df.drop(columns=["_merge"], errors="ignore")
                 left_unmatched_df = left_unmatched_df.drop(columns=["_merge"], errors="ignore")
                 right_unmatched_df = right_unmatched_df.drop(columns=["_merge"], errors="ignore")
+            else:
+                if "_merge" not in final_df.columns:
+                    if join_type in ("inner", "split"):
+                        final_df["_merge"] = pd.Series(["both"] * len(final_df), index=final_df.index, dtype="category")
+                    elif "_merge" in merged_full.columns:
+                        final_df["_merge"] = merged_full.loc[final_df.index, "_merge"]
 
             key_repr = " AND ".join(f"{c['left']} {c['operator']} {c['right']}" for c in parsed_conditions)
 

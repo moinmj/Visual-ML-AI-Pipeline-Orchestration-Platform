@@ -109,7 +109,7 @@ class DataProfilingReportRecipe(BaseRecipe):
                 "dataframe": df,
                 "profile_table": empty_df,
                 "metrics": {"total_rows": 0, "total_columns": 0, "quality_score": 100.0},
-                "output_summary": {"title": "Data Profiling Report", "message": "Input table is empty."}
+                "output_summary": {"title": "Data Profiling Summary", "message": "Input table is empty."}
             }
 
         output_mode = config.get("output_mode", "passthrough_with_report")
@@ -199,7 +199,7 @@ class DataProfilingReportRecipe(BaseRecipe):
         quality_score = max(0.0, round(100.0 - penalty_missing - penalty_alerts, 1))
 
         output_summary = {
-            "title": "Data Profiling Report",
+            "title": "Data Profiling Summary",
             "message": f"Profiled {orig_cols} columns across {orig_rows:,} rows. Health Quality Score: {quality_score}/100 with {len(quality_alerts)} alerts detected.",
             "metrics": {
                 "total_rows": orig_rows,

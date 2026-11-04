@@ -215,14 +215,39 @@ class DataGuardrailsRecipe(BaseRecipe):
                                 if idx < orig_rows:
                                     row_violations[idx].append(f"{col}: >= {max_v}")
 
-                elif check_type == "is_in_set":
-                    if set_v:
-                        allowed = set(str(v).strip().lower() for v in set_v)
+                elif check_type in ("is_in_set", "in_set", "approved_set", "approved_set_values", "allowed_values", "enum", "set"):
+                    set_v = (
+                        rule.get("set_values")
+                        or rule.get("approved_values")
+                        or rule.get("allowed_values")
+                        or rule.get("values")
+                        or rule.get("set")
+                        or set_v
+                    )
+                    allowed = set()
+                    if isinstance(set_v, (list, tuple, set)):
+                        allowed = {str(v).strip().lower() for v in set_v if str(v).strip()}
+                    elif isinstance(set_v, str):
+                        raw_str = set_v.strip()
+                        if raw_str.startswith("[") and raw_str.endswith("]"):
+                            try:
+                                import json
+                                parsed_list = json.loads(raw_str)
+                                if isinstance(parsed_list, (list, tuple)):
+                                    allowed = {str(v).strip().lower() for v in parsed_list if str(v).strip()}
+                            except Exception:
+                                pass
+                            if not allowed:
+                                raw_str = raw_str[1:-1].strip()
+                        if not allowed:
+                            allowed = {part.strip().strip("'\"").lower() for part in raw_str.split(",") if part.strip().strip("'\"")}
+
+                    if allowed:
                         bad_mask = s.dropna().apply(lambda v: str(v).strip().lower() not in allowed)
                         fail_count = int(bad_mask.sum())
                         if fail_count > 0:
                             rule_passed = False
-                            detail = f"{fail_count} rows not in set"
+                            detail = f"{fail_count} rows not in approved set values"
                             for idx in s.dropna()[bad_mask].index:
                                 if idx < orig_rows:
                                     row_violations[idx].append(f"{col}: invalid set value")
@@ -285,17 +310,24 @@ class DataGuardrailsRecipe(BaseRecipe):
         else:  # log_warning
             final_df = df_out
 
+        rules_eval_count = int(len(rules))
+        rules_pass_count = int(sum(1 for r in rule_results if r["status"] == "PASS"))
+        rules_fail_count = int(sum(1 for r in rule_results if r["status"] == "FAIL"))
+        total_rows_int = int(orig_rows)
+        valid_rows_int = int(valid_rows_count)
+        failing_rows_int = int(invalid_rows_count)
+
         output_summary = {
-            "title": "Guardrails (validation checks)",
-            "message": f"Evaluated {len(rules)} guardrail rules: {sum(1 for r in rule_results if r['status'] == 'PASS')}/{len(rules)} passed ({compliance_pct}% compliant rows).",
+            "title": "Guardrails Quality Summary",
+            "message": f"Evaluated {rules_eval_count} guardrail rules: {rules_pass_count}/{rules_eval_count} passed ({compliance_pct}% compliant rows).",
             "metrics": {
                 "guardrail_status": "PASS" if all_rules_passed else "FAIL",
-                "rules_evaluated": len(rules),
-                "rules_passed": sum(1 for r in rule_results if r["status"] == "PASS"),
-                "rules_failed": sum(1 for r in rule_results if r["status"] == "FAIL"),
-                "total_rows": orig_rows,
-                "valid_rows": valid_rows_count,
-                "failing_rows": invalid_rows_count,
+                "rules_evaluated": rules_eval_count,
+                "rules_passed": rules_pass_count,
+                "rules_failed": rules_fail_count,
+                "total_rows": total_rows_int,
+                "valid_rows": valid_rows_int,
+                "failing_rows": failing_rows_int,
                 "compliance_pct": compliance_pct,
                 "on_failure": on_failure
             },
