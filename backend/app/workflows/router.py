@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Body, Query, Response, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, status, Body, Query, Response, Request, WebSocket, WebSocketDisconnect, UploadFile, File, Form
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 import asyncio
@@ -38,7 +38,12 @@ from backend.app.workflows.schemas import (
     WorkflowInferSchemaResponse,
     NodeTestStepRequest,
     NodeTestStepResponse,
-    SessionClearResponse
+    SessionClearResponse,
+    WorkflowExportPayload,
+    WorkflowImportRequest,
+    WorkflowExportMetadata,
+    WorkflowPipelinePayload,
+    WorkflowDatasetRequirement
 )
 from backend.app.engine.inference import (
     PipelineInferencer,
@@ -150,6 +155,35 @@ async def resolve_workflow_dataset(
             pass
 
     return resolved_id, resolved_name
+
+
+
+SENSITIVE_KEY_SUBSTRINGS = (
+    "password", "secret", "api_key", "apikey", "access_token",
+    "refresh_token", "private_key", "credential_id", "auth_token",
+    "bearer_token", "service_account_key"
+)
+
+
+def sanitize_node_configs_credentials(obj: Any) -> Any:
+    """
+    Recursively redacts passwords, tokens, API keys and credentials in node configurations
+    so exported workflows can be safely shared across environments without secret leakage.
+    """
+    if isinstance(obj, dict):
+        sanitized = {}
+        for k, v in obj.items():
+            k_lower = str(k).lower().strip()
+            if k_lower == "token" or any(s in k_lower for s in SENSITIVE_KEY_SUBSTRINGS):
+                sanitized[k] = ""
+            elif isinstance(v, (dict, list)):
+                sanitized[k] = sanitize_node_configs_credentials(v)
+            else:
+                sanitized[k] = v
+        return sanitized
+    elif isinstance(obj, list):
+        return [sanitize_node_configs_credentials(item) for item in obj]
+    return obj
 
 
 async def resolve_all_workflow_datasets(
@@ -870,6 +904,234 @@ async def save_workflow(
     return wf
 
 
+
+async def _execute_workflow_import(
+    db: AsyncSession,
+    raw_payload: Dict[str, Any],
+    name_override: Optional[str] = None,
+    target_dataset_id: Optional[str] = None,
+    generate_new_ids: bool = True,
+    current_user: Optional[TokenData] = None
+) -> Workflow:
+    """
+    Core validation and remapping engine to import a workflow from exported JSON.
+    """
+    # 1. Normalize payload structure (support raw export payload or wrapped import request)
+    if "export_payload" in raw_payload and isinstance(raw_payload["export_payload"], dict):
+        export_data = raw_payload["export_payload"]
+        name_override = name_override or raw_payload.get("name")
+        target_dataset_id = target_dataset_id or raw_payload.get("target_dataset_id")
+        if "generate_new_ids" in raw_payload:
+            generate_new_ids = bool(raw_payload["generate_new_ids"])
+    else:
+        export_data = raw_payload
+
+    pipeline = export_data.get("pipeline")
+    if not pipeline or not isinstance(pipeline, dict):
+        if "nodes" in export_data:
+            pipeline = {
+                "nodes": export_data.get("nodes", []),
+                "edges": export_data.get("edges", []),
+                "node_configs": export_data.get("node_configs", {})
+            }
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid workflow export format: payload must contain 'pipeline' or 'nodes'."
+            )
+
+    metadata = export_data.get("metadata", {})
+    raw_nodes = pipeline.get("nodes", []) or []
+    raw_edges = pipeline.get("edges", []) or []
+    raw_configs = pipeline.get("node_configs", {}) or {}
+
+    nodes = [dict(n) for n in raw_nodes]
+    edges = [dict(e) for e in raw_edges]
+    node_configs = {str(k): dict(v) if isinstance(v, dict) else v for k, v in raw_configs.items()}
+
+    # 2. Recipe verification against catalog
+    from backend.app.recipes.base.registry import recipe_registry
+    referenced_recipes = set()
+    for n in nodes:
+        r_id = n.get("recipe_id") or n.get("type")
+        if r_id:
+            referenced_recipes.add(r_id)
+    for k, cfg in node_configs.items():
+        if isinstance(cfg, dict):
+            r_id = cfg.get("recipe_id")
+            if r_id:
+                referenced_recipes.add(r_id)
+
+    unknown_recipes = [r for r in referenced_recipes if not recipe_registry.has(r)]
+    if unknown_recipes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot import workflow: references unknown or unsupported recipe(s): {', '.join(sorted(unknown_recipes))}"
+        )
+
+    # 3. Node and Edge ID Remapping to prevent collisions
+    if generate_new_ids:
+        id_map: Dict[str, str] = {}
+        for n in nodes:
+            old_id = str(n.get("id", ""))
+            new_id = f"node_{uuid.uuid4().hex[:8]}"
+            id_map[old_id] = new_id
+            n["id"] = new_id
+
+        for e in edges:
+            e["id"] = f"edge_{uuid.uuid4().hex[:8]}"
+            s = str(e.get("source", ""))
+            t = str(e.get("target", ""))
+            e["source"] = id_map.get(s, s)
+            e["target"] = id_map.get(t, t)
+
+        remapped_configs = {}
+        for old_k, cfg in node_configs.items():
+            mapped_k = id_map.get(str(old_k), str(old_k))
+            remapped_configs[mapped_k] = cfg
+        node_configs = remapped_configs
+
+    # 4. Target dataset binding if specified
+    mapped_ds_id = None
+    mapped_ds_name = None
+    if target_dataset_id:
+        ds_res = await db.execute(select(Dataset).where(Dataset.id == target_dataset_id))
+        target_ds = ds_res.scalar_one_or_none()
+        if not target_ds:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Target dataset '{target_dataset_id}' not found in current tenant."
+            )
+        mapped_ds_id = target_ds.id
+        mapped_ds_name = target_ds.name
+
+        for n in nodes:
+            rec = n.get("recipe_id") or (node_configs.get(n.get("id"), {}).get("recipe_id") if isinstance(node_configs.get(n.get("id")), dict) else None)
+            if rec in ("csv_loader", "data_ingestion", "dataset_loader") or "config" in n:
+                if "config" in n and isinstance(n["config"], dict):
+                    n["config"]["dataset_id"] = mapped_ds_id
+                    n["config"]["dataset_name"] = mapped_ds_name
+        for nid, cfg in node_configs.items():
+            if isinstance(cfg, dict):
+                inner_cfg = cfg.get("config") if isinstance(cfg.get("config"), dict) else cfg
+                if cfg.get("recipe_id") in ("csv_loader", "data_ingestion", "dataset_loader") or "dataset_id" in inner_cfg:
+                    inner_cfg["dataset_id"] = mapped_ds_id
+                    inner_cfg["dataset_name"] = mapped_ds_name
+
+    # 5. Determine Name and Description
+    if name_override and str(name_override).strip():
+        final_name = str(name_override).strip()
+    else:
+        orig_name = metadata.get("name") or "Imported Pipeline"
+        final_name = f"{orig_name} (Imported)"
+
+    final_desc = metadata.get("description")
+
+    # 6. Auto-resolve dataset if not mapped
+    if not mapped_ds_id:
+        mapped_ds_id, mapped_ds_name = await resolve_workflow_dataset(
+            db=db,
+            dataset_id=None,
+            dataset_name=None,
+            nodes=nodes,
+            node_configs=node_configs
+        )
+
+    # 7. Persist as new Workflow
+    new_wf_id = await _unused_id(db, Workflow, str(uuid.uuid4()))
+    wf = Workflow(
+        id=new_wf_id,
+        name=final_name,
+        description=final_desc,
+        dataset_id=mapped_ds_id,
+        dataset_name=mapped_ds_name,
+        nodes=nodes,
+        edges=edges,
+        node_configs=node_configs,
+        last_execution=None,
+        is_active=True
+    )
+    db.add(wf)
+    await db.commit()
+    await db.refresh(wf)
+
+    wf.datasets = await resolve_all_workflow_datasets(
+        db=db,
+        primary_dataset_id=wf.dataset_id,
+        primary_dataset_name=wf.dataset_name,
+        nodes=wf.nodes or [],
+        node_configs=wf.node_configs or {},
+        edges=wf.edges or []
+    )
+    wf.workflow_id = wf.id
+    return wf
+
+
+@router.post(
+    "/import",
+    response_model=WorkflowResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_role("Tenant Admin", "Data Scientist", "ML Engineer"))]
+)
+async def import_workflow(
+    payload: Dict[str, Any] = Body(..., description="Workflow export payload or WorkflowImportRequest"),
+    name: Optional[str] = Query(None, description="Optional override name for imported workflow"),
+    target_dataset_id: Optional[str] = Query(None, description="Optional target dataset ID to map to in current tenant"),
+    generate_new_ids: bool = Query(True, description="Generate new IDs for workflow and nodes to prevent collisions"),
+    db: AsyncSession = Depends(get_db),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    Import a workflow from an exported JSON specification.
+    Validates recipe components against the catalog, remaps node/edge IDs to prevent collisions,
+    and saves the workflow in the current user's tenant.
+    """
+    return await _execute_workflow_import(
+        db=db,
+        raw_payload=payload,
+        name_override=name,
+        target_dataset_id=target_dataset_id,
+        generate_new_ids=generate_new_ids,
+        current_user=current_user
+    )
+
+
+@router.post(
+    "/import/file",
+    response_model=WorkflowResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_role("Tenant Admin", "Data Scientist", "ML Engineer"))]
+)
+async def import_workflow_file(
+    file: UploadFile = File(..., description="Exported workflow .json file"),
+    name: Optional[str] = Form(None, description="Optional override name for imported workflow"),
+    target_dataset_id: Optional[str] = Form(None, description="Optional target dataset ID to map to in current tenant"),
+    generate_new_ids: bool = Form(True, description="Generate new IDs for workflow and nodes to prevent collisions"),
+    db: AsyncSession = Depends(get_db),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    Import a workflow by uploading an exported .json file (ideal for frontend drag-and-drop).
+    """
+    try:
+        content_bytes = await file.read()
+        payload = _json.loads(content_bytes.decode("utf-8"))
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid JSON file: {str(e)}"
+        )
+
+    return await _execute_workflow_import(
+        db=db,
+        raw_payload=payload,
+        name_override=name,
+        target_dataset_id=target_dataset_id,
+        generate_new_ids=generate_new_ids,
+        current_user=current_user
+    )
+
+
 @router.get("/", response_model=WorkflowListPaginatedResponse)
 async def list_workflows(
     include_deleted: bool = False,
@@ -1259,6 +1521,92 @@ async def get_workflow(
     )
     wf.workflow_id = wf.id
     return wf
+
+
+
+@router.get(
+    "/{workflow_id}/export",
+    response_model=None,
+    dependencies=[Depends(require_role("Tenant Admin", "Data Scientist", "ML Engineer"))]
+)
+async def export_workflow(
+    workflow_id: str,
+    download: bool = Query(False, description="If True, returns a downloadable JSON file attachment"),
+    include_execution_summary: bool = Query(True, description="If True, includes latest execution status and metrics summary"),
+    db: AsyncSession = Depends(get_db),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    Export a complete workflow DAG as a standardized, versioned JSON payload or downloadable file.
+    Sanitizes credentials and secrets in node_configs to guarantee secure portability across tenants/environments.
+    """
+    result = await db.execute(select(Workflow).where(Workflow.id == workflow_id))
+    wf = result.scalar_one_or_none()
+    if not wf or not wf.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Workflow workbook '{workflow_id}' not found."
+        )
+
+    # 1. Sanitize sensitive credentials
+    sanitized_configs = sanitize_node_configs_credentials(wf.node_configs or {})
+
+    # 2. Extract discovered dataset requirements
+    all_ds = await resolve_all_workflow_datasets(
+        db=db,
+        primary_dataset_id=wf.dataset_id,
+        primary_dataset_name=wf.dataset_name,
+        nodes=wf.nodes or [],
+        node_configs=wf.node_configs or {},
+        edges=wf.edges or []
+    )
+    dataset_reqs = []
+    for d in all_ds:
+        dataset_reqs.append({
+            "node_id": d.get("node_id"),
+            "original_dataset_id": d.get("id"),
+            "original_dataset_name": d.get("name"),
+            "role": d.get("role", "Primary")
+        })
+
+    # 3. Optional lightweight execution summary
+    exec_summary = None
+    if include_execution_summary and wf.last_execution and isinstance(wf.last_execution, dict):
+        exec_summary = {
+            "status": wf.last_execution.get("status", "SUCCESS"),
+            "execution_id": wf.last_execution.get("execution_id"),
+            "total_duration_ms": wf.last_execution.get("total_duration_ms", 0.0),
+            "final_metrics": wf.last_execution.get("final_metrics") or wf.last_execution.get("metrics")
+        }
+
+    export_payload = {
+        "schema_version": "1.0.0",
+        "exported_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "metadata": {
+            "name": wf.name,
+            "description": wf.description,
+            "platform_version": "2.0",
+            "exported_by": (getattr(current_user, "email", None) or getattr(current_user, "sub", None)) if current_user else None
+        },
+        "dataset_requirements": dataset_reqs,
+        "pipeline": {
+            "nodes": wf.nodes or [],
+            "edges": wf.edges or [],
+            "node_configs": sanitized_configs
+        },
+        "last_execution_summary": exec_summary
+    }
+
+    if download:
+        clean_slug = re.sub(r'[^a-zA-Z0-9_\-]+', '_', (wf.name or 'workflow').strip()).strip('_') or 'workflow'
+        filename = f"{clean_slug}_export.json"
+        return Response(
+            content=_json.dumps(export_payload, indent=2),
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+        )
+
+    return export_payload
 
 
 @router.put(
