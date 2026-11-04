@@ -100,29 +100,16 @@ class TrainTestSplitRecipe(BaseRecipe):
         test_size        = float(config.get("test_size", 0.2))
         random_state     = int(config.get("random_state", 42))
         stratify_flag    = config.get("stratify", False)
-        ts_mode          = bool(config.get("time_series_mode", False))
+        ts_mode_cfg      = config.get("time_series_mode", False)
+        ts_mode          = bool(ts_mode_cfg) and str(ts_mode_cfg).lower() not in ("false", "0")
         time_col_cfg     = config.get("time_column", "") or ""
 
         X = df.drop(columns=[target_col])
         y = df[target_col]
 
         # ─────────────────────────────────────────────────────────
-        # AUTO-DETECT TIME-SERIES MODE
-        # If the user hasn't explicitly set time_series_mode but the
-        # dataset clearly has temporal features, enable it automatically
-        # to prevent data leakage.
-        # ─────────────────────────────────────────────────────────
-        temporal_keywords = ["year", "date", "time", "period", "timestamp", "month", "ds", "week"]
-        if not ts_mode:
-            detected_temporal_cols = [
-                c for c in X.columns
-                if any(kw in c.lower() for kw in temporal_keywords)
-            ]
-            if detected_temporal_cols:
-                ts_mode = True
-
-        # ─────────────────────────────────────────────────────────
         # TIME-SERIES CHRONOLOGICAL SPLIT (no random shuffle)
+        # Only active if explicitly enabled by user via time_series_mode.
         # Sort the full dataframe by the time column, then take the
         # chronologically last `test_size` fraction as test.
         # ─────────────────────────────────────────────────────────
@@ -132,12 +119,13 @@ class TrainTestSplitRecipe(BaseRecipe):
             if time_col_cfg.strip() and time_col_cfg.strip() in df.columns:
                 time_col = time_col_cfg.strip()
             else:
-                # Auto-detect: prefer 'year', then 'date', then 'timestamp'
-                for kw in temporal_keywords:
-                    candidates = [c for c in X.columns if kw in c.lower()]
-                    if candidates:
-                        time_col = candidates[0]
-                        break
+                # Find genuine date or year column using robust datetime validation
+                time_col = find_date_column(X, exclude_cols=[target_col])
+                if not time_col:
+                    for c in X.columns:
+                        if pd.api.types.is_datetime64_any_dtype(df[c]):
+                            time_col = c
+                            break
 
             if time_col and time_col in df.columns:
                 # Try numeric sort (year integers) then datetime
@@ -255,7 +243,7 @@ class TrainTestSplitRecipe(BaseRecipe):
             "y_test":          y_test,
             "feature_names":   list(X.columns),
             "target_column":   target_col,
-            "split_mode":      "random"
+            "split_mode":      "stratified" if strat is not None else "random"
         }
         if target_classes:
             res["target_classes"] = target_classes
