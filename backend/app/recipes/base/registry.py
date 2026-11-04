@@ -125,6 +125,11 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "postgresql_connector": ("Ingestion & Orchestration", "Database & Warehouse Connectors"),
     "mysql_connector": ("Ingestion & Orchestration", "Database & Warehouse Connectors"),
     "mongodb_connector": ("Ingestion & Orchestration", "Database & Warehouse Connectors"),
+    "snowflake_connector": ("Ingestion & Orchestration", "Database & Warehouse Connectors"),
+    "bigquery_connector": ("Ingestion & Orchestration", "Database & Warehouse Connectors"),
+    "redshift_connector": ("Ingestion & Orchestration", "Database & Warehouse Connectors"),
+    "s3_data_lake_connector": ("Ingestion & Orchestration", "Data Lake & Object Storage"),
+    "azure_data_lake_connector": ("Ingestion & Orchestration", "Data Lake & Object Storage"),
 
     # Unsupervised & Dimensionality Reduction
     "clustering": ("Modeling", "Unsupervised & Dimensionality Reduction"),
@@ -245,6 +250,23 @@ class RecipeRegistry:
             "mongo": "mongodb_connector",
             "mongodb": "mongodb_connector",
             "mongo_connector": "mongodb_connector",
+            "snowflake": "snowflake_connector",
+            "snowflake_dw": "snowflake_connector",
+            "bigquery": "bigquery_connector",
+            "google_bigquery": "bigquery_connector",
+            "gcp_bigquery": "bigquery_connector",
+            "redshift": "redshift_connector",
+            "amazon_redshift": "redshift_connector",
+            "aws_redshift": "redshift_connector",
+            "s3": "s3_data_lake_connector",
+            "s3_connector": "s3_data_lake_connector",
+            "s3_lake": "s3_data_lake_connector",
+            "amazon_s3": "s3_data_lake_connector",
+            "azure_blob": "azure_data_lake_connector",
+            "azure_blob_connector": "azure_data_lake_connector",
+            "adls": "azure_data_lake_connector",
+            "adls_connector": "azure_data_lake_connector",
+            "azure_data_lake": "azure_data_lake_connector",
             "embeddings": "embedding_generator",
             "vector_embedder": "embedding_generator",
             "vector_search": "vector_db_indexer",
@@ -379,7 +401,10 @@ class RecipeRegistry:
     def _planned(self) -> Dict[str, RecipeMetadata]:
         """Planned recipes that are not implemented yet (a registered class always wins)."""
         from backend.app.recipes.base.planned_recipes import PLANNED_RECIPES
-        return {rid: meta for rid, meta in PLANNED_RECIPES.items() if rid not in self._recipes}
+        return {
+            rid: meta for rid, meta in PLANNED_RECIPES.items()
+            if rid not in self._recipes and self._aliases.get(rid) not in self._recipes
+        }
 
     def get(self, recipe_id: str) -> BaseRecipe:
         """
