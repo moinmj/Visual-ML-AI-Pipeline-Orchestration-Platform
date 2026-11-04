@@ -10,6 +10,11 @@ from backend.app.recipes.ingestion.bigquery_connector import BigQueryConnectorRe
 from backend.app.recipes.ingestion.redshift_connector import RedshiftConnectorRecipe
 from backend.app.recipes.ingestion.s3_data_lake_connector import S3DataLakeConnectorRecipe
 from backend.app.recipes.ingestion.azure_data_lake_connector import AzureDataLakeConnectorRecipe
+from backend.app.recipes.ingestion.kafka_consumer import KafkaConsumerRecipe
+from backend.app.recipes.ingestion.rabbitmq_consumer import RabbitMQConsumerRecipe
+from backend.app.recipes.ingestion.mqtt_iot_stream import MQTTStreamRecipe
+from backend.app.recipes.ingestion.websocket_listener import WebSocketListenerRecipe
+from backend.app.recipes.ingestion.event_bus_publisher import EventBusPublisherRecipe
 from backend.app.recipes.preprocessing.custom_python_step import CustomPythonStepRecipe
 from backend.app.recipes.preprocessing.missing_values import MissingValueImputerRecipe
 from backend.app.recipes.preprocessing.scaling import FeatureScalerRecipe
@@ -222,6 +227,11 @@ def register_all_recipes():
     recipe_registry.register(RedshiftConnectorRecipe())
     recipe_registry.register(S3DataLakeConnectorRecipe())
     recipe_registry.register(AzureDataLakeConnectorRecipe())
+    recipe_registry.register(KafkaConsumerRecipe())
+    recipe_registry.register(RabbitMQConsumerRecipe())
+    recipe_registry.register(MQTTStreamRecipe())
+    recipe_registry.register(WebSocketListenerRecipe())
+    recipe_registry.register(EventBusPublisherRecipe())
     recipe_registry.register(DatasetJoinRecipe())
     recipe_registry.register(WebhookTriggerRecipe())
     recipe_registry.register(CronScheduleTriggerRecipe())

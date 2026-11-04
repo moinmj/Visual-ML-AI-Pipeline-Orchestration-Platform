@@ -9,6 +9,11 @@ from backend.app.recipes.ingestion.bigquery_connector import BigQueryConnectorRe
 from backend.app.recipes.ingestion.redshift_connector import RedshiftConnectorRecipe
 from backend.app.recipes.ingestion.s3_data_lake_connector import S3DataLakeConnectorRecipe
 from backend.app.recipes.ingestion.azure_data_lake_connector import AzureDataLakeConnectorRecipe
+from backend.app.recipes.ingestion.kafka_consumer import KafkaConsumerRecipe
+from backend.app.recipes.ingestion.rabbitmq_consumer import RabbitMQConsumerRecipe
+from backend.app.recipes.ingestion.mqtt_iot_stream import MQTTStreamRecipe
+from backend.app.recipes.ingestion.websocket_listener import WebSocketListenerRecipe
+from backend.app.recipes.ingestion.event_bus_publisher import EventBusPublisherRecipe
 
 __all__ = [
     "CSVLoaderRecipe",
@@ -21,5 +26,10 @@ __all__ = [
     "BigQueryConnectorRecipe",
     "RedshiftConnectorRecipe",
     "S3DataLakeConnectorRecipe",
-    "AzureDataLakeConnectorRecipe"
+    "AzureDataLakeConnectorRecipe",
+    "KafkaConsumerRecipe",
+    "RabbitMQConsumerRecipe",
+    "MQTTStreamRecipe",
+    "WebSocketListenerRecipe",
+    "EventBusPublisherRecipe"
 ]
