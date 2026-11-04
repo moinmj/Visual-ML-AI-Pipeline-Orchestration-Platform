@@ -90,6 +90,7 @@ def test_all_recipes_have_valid_input_types():
     """
     valid_input_types = {
         "column_select",
+        "column_dropdown",
         "multi_column_select",
         "dropdown",
         "multi_select",
@@ -105,7 +106,10 @@ def test_all_recipes_have_valid_input_types():
         "file_select",
         "dataset_select",
         "password",
-        "boolean"
+        "boolean",
+        "credential_dropdown",
+        "json_editor",
+        "toggle"
     }
 
     total_recipes = 0
