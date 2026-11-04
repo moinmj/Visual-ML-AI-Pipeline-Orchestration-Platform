@@ -7,6 +7,7 @@ import pandas as pd
 from backend.app.core.config import settings
 from backend.app.core.logging import logger
 from backend.app.recipes.base.registry import recipe_registry
+from backend.app.recipes.training.encoder_utils import find_date_column
 from backend.app.recommendation.recommender import AIRecommender
 
 
@@ -274,18 +275,15 @@ class LLMRecommender:
         nodes = dag.get("nodes", [])
         edges = dag.get("edges", [])
 
-        # Infer temporal column from DataFrame if available
-        temporal_cols = [
-            c for c in df.columns
-            if any(kw in c.lower() for kw in ["date", "time", "year", "ds", "period", "month", "week"])
-        ]
-        detected_date_col = temporal_cols[0] if temporal_cols else None
-
         target_col = result.get("target_column") or target_column
         task_type = result.get("task_type") or task_type
 
-        # For datasets with a clear date/time column, auto-enforce time_series_forecasting if task is ambiguous or classification
-        if detected_date_col and (not task_type or task_type in ["classification", "auto", "Auto-Detect Task Type", ""]):
+        # Infer temporal column using robust calendar/date validation (skips tabular numeric features like MonthlyCharges)
+        detected_date_col = find_date_column(df, exclude_cols=[target_col] if target_col else [])
+
+        # Auto-enforce time_series_forecasting ONLY if task was completely ambiguous/unspecified
+        # Never override an explicit or detected classification or regression task
+        if detected_date_col and (not task_type or task_type in ["auto", "Auto-Detect Task Type", ""]):
             task_type = "time_series_forecasting"
             result["task_type"] = task_type
 

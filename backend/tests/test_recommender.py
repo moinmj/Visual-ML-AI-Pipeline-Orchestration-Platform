@@ -114,3 +114,37 @@ def test_walmart_sales_target_and_scaler_exclusion():
 
 
 
+
+
+def test_telco_churn_not_time_series():
+    from backend.app.recommendation.llm_recommender import LLMRecommender
+    telco_df = pd.DataFrame({
+        "customerID": [str(i) for i in range(20)],
+        "MonthlyCharges": [20.0 + i * 4.5 for i in range(20)],
+        "TotalCharges": [200.0 + i * 14.5 for i in range(20)],
+        "tenure": list(range(20)),
+        "Churn": [0, 1] * 10
+    })
+    # Heuristic recommender should classify as classification
+    rec = AIRecommender.recommend_pipeline(telco_df, target_column="Churn")
+    assert rec["task_type"] == "classification"
+    assert rec["target_column"] == "Churn"
+
+    # LLMRecommender validation must preserve classification and not force time_series_forecasting
+    mock_llm_result = {
+        "task_type": "classification",
+        "target_column": "Churn",
+        "recommended_dag": {
+            "nodes": [
+                {"id": "node_csv", "recipe_id": "csv_loader", "config": {}},
+                {"id": "node_split", "recipe_id": "train_test_split", "config": {}},
+                {"id": "node_model", "recipe_id": "xgboost_trainer", "config": {}}
+            ],
+            "edges": []
+        }
+    }
+    enriched = LLMRecommender._validate_and_enrich_dag(mock_llm_result, df=telco_df, target_column="Churn")
+    assert enriched["task_type"] == "classification"
+    split_nodes = [n for n in enriched["recommended_dag"]["nodes"] if n["recipe_id"] in ["train_test_split", "stratified_split"]]
+    assert len(split_nodes) == 1
+    assert split_nodes[0]["recipe_id"] == "train_test_split"
