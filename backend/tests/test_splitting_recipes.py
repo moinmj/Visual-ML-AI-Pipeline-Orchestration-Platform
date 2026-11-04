@@ -183,3 +183,35 @@ def test_split_to_model_trainer_handoff():
     )
     assert "metrics" in eval_res
     assert "accuracy" in eval_res["metrics"]
+
+def test_train_test_split_tabular_with_monthly_charges():
+    from backend.app.recipes.splitting.train_test_split import TrainTestSplitRecipe
+    df = pd.DataFrame({
+        "customerID": [str(i) for i in range(20)],
+        "MonthlyCharges": [20.0 + i * 4.5 for i in range(20)],
+        "tenure": list(range(20)),
+        "Churn": [0, 1] * 10
+    })
+    recipe = TrainTestSplitRecipe()
+    # Should perform standard random split, NOT chronological
+    res = recipe.execute({"dataframe": df}, {"target_column": "Churn", "test_size": 0.2, "random_state": 42})
+    assert res.get("split_mode") == "random"
+
+    # When stratify=True, split_mode should be stratified
+    res_strat = recipe.execute({"dataframe": df}, {"target_column": "Churn", "test_size": 0.2, "random_state": 42, "stratify": True})
+    assert res_strat.get("split_mode") == "stratified"
+
+
+def test_train_test_split_explicit_time_series_mode():
+    from backend.app.recipes.splitting.train_test_split import TrainTestSplitRecipe
+    dates = pd.date_range("2024-01-01", periods=20, freq="D")
+    df = pd.DataFrame({
+        "date": dates,
+        "feature": np.arange(20),
+        "target": np.arange(20) * 1.5
+    })
+    recipe = TrainTestSplitRecipe()
+    res = recipe.execute({"dataframe": df}, {"target_column": "target", "test_size": 0.25, "time_series_mode": True})
+    assert res.get("split_mode") == "chronological"
+    assert len(res["X_test"]) == 5
+    assert len(res["X_train"]) == 15
