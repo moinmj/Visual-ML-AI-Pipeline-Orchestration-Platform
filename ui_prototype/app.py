@@ -3042,10 +3042,17 @@ if app_mode == "🎨 Pipeline Whiteboard":
                     m2.metric("Mean Absolute Error (MAE)", f"{mae_v:.4f}")
                     m3.metric("Root Mean Squared Error (RMSE)", f"{rmse_v:.4f}")
                     m4.metric("Mean Squared Error (MSE)", f"{mse_v:.4f}")
-                    mape_str = f"{mape_v*100:.2f}%" if mape_v is not None else "N/A"
+                    mape_display = final_metrics.get("mape_display")
+                    if mape_display:
+                        mape_str = mape_display
+                    elif mape_v is not None:
+                        mape_str = f"{mape_v*100:.2f}%" if (isinstance(mape_v, (int, float)) and mape_v < 1.0) else f"{mape_v:.2f}%"
+                    else:
+                        mape_str = "N/A"
                     m5.metric("MAPE", mape_str)
 
-                    st.info(f"✨ **Regression Model Evaluation:** Model achieved **R² = {r2_v:.4f}** with an average absolute deviation of **MAE = {mae_v:.4f}** on the unseen test set.")
+                    smape_str = f" (SMAPE: {final_metrics['smape']:.2f}%)" if final_metrics.get("smape") is not None else ""
+                    st.info(f"✨ **Regression Model Evaluation:** Model achieved **R² = {r2_v:.4f}** with an average absolute deviation of **MAE = {mae_v:.4f}** on the unseen test set.{smape_str}")
 
                 with rep_tab2:
                     traj_data = final_metrics.get("trajectory") or final_metrics.get("actual_vs_predicted_time_series")

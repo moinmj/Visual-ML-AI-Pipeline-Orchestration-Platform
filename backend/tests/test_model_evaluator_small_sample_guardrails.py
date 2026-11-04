@@ -269,6 +269,162 @@ def test_regression_small_sample_guardrails():
     assert "=== Model Evaluation Report" in result["report"]
 
 
+def test_regression_mape_zeros_in_actuals_reported_as_na_with_smape():
+    """Verify the exact defect reported by the testing team (Crazy 14 Trillion % MAPE):
+    When actual ground truth target contains zero, standard MAPE divides by zero (or scikit-learn's tiny epsilon)
+    exploding to trillions.
+    The evaluator must:
+    1. Set metrics['mape'] to None
+    2. Set metrics['mape_display'] to 'N/A (Contains zeros)'
+    3. Calculate SMAPE (Symmetric MAPE) as a robust zero-safe alternative bounded in [0%, 200%]
+    4. Emit a clear [WARNING: ZERO IN ACTUALS] in warnings and human-readable report.
+    """
+    evaluator = ModelEvaluatorRecipe()
+
+    class MockRegressor:
+        def predict(self, X):
+            return np.array([10.0, 20.0, 30.0])
+
+    X_test = pd.DataFrame({"x": [1, 2, 3]})
+    # Ground truth contains 0.0 (causes standard MAPE division explosion)
+    y_test = pd.Series([0.0, 19.0, 32.0])
+
+    result = evaluator.execute(
+        inputs={
+            "model": MockRegressor(),
+            "X_test": X_test,
+            "y_test": y_test,
+            "task_type": "regression"
+        },
+        config={"min_sample_threshold": 2}
+    )
+
+    metrics = result["metrics"]
+    report = result["report"]
+
+    # 1. MAPE must NOT explode into trillions or numbers
+    assert metrics["mape"] is None
+    assert metrics["mape_display"] == "N/A (Contains zeros)"
+    assert metrics["mape_status"] == "UNDEFINED_ZERO_DIVISION"
+    assert metrics["has_zero_actuals"] is True
+
+    # 2. SMAPE must be calculated cleanly and bounded
+    assert metrics["smape"] is not None
+    assert 0.0 <= metrics["smape"] <= 200.0
+    # Expected SMAPE:
+    # term 0: 2*|0-10| / (0+10) = 20/10 = 2.0 (200%)
+    # term 1: 2*|19-20| / (19+20) = 2/39 = 0.05128 (5.13%)
+    # term 2: 2*|32-30| / (32+30) = 4/62 = 0.06452 (6.45%)
+    # mean: (2.0 + 0.05128 + 0.06452) / 3 = 0.70526 -> 70.526%
+    assert metrics["smape"] == pytest.approx(70.526, abs=0.01)
+    assert metrics["smape_display"] == "70.53%"
+
+    # 3. Report formatting checks
+    assert "MAPE               : N/A (Contains zeros)" in report
+    assert f"SMAPE (Zero-Safe)  : {metrics['smape']:.4f}%" in report
+    assert "[WARNING: ZERO IN ACTUALS]" in report
+    assert "Trillion" not in report
+    assert "1e+" not in report
+
+
+def test_regression_mape_all_zeros_handled_safely():
+    """Verify all-zero ground truth and prediction edge case does not crash or raise ZeroDivisionError."""
+    evaluator = ModelEvaluatorRecipe()
+
+    class MockRegressor:
+        def predict(self, X):
+            return np.array([0.0, 0.0, 0.0])
+
+    X_test = pd.DataFrame({"x": [1, 2, 3]})
+    y_test = pd.Series([0.0, 0.0, 0.0])
+
+    result = evaluator.execute(
+        inputs={
+            "model": MockRegressor(),
+            "X_test": X_test,
+            "y_test": y_test,
+            "task_type": "regression"
+        },
+        config={"min_sample_threshold": 2}
+    )
+
+    metrics = result["metrics"]
+    report = result["report"]
+
+    assert metrics["mape"] is None
+    assert metrics["mape_display"] == "N/A (Contains zeros)"
+    assert metrics["smape"] == 0.0
+    assert "MAPE               : N/A (Contains zeros)" in report
+    assert "SMAPE (Zero-Safe)  : 0.0000%" in report
+
+
+def test_regression_mape_valid_non_zero_actuals():
+    """Verify standard regression with non-zero targets correctly computes standard percentage MAPE and SMAPE."""
+    evaluator = ModelEvaluatorRecipe()
+
+    class MockRegressor:
+        def predict(self, X):
+            return np.array([110.0, 190.0, 330.0])
+
+    X_test = pd.DataFrame({"x": [1, 2, 3]})
+    y_test = pd.Series([100.0, 200.0, 300.0])
+
+    result = evaluator.execute(
+        inputs={
+            "model": MockRegressor(),
+            "X_test": X_test,
+            "y_test": y_test,
+            "task_type": "regression"
+        },
+        config={"min_sample_threshold": 2}
+    )
+
+    metrics = result["metrics"]
+    report = result["report"]
+
+    # |100-110|/100 = 0.10, |200-190|/200 = 0.05, |300-330|/300 = 0.10 -> mean = 0.0833 (8.33%)
+    assert metrics["mape"] == pytest.approx(0.0833, abs=0.001)
+    assert metrics["mape_display"] == "8.33%"
+    assert metrics["mape_status"] == "VALID"
+    assert metrics["has_zero_actuals"] is False
+    assert metrics["smape"] is not None
+    assert "MAPE               : 8.33%" in report
+    assert "SMAPE (Zero-Safe)" in report
+
+
+
+
+def test_regression_runaway_mape_near_zeros_guarded():
+    """Verify extreme near-zero actuals (e.g. 1e-12) do not explode MAPE into trillions."""
+    evaluator = ModelEvaluatorRecipe()
+
+    class MockRegressor:
+        def predict(self, X):
+            return np.array([10.0, 100.0])
+
+    X_test = pd.DataFrame({"x": [1, 2]})
+    # 1e-12 is within atol=1e-9 of 0.0
+    y_test = pd.Series([1e-12, 100.0])
+
+    result = evaluator.execute(
+        inputs={
+            "model": MockRegressor(),
+            "X_test": X_test,
+            "y_test": y_test,
+            "task_type": "regression"
+        },
+        config={"min_sample_threshold": 2}
+    )
+
+    metrics = result["metrics"]
+    report = result["report"]
+
+    assert metrics["mape"] is None
+    assert metrics["mape_display"] == "N/A (Contains zeros)"
+    assert metrics["has_zero_actuals"] is True
+    assert "Trillion" not in report
+    assert "1e+" not in report
+
 if __name__ == "__main__":
     print("Running test_testing_team_exact_small_sample_deceptive_roc_and_uncalibrated_log_loss...")
     test_testing_team_exact_small_sample_deceptive_roc_and_uncalibrated_log_loss()
