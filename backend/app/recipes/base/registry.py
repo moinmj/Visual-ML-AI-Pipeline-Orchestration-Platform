@@ -115,6 +115,8 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "mapbox_connector": ("Apps & Integrations", "Maps & Location"),
     "salesforce_connector": ("Apps & Integrations", "CRM / Support / Business"),
     "hubspot_connector": ("Apps & Integrations", "CRM / Support / Business"),
+    "zendesk_connector": ("Apps & Integrations", "CRM / Support / Business"),
+    "freshdesk_connector": ("Apps & Integrations", "CRM / Support / Business"),
 
     # Unsupervised & Dimensionality Reduction
     "clustering": ("Modeling", "Unsupervised & Dimensionality Reduction"),
@@ -212,6 +214,8 @@ class RecipeRegistry:
             "salesforce": "salesforce_connector",
             "sfdc": "salesforce_connector",
             "hubspot": "hubspot_connector",
+            "zendesk": "zendesk_connector",
+            "freshdesk": "freshdesk_connector",
             "msteams": "ms_teams_notifier",
             "teams": "ms_teams_notifier",
             "twilio": "twilio_connector",
