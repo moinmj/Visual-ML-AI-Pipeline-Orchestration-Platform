@@ -124,6 +124,11 @@ from backend.app.recipes.integrations.salesforce_connector import SalesforceConn
 from backend.app.recipes.integrations.hubspot_connector import HubSpotConnectorRecipe
 from backend.app.recipes.integrations.zendesk_connector import ZendeskConnectorRecipe
 from backend.app.recipes.integrations.freshdesk_connector import FreshdeskConnectorRecipe
+from backend.app.recipes.integrations.intercom_connector import IntercomConnectorRecipe
+from backend.app.recipes.integrations.stripe_connector import StripeConnectorRecipe
+from backend.app.recipes.integrations.shopify_connector import ShopifyConnectorRecipe
+from backend.app.recipes.integrations.google_ads_connector import GoogleAdsConnectorRecipe
+from backend.app.recipes.integrations.meta_ads_connector import MetaAdsConnectorRecipe
 
 # Unsupervised & Dimensionality Reduction Recipes
 from backend.app.recipes.unsupervised.clustering import ClusteringRecipe
@@ -323,6 +328,11 @@ def register_all_recipes():
     recipe_registry.register(HubSpotConnectorRecipe())
     recipe_registry.register(ZendeskConnectorRecipe())
     recipe_registry.register(FreshdeskConnectorRecipe())
+    recipe_registry.register(IntercomConnectorRecipe())
+    recipe_registry.register(StripeConnectorRecipe())
+    recipe_registry.register(ShopifyConnectorRecipe())
+    recipe_registry.register(GoogleAdsConnectorRecipe())
+    recipe_registry.register(MetaAdsConnectorRecipe())
 
     # Unsupervised & Dimensionality Reduction
     recipe_registry.register(ClusteringRecipe())
