@@ -220,7 +220,14 @@ class DatasetJoinRecipe(BaseRecipe):
                 errors.append("Dataset Join requires join criteria: configure 'conditions' (column pairs), 'on', or both 'left_on' and 'right_on'.")
 
             if conditions and isinstance(conditions, list):
-                valid_ops = {"=", "==", "!=", "<>", ">", "<", ">=", "<=", "eq", "ne", "gt", "lt", "gte", "lte"}
+                valid_ops = {
+                    "=", "==", "eq", "equal", "equals",
+                    "!=", "<>", "ne", "neq", "not_equal", "not_equals",
+                    ">", "gt", "greater", "greater_than",
+                    "<", "lt", "less", "less_than",
+                    ">=", "gte", "ge", "greater_than_or_equal", "greater_or_equal",
+                    "<=", "lte", "le", "less_than_or_equal", "less_or_equal"
+                }
                 for idx, c in enumerate(conditions):
                     if not isinstance(c, dict) or not (c.get("left") or c.get("left_column")) or not (c.get("right") or c.get("right_column")):
                         errors.append(f"Join condition #{idx+1} is missing 'left' or 'right' column mapping.")
@@ -346,7 +353,7 @@ class DatasetJoinRecipe(BaseRecipe):
                 raise ValueError(f"Failed to join datasets with join_type='cross': {str(e)}")
 
             if indicator_requested:
-                merged_full["_merge"] = pd.Series(["both"] * len(merged_full), dtype="category")
+                merged_full["_merge"] = pd.Categorical(["both"] * len(merged_full), categories=["left_only", "right_only", "both"])
 
             final_df = merged_full.copy()
             matched_df = merged_full.copy()
@@ -569,10 +576,10 @@ class DatasetJoinRecipe(BaseRecipe):
                 has_left = merged_full["__row_id_left__"].notna()
                 has_right = merged_full["__row_id_right__"].notna()
 
-                merge_series = pd.Series("both", index=merged_full.index, dtype="category")
+                merge_series = pd.Series("both", index=merged_full.index, dtype="object")
                 merge_series[has_left & ~has_right] = "left_only"
                 merge_series[~has_left & has_right] = "right_only"
-                merged_full["_merge"] = merge_series
+                merged_full["_merge"] = pd.Categorical(merge_series, categories=["left_only", "right_only", "both"])
 
                 merged_full = merged_full.drop(columns=["__row_id_left__", "__row_id_right__"], errors="ignore")
             else:
@@ -775,7 +782,7 @@ class DatasetJoinRecipe(BaseRecipe):
             else:
                 if "_merge" not in final_df.columns:
                     if join_type in ("inner", "split"):
-                        final_df["_merge"] = pd.Series(["both"] * len(final_df), index=final_df.index, dtype="category")
+                        final_df["_merge"] = pd.Categorical(["both"] * len(final_df), categories=["left_only", "right_only", "both"])
                     elif "_merge" in merged_full.columns:
                         final_df["_merge"] = merged_full.loc[final_df.index, "_merge"]
 
