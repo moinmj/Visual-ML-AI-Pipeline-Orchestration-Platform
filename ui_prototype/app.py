@@ -22,12 +22,9 @@ import importlib
 from streamlit_flow.elements import StreamlitFlowNode, StreamlitFlowEdge
 from streamlit_flow.state import StreamlitFlowState
 
-import backend.app.recommendation.recommender as recommender_mod
-importlib.reload(recommender_mod)
-from backend.app.recommendation.recommender import AIRecommender
+os.environ["MLFLOW_DISABLE_AGENT_HINT"] = "1"
 
-import backend.app.engine.execution.executor as executor_mod
-importlib.reload(executor_mod)
+from backend.app.recommendation.recommender import AIRecommender
 from backend.app.engine.execution.executor import DAGExecutor
 from backend.app.engine.execution.job_manager import job_manager
 from backend.app.engine.inference.pipeline_inferencer import PipelineInferencer
@@ -36,7 +33,9 @@ from backend.app.engine.inference.schemas import PredictionRequest
 from backend.app.profiling.profiler import DataProfiler
 from backend.app.recipes.base.registry import recipe_registry
 from backend.app.recipes import register_all_recipes
-register_all_recipes()
+
+if not recipe_registry._recipes:
+    register_all_recipes()
 
 from backend.app.engine.dag.graph import WorkflowGraph, WorkflowNode, WorkflowEdge
 from backend.app.tenant_data.client import (
@@ -428,6 +427,7 @@ RECIPE_SPECIFIC_ICONS = {
 }
 
 
+@st.cache_data(show_spinner=False)
 def build_recipe_palette() -> Dict[str, List[Dict[str, Any]]]:
     """Dynamically aggregates all enabled backend recipes into enterprise categories with full metadata."""
     palette: Dict[str, List[Dict[str, Any]]] = {}
@@ -452,7 +452,13 @@ def build_recipe_palette() -> Dict[str, List[Dict[str, Any]]]:
         # Build default config from schema defaults
         def_config = {}
         try:
-            schema = r.get_schema() or {}
+            recipe_inst = recipe_registry._recipes.get(r.recipe_id)
+            if recipe_inst and hasattr(recipe_inst, "get_schema"):
+                schema = recipe_inst.get_schema() or {}
+            elif hasattr(r, "get_schema"):
+                schema = r.get_schema() or {}
+            else:
+                schema = {}
             props = schema.get("properties", {})
             for p_name, p_spec in props.items():
                 if "default" in p_spec:
@@ -489,6 +495,25 @@ def build_recipe_palette() -> Dict[str, List[Dict[str, Any]]]:
 
 
 RECIPE_CATEGORY_MAP = build_recipe_palette()
+
+
+@st.cache_data(show_spinner=False)
+def get_cached_ai_recommendation(dataset_name: str, num_rows: int, num_cols: int, target_col: Optional[str], task_type: Optional[str]) -> Dict[str, Any]:
+    """Generates instantaneous heuristic pipeline recommendations without blocking on external LLM 404s."""
+    df = st.session_state.get("active_df")
+    if df is None:
+        return {
+            "explanation": "No active dataset loaded.",
+            "profile_summary": {"rows": 0, "missing_cells": 0},
+            "task_type": "classification",
+            "model_rankings": []
+        }
+    return AIRecommender._heuristic_recommend_pipeline(
+        df,
+        target_column=target_col,
+        task_type=task_type
+    )
+
 
 # Canvas Flow State
 if "canvas_version" not in st.session_state:
@@ -1333,7 +1358,7 @@ def auto_format_canvas_layout():
 def build_recommended_pipeline(rec_dict: dict = None, target_col: str = None, task_type: str = None):
     """Instantiates a full end-to-end DAG based on dataset analysis."""
     df = st.session_state["active_df"]
-    rec = rec_dict or AIRecommender.recommend_pipeline(df, target_column=target_col, task_type=task_type)
+    rec = rec_dict or AIRecommender._heuristic_recommend_pipeline(df, target_column=target_col, task_type=task_type)
     
     t_rec_start = time.time()
     t_nodes = []
@@ -1698,18 +1723,23 @@ def save_workflow_to_backend(name: str, description: str = "") -> dict:
             st.session_state["wb_name_input"] = final_saved_name
         saved_dict = {"id": wf_id, "name": final_saved_name, "status": "SAVED"}
         record_api_telemetry("💾 Save Workflow DB", "/api/v1/workflows/", "POST", body, saved_dict, 201, 1.8)
+        try:
+            fetch_saved_workflows_from_backend.clear()
+        except Exception:
+            pass
         return saved_dict
     except Exception as ex:
         st.error(f"Error saving workflow: {str(ex)}")
         return None
 
 
+@st.cache_data(ttl=15, show_spinner=False)
 def fetch_saved_workflows_from_backend(include_deleted: bool = False) -> list:
     """Fetches list of all saved pipeline workbooks from backend REST API/DB."""
     try:
         import httpx
         url = f"http://localhost:8000/api/v1/workflows/?include_deleted={'true' if include_deleted else 'false'}"
-        res = httpx.get(url, timeout=4.0)
+        res = httpx.get(url, timeout=0.8)
         if res.status_code == 200:
             payload = res.json()
             if isinstance(payload, dict):
@@ -1756,8 +1786,12 @@ def fetch_saved_workflows_from_backend(include_deleted: bool = False) -> list:
 def soft_delete_workflow_backend(workflow_id: str) -> bool:
     """Soft-deletes a workflow by ID."""
     try:
+        try:
+            fetch_saved_workflows_from_backend.clear()
+        except Exception:
+            pass
         import httpx
-        res = httpx.delete(f"http://localhost:8000/api/v1/workflows/{workflow_id}", timeout=4.0)
+        res = httpx.delete(f"http://localhost:8000/api/v1/workflows/{workflow_id}", timeout=1.0)
         if res.status_code == 200:
             record_api_telemetry("🗑️ Soft-Delete Workflow API", f"/api/v1/workflows/{workflow_id}", "DELETE", {"id": workflow_id}, res.json(), 200, 1.9)
             return True
@@ -1792,8 +1826,12 @@ def soft_delete_workflow_backend(workflow_id: str) -> bool:
 def restore_deleted_workflow_backend(workflow_id: str) -> bool:
     """Restores a soft-deleted workflow by ID back to active state."""
     try:
+        try:
+            fetch_saved_workflows_from_backend.clear()
+        except Exception:
+            pass
         import httpx
-        res = httpx.post(f"http://localhost:8000/api/v1/workflows/{workflow_id}/restore", timeout=4.0)
+        res = httpx.post(f"http://localhost:8000/api/v1/workflows/{workflow_id}/restore", timeout=1.0)
         if res.status_code == 200:
             record_api_telemetry("♻️ Restore Workflow API", f"/api/v1/workflows/{workflow_id}/restore", "POST", {"id": workflow_id}, res.json(), 200, 2.0)
             return True
@@ -1820,12 +1858,13 @@ def restore_deleted_workflow_backend(workflow_id: str) -> bool:
                 return True
             return False
 
+@st.cache_data(ttl=15, show_spinner=False)
 def fetch_workflow_history_backend(workflow_id: str) -> list:
     """Fetches execution history list for a workflow."""
     try:
         import httpx
         url = f"http://localhost:8000/api/v1/workflows/{workflow_id}/history"
-        res = httpx.get(url, timeout=4.0)
+        res = httpx.get(url, timeout=0.8)
         if res.status_code == 200:
             return res.json()
     except Exception:
@@ -2580,7 +2619,8 @@ if "Pipeline Whiteboard" in app_mode:
             st.session_state["ai_task_selected"] = custom_task
 
         task_override = None if custom_task == "Auto-Detect" else custom_task
-        rec = AIRecommender.recommend_pipeline(active_df, target_column=custom_target, task_type=task_override)
+        ds_name = st.session_state.get("active_dataset_name", "dataset")
+        rec = get_cached_ai_recommendation(ds_name, len(active_df), len(df_cols), custom_target, task_override)
 
         c_ai1, c_ai2 = st.columns([3, 2])
         with c_ai1:
@@ -3095,9 +3135,15 @@ if "Pipeline Whiteboard" in app_mode:
                 active_df_obj = st.session_state.get("active_df")
                 col_type_map = {}
                 if active_df_obj is not None and isinstance(active_df_obj, pd.DataFrame):
-                    from backend.app.profiling.profiler import DataProfiler
-                    for col_name in active_df_obj.columns:
-                        col_type_map[str(col_name)] = DataProfiler._infer_column_type(active_df_obj[col_name])
+                    ds_n = str(st.session_state.get("active_dataset_name", "ds"))
+                    c_map_key = f"_col_type_map_{ds_n}_{len(active_df_obj.columns)}"
+                    if c_map_key in st.session_state:
+                        col_type_map = st.session_state[c_map_key]
+                    else:
+                        from backend.app.profiling.profiler import DataProfiler
+                        for col_name in active_df_obj.columns:
+                            col_type_map[str(col_name)] = DataProfiler._infer_column_type(active_df_obj[col_name])
+                        st.session_state[c_map_key] = col_type_map
 
                 def format_col_option(opt):
                     if not opt or opt in ["-- Select Column --", "(None)"]:
