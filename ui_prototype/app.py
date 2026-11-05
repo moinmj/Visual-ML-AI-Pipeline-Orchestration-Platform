@@ -3389,6 +3389,7 @@ if "Pipeline Whiteboard" in app_mode:
                         current_config[prop_name] = new_val
 
                     # Inline Auto-Switch / Synchronization for Split Mode & Temporal Setting
+                    r_id = getattr(recipe_obj, "recipe_id", None) or node_cfg.get("recipe_id", "")
                     if r_id == "train_test_split":
                         is_strat = bool(current_config.get("stratify", False))
                         is_ts = bool(current_config.get("time_series_mode", False))
