@@ -2837,6 +2837,38 @@ if app_mode == "🎨 Pipeline Whiteboard":
 
                         current_config[prop_name] = new_val
 
+                    # Inline Validation Check for Discrete 0/1 Target in Regression Mode
+                    if r_id in ["xgboost_trainer", "lightgbm_trainer", "catboost_trainer", "random_forest_trainer", "linear_trainer"]:
+                        if str(current_config.get("task_type", "")).lower() == "regression":
+                            resolved_target = current_config.get("target_column")
+                            if not resolved_target:
+                                for nid, n_info in st.session_state.get("node_configs", {}).items():
+                                    if nid != selected_node_id and n_info.get("config", {}).get("target_column"):
+                                        resolved_target = n_info["config"]["target_column"]
+                                        break
+                            if not resolved_target:
+                                resolved_target = st.session_state.get("active_target_col")
+
+                            is_discrete_binary = False
+                            df_active = st.session_state.get("active_df")
+                            if df_active is not None and resolved_target and resolved_target in df_active.columns:
+                                s = df_active[resolved_target].dropna()
+                                u_vals = set(s.unique())
+                                if len(u_vals) <= 2 and (u_vals.issubset({0, 1, 0.0, 1.0, True, False, "0", "1", "yes", "no"}) or len(u_vals) <= 2):
+                                    is_discrete_binary = True
+                            elif resolved_target:
+                                t_lower = str(resolved_target).lower()
+                                if any(k in t_lower for k in ["churn", "fraud", "default", "label", "binary", "class", "target_churn", "survived", "promoted", "converted"]) or t_lower.startswith("is_"):
+                                    is_discrete_binary = True
+
+                            if is_discrete_binary:
+                                st.warning(
+                                    f"⚠️ **Discrete 0/1 Target in Regression Mode:** Column `{resolved_target}` contains discrete binary (0/1) labels, "
+                                    f"but **Regression** mode is selected.\n\n"
+                                    f"Regression models (e.g. XGBoost Regressor) predict continuous numeric quantities like `sales_amount`, `price`, or `temperature`. "
+                                    f"For binary 0/1 targets like churn, please switch **ML Task Type** to **Classification**, or choose a numeric target like `sales_amount`."
+                                )
+
                     st.session_state["node_configs"][selected_node_id]["config"] = current_config
 
             if st.button("🗑️ Delete Node", type="secondary", key=f"del_node_{selected_node_id}"):
