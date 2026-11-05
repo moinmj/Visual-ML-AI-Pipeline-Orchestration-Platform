@@ -156,8 +156,10 @@ class TimeSeriesSplitRecipe(BaseRecipe):
             "dataframe": df_sorted,
             "dataframe_train": df_train,
             "dataframe_test": df_test,
+            "is_temporal": True,
             "metadata": {
                 "split_mode": "chronological",
+                "is_temporal": True,
                 "gap": gap,
                 "test_size": test_size,
                 "train_rows": len(X_tr),

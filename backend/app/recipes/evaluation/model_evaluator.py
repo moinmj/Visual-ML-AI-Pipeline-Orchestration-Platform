@@ -286,6 +286,7 @@ class ModelEvaluatorRecipe(BaseRecipe):
         metrics: Dict[str, Any] = {"task_type": task_type}
         warnings: list = []
         report_lines: list = []
+        time_col = inputs.get("time_column") or (context.get("time_column") if isinstance(context, dict) else None) or _temporal_snap_col
 
         N = len(y_test)
         is_small_sample = bool(N < min_sample_threshold)
@@ -654,7 +655,7 @@ class ModelEvaluatorRecipe(BaseRecipe):
             # Priority 2: reconstruct from year/month/day integer columns in the post-encoded X_test.
             # Priority 3: fall back to step indices.
             trajectory = []
-            time_col = None
+            time_col = time_col or None
             time_sort_key = None
             formatted_dates = None
 
@@ -731,15 +732,22 @@ class ModelEvaluatorRecipe(BaseRecipe):
                     formatted_dates = [f"Step {i+1}" for i in range(len(y_actuals))]
                     time_sort_key = list(range(len(y_actuals)))
 
-                # Sort chronologically if sort keys exist
-                if time_sort_key is not None and len(time_sort_key) == len(y_actuals):
+                split_mode_lower = str(split_mode).lower().strip() if split_mode else ""
+                is_shuffled_split = split_mode_lower in ("stratified", "random")
+
+                # Sort chronologically only if genuinely temporal and sort keys exist
+                if not is_shuffled_split and time_sort_key is not None and len(time_sort_key) == len(y_actuals):
                     order = np.argsort(time_sort_key)
                     sorted_dates = [formatted_dates[i] for i in order]
                     sorted_actuals = [y_actuals[i] for i in order]
                     sorted_preds = [preds_list[i] for i in order]
                     combined = list(zip(sorted_dates, sorted_actuals, sorted_preds))
                 else:
-                    combined = list(zip(formatted_dates, y_actuals, preds_list))
+                    if is_shuffled_split:
+                        sample_labels = [f"Sample {i+1}" for i in range(len(y_actuals))]
+                        combined = list(zip(sample_labels, y_actuals, preds_list))
+                    else:
+                        combined = list(zip(formatted_dates, y_actuals, preds_list))
 
                 step = max(1, len(combined) // 200)
                 sampled = combined[::step]
@@ -756,17 +764,46 @@ class ModelEvaluatorRecipe(BaseRecipe):
 
                 metrics["trajectory"] = trajectory
                 metrics["actual_vs_predicted_time_series"] = trajectory
-                if time_col:
-                    # Strip internal __index__ sentinel before surfacing to UI
-                    metrics["temporal_column"] = time_col if time_col != "__index__" else "index"
-                    metrics["is_temporal"] = True
+
+        # ── Resolve is_temporal and temporal_column with strict split_mode guard ──
+        # When split_mode is 'stratified' or 'random', the dataset was shuffled randomly.
+        # This breaks chronological ordering, so is_temporal MUST be False and temporal_column None.
+        split_mode_lower = str(split_mode).lower().strip() if split_mode else ""
+        is_shuffled_split = split_mode_lower in ("stratified", "random")
+
+        if is_shuffled_split:
+            metrics["is_temporal"] = False
+            metrics["temporal_column"] = None
+        elif split_mode_lower in ("chronological", "time_series", "walk_forward"):
+            metrics["is_temporal"] = True
+            if time_col and time_col != "__index__":
+                metrics["temporal_column"] = time_col
+            elif "temporal_column" not in metrics:
+                metrics["temporal_column"] = time_col if time_col else "index"
+        else:
+            # If not explicitly chronological, only consider temporal if time_col and explicit is_temporal input
+            if time_col and bool(inputs.get("is_temporal", False)):
+                metrics["temporal_column"] = time_col if time_col != "__index__" else "index"
+                metrics["is_temporal"] = True
+            else:
+                metrics["is_temporal"] = False
+                metrics["temporal_column"] = None
 
         if split_mode:
             metrics["split_mode"] = split_mode
+            if report_lines:
+                report_lines.append(f"Split Mode         : {split_mode}")
+                if is_shuffled_split:
+                    report_lines.append("Temporal Order     : False (Shuffled / Non-chronological)")
+                elif metrics.get("is_temporal"):
+                    report_lines.append(f"Temporal Order     : True (Chronological — {metrics.get('temporal_column', 'date')})")
+
+        report_text = "\n".join(report_lines) if report_lines else ""
+        metrics["report"] = report_text
 
         ret = {
             "metrics": metrics,
-            "report": "\n".join(report_lines) if report_lines else "",
+            "report": report_text,
             "predictions_sample": [float(p) if isinstance(p, (np.floating, float)) else str(p) for p in predictions[:15]]
         }
         if model is not None:

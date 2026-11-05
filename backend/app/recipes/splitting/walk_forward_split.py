@@ -136,6 +136,7 @@ class WalkForwardSplitRecipe(BaseRecipe):
             "target_column": target_col,
             "time_column": time_col or "auto",
             "split_mode": "walk_forward",
+            "is_temporal": True,
             "train_data": {
                 "X_train": X_tr,
                 "y_train": y_tr,
