@@ -76,7 +76,8 @@ class ModelDriftMonitorRecipe(BaseRecipe):
                     "type": "string",
                     "title": "Alert Notification Target",
                     "enum": ["log_only", "slack", "email", "webhook"],
-                    "default": "log_only"
+                    "default": "log_only",
+                    "description": "Notification channel triggered when metric drift exceeds threshold ('webhook', 'email', 'slack')."
                 }
             }
         }

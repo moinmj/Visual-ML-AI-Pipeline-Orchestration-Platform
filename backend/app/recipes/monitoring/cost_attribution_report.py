@@ -37,7 +37,8 @@ class CostAttributionReportRecipe(BaseRecipe):
                         "Project",
                         "Resource Type (Compute / Storage / API)"
                     ],
-                    "default": "Team / Department"
+                    "default": "Team / Department",
+                    "description": "Grouping dimension for cloud cost breakdown ('recipe', 'pipeline', 'user', 'team')."
                 },
                 "time_period": {
                     "type": "string",
@@ -49,7 +50,8 @@ class CostAttributionReportRecipe(BaseRecipe):
                         "Quarter to Date (QTD)",
                         "Annual Projection"
                     ],
-                    "default": "Current Month (MTD)"
+                    "default": "Current Month (MTD)",
+                    "description": "Reporting time window ('daily', 'weekly', 'monthly')."
                 },
                 "monthly_budget_usd": {
                     "type": "number",
@@ -68,7 +70,8 @@ class CostAttributionReportRecipe(BaseRecipe):
                     "type": "string",
                     "title": "Display Currency",
                     "enum": ["USD ($)", "EUR (€)", "GBP (£)", "INR (₹)"],
-                    "default": "USD ($)"
+                    "default": "USD ($)",
+                    "description": "Billing currency symbol or ISO code for cost reporting (e.g. 'USD', 'EUR')."
                 }
             }
         }

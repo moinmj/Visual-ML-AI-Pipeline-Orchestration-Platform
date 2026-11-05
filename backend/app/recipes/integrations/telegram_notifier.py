@@ -58,7 +58,8 @@ class TelegramRecipe(BaseRecipe):
                     "type": "string",
                     "title": "Parse Mode",
                     "enum": ["Markdown", "HTML"],
-                    "default": "Markdown"
+                    "default": "Markdown",
+                    "description": "Message formatting mode ('Markdown', 'HTML', or 'Plain')."
                 }
             },
             "required": ["message"]

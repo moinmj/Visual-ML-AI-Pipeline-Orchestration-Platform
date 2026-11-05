@@ -53,7 +53,9 @@ class DataGuardrailsRecipe(BaseRecipe):
                     "items": {
                         "type": "object",
                         "properties": {
-                            "column": {"type": "string", "title": "Target Column"},
+                            "column": {"type": "string", "title": "Target Column",
+                                "description": 'Target column to validate with this guardrail rule.'
+                            },
                             "check_type": {
                                 "type": "string",
                                 "title": "Check Type",
@@ -68,21 +70,30 @@ class DataGuardrailsRecipe(BaseRecipe):
                                     "mean_between",
                                     "row_count_min"
                                 ],
-                                "default": "not_null"
+                                "default": "not_null",
+                                "description": "Guardrail check type (e.g. 'not_null', 'range', 'regex', 'in_set')."
                             },
-                            "min_value": {"type": "number", "title": "Min Value / Lower Bound"},
-                            "max_value": {"type": "number", "title": "Max Value / Upper Bound"},
+                            "min_value": {"type": "number", "title": "Min Value / Lower Bound",
+                                "description": 'Minimum allowed numeric boundary for range validation.'
+                            },
+                            "max_value": {"type": "number", "title": "Max Value / Upper Bound",
+                                "description": 'Maximum allowed numeric boundary for range validation.'
+                            },
                             "set_values": {
                                 "type": "array",
                                 "items": {"type": "string"},
-                                "title": "Authorized Set Values"
+                                "title": "Authorized Set Values",
+                                "description": 'Allowed discrete set of values for membership validation.'
                             },
-                            "regex_pattern": {"type": "string", "title": "RegEx Pattern"},
+                            "regex_pattern": {"type": "string", "title": "RegEx Pattern",
+                                "description": 'Regular expression pattern that string values must conform to.'
+                            },
                             "severity": {
                                 "type": "string",
                                 "title": "Severity",
                                 "enum": ["error", "warning"],
-                                "default": "error"
+                                "default": "error",
+                                "description": "Action severity on failure ('warning' to alert, 'error' to halt execution)."
                             }
                         },
                         "required": ["check_type"]

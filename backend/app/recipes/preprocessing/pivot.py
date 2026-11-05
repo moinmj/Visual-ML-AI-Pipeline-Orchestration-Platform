@@ -108,7 +108,8 @@ class PivotRecipe(BaseRecipe):
                     "type": "select",
                     "title": "Aggregation Function (pivot only)",
                     "enum": ["sum", "mean", "count", "first", "last", "min", "max", "median"],
-                    "default": "sum"
+                    "default": "sum",
+                    "description": 'Aggregation function to apply when multiple values map to the same pivot cell.'
                 },
                 "fill_value": {
                     "type": "text",

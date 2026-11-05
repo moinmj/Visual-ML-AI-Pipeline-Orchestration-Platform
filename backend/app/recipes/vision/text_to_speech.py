@@ -116,10 +116,12 @@ class TextToSpeechRecipe(BaseRecipe):
                 "rate": {
                     "type": "integer", "title": "Speaking Speed (words/min)", "input_type": "slider",
                     "default": DEFAULT_RATE, "minimum": 80, "maximum": 300,
+                    "description": 'Speech rate / tempo in words per minute (typically 100-250).'
                 },
                 "volume": {
                     "type": "number", "title": "Volume", "input_type": "slider",
                     "default": DEFAULT_VOLUME, "minimum": 0.1, "maximum": 1.0,
+                    "description": 'Audio volume multiplier (0.0 to 1.0).'
                 },
                 "voice_contains": {
                     "type": "string", "title": "Voice Name Contains (optional)", "input_type": "text",

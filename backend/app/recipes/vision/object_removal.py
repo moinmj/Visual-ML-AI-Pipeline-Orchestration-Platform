@@ -204,10 +204,12 @@ class ObjectRemovalRecipe(BaseRecipe):
                 "confidence_threshold": {
                     "type": "number", "title": "Confidence Threshold", "input_type": "slider",
                     "default": 0.25, "minimum": 0.01, "maximum": 1.0,
+                    "description": 'Minimum detection confidence score to identify target object for removal.'
                 },
                 "iou_threshold": {
                     "type": "number", "title": "Overlap (NMS IoU) Threshold", "input_type": "slider",
                     "default": 0.7, "minimum": 0.1, "maximum": 1.0,
+                    "description": 'Intersection-Over-Union overlap threshold for inpainting mask.'
                 },
                 "image_size": {
                     "type": "integer", "title": "Inference Image Size (px)", "input_type": "number",

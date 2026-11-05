@@ -55,7 +55,8 @@ class LagFeatureEngineeringRecipe(BaseRecipe):
                 "include_calendar_features": {
                     "type": "boolean",
                     "title": "Extract Calendar Features (Day, Month, Weekend)",
-                    "default": True
+                    "default": True,
+                    "description": 'When enabled, automatically generates day-of-week, month, and holiday indicators.'
                 }
             }
         }

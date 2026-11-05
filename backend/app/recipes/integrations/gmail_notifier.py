@@ -69,16 +69,19 @@ class GmailRecipe(BaseRecipe):
                 "smtp_host": {
                     "type": "string",
                     "title": "SMTP Host (Optional)",
-                    "default": "smtp.gmail.com"
+                    "default": "smtp.gmail.com",
+                    "description": 'Outgoing SMTP server hostname (e.g. smtp.gmail.com).'
                 },
                 "smtp_port": {
                     "type": "integer",
                     "title": "SMTP Port",
-                    "default": 587
+                    "default": 587,
+                    "description": 'SMTP connection port (typically 587 for TLS or 465 for SSL).'
                 },
                 "smtp_user": {
                     "type": "string",
-                    "title": "Sender Email / Username"
+                    "title": "Sender Email / Username",
+                    "description": 'Email address used to authenticate with the SMTP server.'
                 },
                 "smtp_password": {
                     "type": "string",

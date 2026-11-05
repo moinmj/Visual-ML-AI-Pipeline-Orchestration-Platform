@@ -38,13 +38,15 @@ class CronScheduleTriggerRecipe(BaseRecipe):
                     "type": "string",
                     "title": "Quick Interval Preset",
                     "enum": ["Custom Cron", "Every 15 Minutes", "Hourly", "Daily at Midnight", "Weekly on Sunday"],
-                    "default": "Every 15 Minutes"
+                    "default": "Every 15 Minutes",
+                    "description": "Preset recurrence interval for automated scheduling (e.g. 'hourly', 'daily', 'weekly')."
                 },
                 "timezone": {
                     "type": "string",
                     "title": "Timezone",
                     "enum": ["UTC", "America/New_York", "Europe/London", "Asia/Kolkata", "Asia/Tokyo"],
-                    "default": "UTC"
+                    "default": "UTC",
+                    "description": "Timezone used to evaluate cron trigger timestamps (e.g. 'UTC', 'America/New_York')."
                 }
             }
         }

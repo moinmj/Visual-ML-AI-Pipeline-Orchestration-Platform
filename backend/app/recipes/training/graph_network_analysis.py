@@ -128,7 +128,8 @@ class GraphNetworkAnalysisRecipe(BaseRecipe):
                     "input_type": "slider",
                     "default": 5,
                     "minimum": 3,
-                    "maximum": 20
+                    "maximum": 20,
+                    "description": 'Number of top influential nodes to report based on centrality scoring.'
                 }
             },
             "required": []

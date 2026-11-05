@@ -49,7 +49,8 @@ class DelayRecipe(BaseRecipe):
                     "type": "string",
                     "title": "Time Unit",
                     "enum": ["seconds", "minutes", "milliseconds"],
-                    "default": "seconds"
+                    "default": "seconds",
+                    "description": "Time unit for execution pause ('seconds', 'minutes', or 'hours')."
                 }
             },
             "required": ["duration"]

@@ -409,7 +409,8 @@ class RssNewsReaderRecipe(BaseRecipe):
                     "type": "string",
                     "title": "Article Sort Order",
                     "enum": ["Newest First", "Oldest First", "Feed Order"],
-                    "default": "Newest First"
+                    "default": "Newest First",
+                    "description": "Order to sort retrieved articles by publish date ('descending' or 'ascending')."
                 },
                 "extract_full_content": {
                     "type": "boolean",

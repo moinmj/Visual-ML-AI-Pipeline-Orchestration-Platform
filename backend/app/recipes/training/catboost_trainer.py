@@ -28,33 +28,38 @@ class CatBoostTrainerRecipe(BaseRecipe):
                     "type": "string",
                     "title": "ML Task Type",
                     "enum": ["classification", "regression"],
-                    "default": "classification"
+                    "default": "classification",
+                    "description": "Supervised learning objective ('classification' or 'regression')."
                 },
                 "iterations": {
                     "type": "integer",
                     "title": "Iterations / Trees",
                     "default": 100,
                     "minimum": 10,
-                    "maximum": 2000
+                    "maximum": 2000,
+                    "description": 'Maximum number of decision trees to construct.'
                 },
                 "depth": {
                     "type": "integer",
                     "title": "Tree Depth",
                     "default": 6,
                     "minimum": 1,
-                    "maximum": 12
+                    "maximum": 12,
+                    "description": 'Depth of individual decision trees (typically 4-10).'
                 },
                 "learning_rate": {
                     "type": "number",
                     "title": "Learning Rate",
                     "default": 0.1,
                     "minimum": 0.001,
-                    "maximum": 1.0
+                    "maximum": 1.0,
+                    "description": 'Step size used during gradient descent optimization.'
                 },
                 "random_seed": {
                     "type": "integer",
                     "title": "Random Seed",
-                    "default": 42
+                    "default": 42,
+                    "description": 'Random seed for reproducible tree building.'
                 }
             },
             "required": ["task_type"]

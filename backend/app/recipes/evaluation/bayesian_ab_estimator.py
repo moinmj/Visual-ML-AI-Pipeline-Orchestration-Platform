@@ -121,7 +121,8 @@ class BayesianABEstimatorRecipe(BaseRecipe):
                     "input_type": "slider",
                     "default": 20000,
                     "minimum": 5000,
-                    "maximum": 50000
+                    "maximum": 50000,
+                    "description": 'Number of Monte Carlo simulations to run for posterior distribution estimation.'
                 }
             },
             "required": []

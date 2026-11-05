@@ -40,7 +40,8 @@ class GoogleDriveRecipe(BaseRecipe):
                     "type": "string",
                     "title": "Operation",
                     "enum": ["upload", "download"],
-                    "default": "upload"
+                    "default": "upload",
+                    "description": "Google Drive operation to perform ('upload', 'download', or 'list_files')."
                 },
                 "folder_id": {
                     "type": "string",
@@ -50,7 +51,8 @@ class GoogleDriveRecipe(BaseRecipe):
                 "file_name": {
                     "type": "string",
                     "title": "File Name",
-                    "default": "pipeline_output.csv"
+                    "default": "pipeline_output.csv",
+                    "description": 'Target file name in Google Drive.'
                 },
                 "api_token": {
                     "type": "string",

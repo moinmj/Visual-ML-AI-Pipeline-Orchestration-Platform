@@ -138,7 +138,8 @@ class NeuralNetworkTrainerRecipe(BaseRecipe):
                     "input_type": "slider",
                     "default": 200,
                     "minimum": 50,
-                    "maximum": 1000
+                    "maximum": 1000,
+                    "description": 'Maximum number of training epochs.'
                 },
                 "alpha": {
                     "type": "number",
@@ -158,7 +159,8 @@ class NeuralNetworkTrainerRecipe(BaseRecipe):
                     "type": "integer",
                     "title": "Random Seed",
                     "input_type": "number",
-                    "default": 42
+                    "default": 42,
+                    "description": 'Random seed for reproducible weight initialization.'
                 }
             },
             "required": []

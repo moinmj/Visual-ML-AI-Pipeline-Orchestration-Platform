@@ -32,13 +32,15 @@ class TrainTestSplitRecipe(BaseRecipe):
                     "input_type": "slider",
                     "default": 0.2,
                     "minimum": 0.05,
-                    "maximum": 0.5
+                    "maximum": 0.5,
+                    "description": 'Fraction of the dataset reserved for test evaluation (e.g. 0.2 for 20%).'
                 },
                 "random_state": {
                     "type": "integer",
                     "title": "Random Seed",
                     "input_type": "number",
-                    "default": 42
+                    "default": 42,
+                    "description": 'Random seed used for reproducible shuffling and train/test partitioning.'
                 },
                 "stratify": {
                     "type": "boolean",

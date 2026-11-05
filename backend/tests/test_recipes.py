@@ -137,3 +137,23 @@ def test_all_recipes_have_valid_input_types():
 
     assert total_recipes >= 100, f"Expected at least 100 recipes, found {total_recipes}"
     assert total_props >= 500, f"Expected at least 500 properties, found {total_props}"
+
+
+def test_all_recipe_properties_have_helper_descriptions():
+    """
+    Guarantees every recipe property has a user-facing helper text 'description'
+    so the frontend dynamic whiteboard forms render informative tooltips.
+    """
+    missing = []
+    for rid, recipe in recipe_registry._recipes.items():
+        schema = recipe.get_schema() or {}
+        props = schema.get("properties", {})
+        for pname, pdef in props.items():
+            if not pdef.get("description"):
+                missing.append(f"{rid}.{pname}")
+            items = pdef.get("items")
+            if isinstance(items, dict) and "properties" in items:
+                for iname, idef in items["properties"].items():
+                    if not idef.get("description"):
+                        missing.append(f"{rid}.{pname}.items.{iname}")
+    assert not missing, f"Recipes missing property descriptions: {missing[:10]}"

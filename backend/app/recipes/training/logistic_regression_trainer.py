@@ -21,14 +21,16 @@ class LogisticRegressionTrainerRecipe(BaseRecipe):
                     "type": "string",
                     "title": "ML Task Type",
                     "enum": ["classification", "regression"],
-                    "default": "classification"
+                    "default": "classification",
+                    "description": "Supervised learning objective ('classification' or 'regression')."
                 },
                 "max_iter": {
                     "type": "integer",
                     "title": "Max Iterations",
                     "default": 200,
                     "minimum": 50,
-                    "maximum": 5000
+                    "maximum": 5000,
+                    "description": 'Maximum number of optimization solver iterations.'
                 },
                 "C": {
                     "type": "number",
@@ -56,7 +58,8 @@ class LogisticRegressionTrainerRecipe(BaseRecipe):
                     "type": "string",
                     "title": "Optimization Solver",
                     "enum": ["auto", "lbfgs", "liblinear", "saga"],
-                    "default": "auto"
+                    "default": "auto",
+                    "description": "Optimization solver algorithm ('lbfgs', 'saga', 'liblinear')."
                 }
             },
             "required": ["task_type"]

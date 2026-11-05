@@ -90,8 +90,12 @@ class PromptTemplateManagerRecipe(BaseRecipe):
                     "items": {
                         "type": "object",
                         "properties": {
-                            "input": {"type": "string"},
-                            "output": {"type": "string"}
+                            "input": {"type": "string",
+                                "description": 'Sample input prompt text illustrating desired user format.'
+                            },
+                            "output": {"type": "string",
+                                "description": 'Sample expected model response demonstrating target tone, structure, and content.'
+                            }
                         }
                     },
                     "default": [],

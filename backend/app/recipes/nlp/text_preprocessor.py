@@ -85,7 +85,8 @@ class TextPreprocessorRecipe(BaseRecipe):
                 "lowercase": {
                     "type": "boolean",
                     "title": "Lowercase Text",
-                    "default": True
+                    "default": True,
+                    "description": 'Convert all text tokens to lowercase.'
                 },
                 "strip_html_urls": {
                     "type": "boolean",
@@ -96,12 +97,14 @@ class TextPreprocessorRecipe(BaseRecipe):
                 "remove_punctuation": {
                     "type": "boolean",
                     "title": "Remove Punctuation",
-                    "default": True
+                    "default": True,
+                    "description": 'Strip punctuation marks and ASCII symbols from text strings.'
                 },
                 "remove_numbers": {
                     "type": "boolean",
                     "title": "Remove Numbers",
-                    "default": False
+                    "default": False,
+                    "description": 'Strip numeric digits from text bodies.'
                 },
                 "remove_stopwords": {
                     "type": "boolean",

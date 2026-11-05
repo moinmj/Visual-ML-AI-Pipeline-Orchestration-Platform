@@ -170,7 +170,8 @@ class NextBestOfferRecipe(BaseRecipe):
                     "type": "string",
                     "title": "Product / Offer Column",
                     "input_type": "text",
-                    "default": "product_id"
+                    "default": "product_id",
+                    "description": 'Column containing historical purchased items or subscribed products.'
                 },
                 "ranking_criterion": {
                     "type": "string",
@@ -191,7 +192,8 @@ class NextBestOfferRecipe(BaseRecipe):
                     "input_type": "slider",
                     "default": 3,
                     "minimum": 1,
-                    "maximum": 10
+                    "maximum": 10,
+                    "description": 'Number of next-best product recommendations to return per customer.'
                 },
                 "min_support": {
                     "type": "number",
