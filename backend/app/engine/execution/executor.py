@@ -780,22 +780,27 @@ class DAGExecutor:
                 sample_payload[col] = 0.0
 
         # Detect temporal / year feature for future projection support
+        split_mode_ctx = str(pipeline_context.get("split_mode", "")).lower().strip()
+        is_shuffled_split = split_mode_ctx in ("stratified", "random")
+
         has_temporal = False
         temporal_col = None
         min_year = None
         max_year = None
         annual_trend_pct = None
 
-        for f in features_schema:
-            fn_low = f["name"].lower()
-            if any(k in fn_low for k in ["year", "date", "time", "timestamp", "period", "ds"]):
-                has_temporal = True
-                if not temporal_col:
-                    temporal_col = f["name"]
-                if "year" in fn_low and f.get("min_value") is not None and f.get("max_value") is not None:
-                    if 1900 <= f["min_value"] <= 2100:
-                        min_year = int(f["min_value"])
-                        max_year = int(f["max_value"])
+        # When data was shuffled via stratified or random split, temporal projection is invalid
+        if not is_shuffled_split:
+            for f in features_schema:
+                fn_low = f["name"].lower()
+                if any(k in fn_low for k in ["year", "date", "time", "timestamp", "period", "ds"]):
+                    has_temporal = True
+                    if not temporal_col:
+                        temporal_col = f["name"]
+                    if "year" in fn_low and f.get("min_value") is not None and f.get("max_value") is not None:
+                        if 1900 <= f["min_value"] <= 2100:
+                            min_year = int(f["min_value"])
+                            max_year = int(f["max_value"])
 
         # Compute empirical annual trend % if temporal regression target exists
         if has_temporal and temporal_col and y_eval is not None and X_eval is not None and temporal_col in X_eval.columns:

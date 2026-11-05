@@ -149,7 +149,7 @@ class NodeStepExecutor:
         for key in [
             "model", "scaler", "encoder", "task_type", "feature_names", "feature_importances",
             "target_classes", "target_encoder", "target_column", "imputer_stats",
-            "vectorizer", "text_column", "split_mode", "categorical_maps",
+            "vectorizer", "text_column", "split_mode", "is_temporal", "temporal_column", "categorical_maps",
             "X_train", "y_train", "X_test", "y_test", "metrics", "output_summary"
         ]:
             if key in outputs and outputs[key] is not None:

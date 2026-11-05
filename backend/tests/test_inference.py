@@ -235,7 +235,7 @@ async def test_tabular_temporal_regression_and_future_projection():
         WorkflowNode(
             id="node_split",
             recipe_id="train_test_split",
-            config={"target_column": "temperature", "test_size": 0.2, "random_state": 42}
+            config={"target_column": "temperature", "test_size": 0.2, "time_series_mode": True, "random_state": 42}
         ),
         WorkflowNode(
             id="node_train",
@@ -706,4 +706,4 @@ async def test_combined_dataset_generation_and_csv_export():
         assert "PREDICTED" in csv_text
         lines = csv_text.strip().split("\n")
         assert len(lines) == 15  # 1 header + 14 rows
-
+

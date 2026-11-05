@@ -122,6 +122,7 @@ class StratifiedSplitRecipe(BaseRecipe):
             "feature_names": list(X_tr.columns),
             "target_column": target_col,
             "split_mode": "stratified",
+            "is_temporal": False,
             "train_data": {
                 "X_train": X_tr,
                 "y_train": y_tr,

@@ -99,9 +99,12 @@ class TrainTestSplitRecipe(BaseRecipe):
 
         test_size        = float(config.get("test_size", 0.2))
         random_state     = int(config.get("random_state", 42))
-        stratify_flag    = config.get("stratify", False)
+        stratify_flag    = bool(config.get("stratify", False))
         ts_mode_cfg      = config.get("time_series_mode", False)
         ts_mode          = bool(ts_mode_cfg) and str(ts_mode_cfg).lower() not in ("false", "0")
+        if stratify_flag:
+            # Stratified split requires grouping and random sampling across classes; cannot be chronological
+            ts_mode = False
         time_col_cfg     = config.get("time_column", "") or ""
 
         X = df.drop(columns=[target_col])
@@ -177,6 +180,7 @@ class TrainTestSplitRecipe(BaseRecipe):
                 "feature_names":   list(X_train.columns),
                 "target_column":   target_col,
                 "split_mode":      "chronological",
+                "is_temporal":     True,
                 "time_column":     time_col or "auto"
             }
             if target_classes:
@@ -243,7 +247,8 @@ class TrainTestSplitRecipe(BaseRecipe):
             "y_test":          y_test,
             "feature_names":   list(X.columns),
             "target_column":   target_col,
-            "split_mode":      "stratified" if strat is not None else "random"
+            "split_mode":      "stratified" if strat is not None else "random",
+            "is_temporal":     False
         }
         if target_classes:
             res["target_classes"] = target_classes

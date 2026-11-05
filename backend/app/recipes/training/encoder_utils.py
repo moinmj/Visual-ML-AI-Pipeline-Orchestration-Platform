@@ -229,7 +229,7 @@ def pass_through_metadata(inputs: dict, output: dict, context: Optional[Any] = N
     This ensures downstream recipes like ModelEvaluator receive explicit date sidecars
     without having to rely on heuristic column scanning or guessing.
     """
-    keys_to_pass = ["test_dates", "date_column_name", "split_mode", "time_column"]
+    keys_to_pass = ["test_dates", "date_column_name", "split_mode", "time_column", "is_temporal"]
     ctx_dict = context if isinstance(context, dict) else {}
 
     for key in keys_to_pass:

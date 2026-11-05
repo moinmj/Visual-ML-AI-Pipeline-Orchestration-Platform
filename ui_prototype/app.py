@@ -2837,6 +2837,17 @@ if app_mode == "🎨 Pipeline Whiteboard":
 
                         current_config[prop_name] = new_val
 
+                    # Inline Auto-Switch / Synchronization for Split Mode & Temporal Setting
+                    if r_id == "train_test_split":
+                        is_strat = bool(current_config.get("stratify", False))
+                        is_ts = bool(current_config.get("time_series_mode", False))
+                        if is_strat and is_ts:
+                            # Stratified and Chronological modes are mutually exclusive
+                            current_config["time_series_mode"] = False
+                            st.info("ℹ️ **Split Mode Guardrail:** When Stratified Split is enabled, Chronological Time-Series Mode is automatically switched to False because stratification randomly partitions data across classes.")
+                    elif r_id == "stratified_split":
+                        current_config["is_temporal"] = False
+
                     # Inline Validation Check for Discrete 0/1 Target in Regression Mode
                     if r_id in ["xgboost_trainer", "lightgbm_trainer", "catboost_trainer", "random_forest_trainer", "linear_trainer"]:
                         if str(current_config.get("task_type", "")).lower() == "regression":
@@ -3083,6 +3094,15 @@ if app_mode == "🎨 Pipeline Whiteboard":
                         mape_str = "N/A"
                     m5.metric("MAPE", mape_str)
 
+                    # KPI Cards for Split Mode and Temporal Status
+                    if "split_mode" in final_metrics or "is_temporal" in final_metrics:
+                        sm_col1, sm_col2, sm_col3 = st.columns(3)
+                        sm_col1.metric("Split Mode", str(final_metrics.get("split_mode", "N/A")).capitalize())
+                        is_temp = bool(final_metrics.get("is_temporal", False))
+                        sm_col2.metric("Is Temporal", "true" if is_temp else "false")
+                        temp_col = final_metrics.get("temporal_column")
+                        sm_col3.metric("Temporal Column", str(temp_col) if (temp_col and is_temp) else "None")
+
                     smape_str = f" (SMAPE: {final_metrics['smape']:.2f}%)" if final_metrics.get("smape") is not None else ""
                     st.info(f"✨ **Regression Model Evaluation:** Model achieved **R² = {r2_v:.4f}** with an average absolute deviation of **MAE = {mae_v:.4f}** on the unseen test set.{smape_str}")
 
@@ -3169,6 +3189,15 @@ if app_mode == "🎨 Pipeline Whiteboard":
                     m3.metric("Precision", f"{final_metrics.get('precision', 0)*100:.2f}%")
                     m4.metric("Recall", f"{final_metrics.get('recall', 0)*100:.2f}%")
                     m5.metric("F1 Score", f"{final_metrics.get('f1_score', 0)*100:.2f}%")
+
+                    # KPI Cards for Split Mode and Temporal Status
+                    if "split_mode" in final_metrics or "is_temporal" in final_metrics:
+                        sm_col1, sm_col2, sm_col3 = st.columns(3)
+                        sm_col1.metric("Split Mode", str(final_metrics.get("split_mode", "N/A")).capitalize())
+                        is_temp = bool(final_metrics.get("is_temporal", False))
+                        sm_col2.metric("Is Temporal", "true" if is_temp else "false")
+                        temp_col = final_metrics.get("temporal_column")
+                        sm_col3.metric("Temporal Column", str(temp_col) if (temp_col and is_temp) else "None")
 
                     if "roc_auc" in final_metrics:
                         st.info(f"✨ **ROC-AUC Score:** `{final_metrics['roc_auc']:.4f}` | **Log Loss:** `{final_metrics.get('log_loss', 'N/A')}`")
