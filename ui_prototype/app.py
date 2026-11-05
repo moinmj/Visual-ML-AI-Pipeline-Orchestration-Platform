@@ -46,41 +46,257 @@ from backend.app.tenant_data.client import (
 )
 
 st.set_page_config(
-    page_title="Visual AI/ML Pipeline Studio",
+    page_title="Datalect ML — Visual AI/ML Pipeline Studio",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom Styling
+# -------------------------------------------------------------
+# COMPANY DESIGN SYSTEM & ENTERPRISE STYLING (Slate & Tailwind)
+# -------------------------------------------------------------
 st.markdown("""
 <style>
-    .main-header {
-        font-size: 2.1rem;
-        font-weight: 700;
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+    /* Global Typography & Slate Theme */
+    html, body, [class*="css"] {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         color: #0F172A;
-        margin-bottom: 0.1rem;
     }
+
+    .stApp {
+        background-color: #F8FAFC;
+    }
+
+    .main .block-container {
+        padding-top: 1.2rem;
+        padding-bottom: 2.5rem;
+        max-width: 98%;
+    }
+
+    /* Headings */
+    .brand-header-title {
+        font-size: 1.45rem;
+        font-weight: 800;
+        color: #0F172A;
+        letter-spacing: -0.025em;
+        line-height: 1.25;
+    }
+
+    .brand-header-sub {
+        font-size: 0.82rem;
+        color: #64748B;
+        font-weight: 500;
+        margin-top: 2px;
+    }
+
+    .main-header {
+        font-size: 1.55rem;
+        font-weight: 800;
+        color: #0F172A;
+        letter-spacing: -0.02em;
+        margin-bottom: 0.2rem;
+    }
+
     .sub-header {
-        font-size: 0.95rem;
-        color: #475569;
+        font-size: 0.88rem;
+        color: #64748B;
         margin-bottom: 1.0rem;
+        font-weight: 400;
     }
+
+    /* Status Pills & Badges */
     .badge {
-        display: inline-block;
-        padding: 2px 8px;
-        font-size: 0.75rem;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 3px 9px;
+        font-size: 0.72rem;
         font-weight: 600;
-        border-radius: 4px;
-        background-color: #E2E8F0;
-        color: #1E293B;
+        border-radius: 9999px;
+        background-color: #F1F5F9;
+        color: #334155;
+        border: 1px solid #E2E8F0;
     }
-    .ai-card {
-        padding: 14px;
-        border-radius: 8px;
-        background: #F8FAFC;
-        border-left: 4px solid #3B82F6;
+
+    .badge-blue {
+        background-color: #EFF6FF;
+        color: #1D4ED8;
+        border-color: #DBEAFE;
+    }
+
+    .badge-emerald {
+        background-color: #ECFDF5;
+        color: #047857;
+        border-color: #A7F3D0;
+    }
+
+    .badge-amber {
+        background-color: #FFFBEB;
+        color: #B45309;
+        border-color: #FDE68A;
+    }
+
+    .badge-rose {
+        background-color: #FFF1F2;
+        color: #BE123C;
+        border-color: #FECDD3;
+    }
+
+    .badge-purple {
+        background-color: #FAF5FF;
+        color: #7E22CE;
+        border-color: #E9D5FF;
+    }
+
+    .badge-sky {
+        background-color: #F0F9FF;
+        color: #0369A1;
+        border-color: #BAE6FD;
+    }
+
+    /* Corporate Buttons */
+    button[kind="primary"] {
+        background: #2563EB !important;
+        border: 1px solid #1D4ED8 !important;
+        border-radius: 8px !important;
+        font-weight: 600 !important;
+        font-size: 0.82rem !important;
+        color: #FFFFFF !important;
+        box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05) !important;
+        transition: all 0.15s ease-in-out !important;
+    }
+
+    button[kind="primary"]:hover {
+        background: #1D4ED8 !important;
+        border-color: #1E40AF !important;
+        box-shadow: 0 2px 4px 0 rgba(37, 99, 235, 0.25) !important;
+    }
+
+    button[kind="secondary"] {
+        background: #FFFFFF !important;
+        border: 1px solid #E2E8F0 !important;
+        border-radius: 8px !important;
+        font-weight: 600 !important;
+        font-size: 0.82rem !important;
+        color: #1E293B !important;
+        box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.03) !important;
+        transition: all 0.15s ease-in-out !important;
+    }
+
+    button[kind="secondary"]:hover {
+        background: #F8FAFC !important;
+        border-color: #CBD5E1 !important;
+        color: #0F172A !important;
+    }
+
+    /* Metric Cards */
+    [data-testid="stMetric"] {
+        background: #FFFFFF;
+        border: 1px solid #E2E8F0;
+        border-radius: 12px;
+        padding: 12px 16px;
+        box-shadow: 0 1px 3px 0 rgba(15, 23, 42, 0.03);
+    }
+
+    [data-testid="stMetricLabel"] {
+        font-size: 0.75rem !important;
+        font-weight: 600 !important;
+        color: #64748B !important;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+
+    [data-testid="stMetricValue"] {
+        font-size: 1.35rem !important;
+        font-weight: 800 !important;
+        color: #0F172A !important;
+        letter-spacing: -0.02em;
+    }
+
+    /* Tabs Styling */
+    [data-testid="stTabs"] [role="tablist"] {
+        border-bottom: 1px solid #E2E8F0;
+        gap: 6px;
+    }
+
+    [data-testid="stTabs"] [role="tab"] {
+        font-weight: 600;
+        font-size: 0.82rem;
+        color: #64748B;
+        border-radius: 8px 8px 0 0;
+        padding: 8px 16px;
+        border: none;
+        background: transparent;
+        transition: all 0.15s ease;
+    }
+
+    [data-testid="stTabs"] [role="tab"][aria-selected="true"] {
+        color: #2563EB;
+        background: #EFF6FF;
+        border-bottom: 2px solid #2563EB;
+    }
+
+    /* Expanders */
+    [data-testid="stExpander"] {
+        background: #FFFFFF;
+        border: 1px solid #E2E8F0;
+        border-radius: 12px;
+        box-shadow: 0 1px 2px 0 rgba(15, 23, 42, 0.02);
         margin-bottom: 10px;
+    }
+
+    /* Dot-Grid Canvas Background */
+    .stCanvasWrapper {
+        background-color: #F8FAFC;
+        background-image: radial-gradient(#CBD5E1 1.5px, transparent 1.5px);
+        background-size: 24px 24px;
+        border: 1px solid #E2E8F0;
+        border-radius: 14px;
+        overflow: hidden;
+    }
+
+    /* Shimmer & Chrysa AI Animations */
+    .chrysa-card {
+        padding: 16px;
+        border-radius: 12px;
+        background: #FFFFFF;
+        border: 1px solid #E2E8F0;
+        box-shadow: 0 2px 8px -2px rgba(15, 23, 42, 0.06);
+        margin-bottom: 12px;
+    }
+
+    .chrysa-shimmer {
+        position: relative;
+        overflow: hidden;
+    }
+
+    .chrysa-shimmer::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        transform: translateX(-100%);
+        background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.75), transparent);
+        animation: chrysa-sweep 1.4s ease-in-out infinite;
+    }
+
+    @keyframes chrysa-sweep {
+        100% { transform: translateX(100%); }
+    }
+
+    .chrysa-text-shimmer {
+        background: linear-gradient(90deg, #1E293B 0%, #2563EB 50%, #1E293B 100%);
+        background-size: 200% 100%;
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+        animation: chrysa-text-sweep 2.2s linear infinite;
+    }
+
+    @keyframes chrysa-text-sweep {
+        from { background-position: 200% 0; }
+        to { background-position: -200% 0; }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -147,64 +363,132 @@ if "active_dataset_name" not in st.session_state:
     st.session_state["active_dataset_name"] = "Customer Churn (Classification)"
 
 # -------------------------------------------------------------
-# RECIPE CATEGORY HIERARCHY
+# DYNAMIC COMPONENT PALETTE BUILDER (All 187 Backend Recipes)
 # -------------------------------------------------------------
-RECIPE_CATEGORY_MAP = {
-    "⚡ Triggers & Inbound Events": [
-        {"id": "webhook_trigger", "name": "Webhook Inbound Trigger (HTTP POST)", "icon": "⚡", "default_config": {"webhook_path": "ml_inbound_stream", "auth_header_required": "None (Public)", "payload_format": "JSON Array of Objects"}},
-        {"id": "cron_trigger", "name": "Cron Schedule Trigger (Recurring)", "icon": "⏰", "default_config": {"cron_expression": "0 0 * * *", "interval_preset": "Daily at Midnight", "timezone": "UTC"}}
-    ],
-    "📥 Ingestion & Sources": [
-        {"id": "csv_loader", "name": "Dataset Ingestion (CSV/Excel/Upload)", "icon": "📄", "default_config": {}}
-    ],
-    "🧹 Data Cleaning & Preprocessing": [
-        {"id": "column_selector", "name": "Column Selector & Drop (Select Subset)", "icon": "🎯", "default_config": {"mode": "keep", "columns": []}},
-        {"id": "data_type_converter", "name": "Data Type Converter & Cast", "icon": "🔄", "default_config": {"conversions": {}}},
-        {"id": "duplicate_remover", "name": "Duplicate Row Handler & Remover", "icon": "👯", "default_config": {"strategy": "drop_first"}},
-        {"id": "category_sanitizer", "name": "Categorical & Text Label Standardizer", "icon": "🔤", "default_config": {"lowercase": True, "strip_whitespace": True}},
-        {"id": "correlation_filter", "name": "Redundant Column & Multicollinearity Filter", "icon": "📊", "default_config": {"threshold": 0.95}},
-        {"id": "variance_filter", "name": "Constant & Low Variance Feature Filter", "icon": "🛑", "default_config": {"max_dominant_percentage": 0.99}},
-        {"id": "missing_value_imputer", "name": "Missing Value Imputer (Mean/Median/Mode)", "icon": "🧹", "default_config": {"strategy": "median"}},
-        {"id": "outlier_handler", "name": "Outlier Handler & Winsorizer (IQR / Z-Score)", "icon": "🛡️", "default_config": {"method": "iqr", "action": "clip", "threshold": 1.5}},
-        {"id": "feature_selector", "name": "Feature Selector (SelectKBest / Mutual Info)", "icon": "✨", "default_config": {"method": "select_k_best", "k": 10}},
-        {"id": "feature_scaler", "name": "Feature Scaler (StandardScaler/MinMax)", "icon": "⚖️", "default_config": {"method": "standard"}},
-        {"id": "categorical_encoder", "name": "Categorical Encoder (One-Hot/Label)", "icon": "🔤", "default_config": {"method": "one_hot"}}
-    ],
-    "🔤 NLP & Text Processing": [
-        {"id": "text_preprocessor", "name": "Text Preprocessor (Stemming/Lemmatization)", "icon": "🧹", "default_config": {"lowercase": True, "strip_html_urls": True, "remove_stopwords": True, "normalization": "lemmatization"}},
-        {"id": "sentiment_analysis", "name": "Sentiment Analysis (Positive / Negative / Neutral)", "icon": "🎭", "default_config": {"columns": [], "output_mode": "Label and Score", "positive_threshold": 0.05, "negative_threshold": -0.05}},
-        {"id": "text_translation", "name": "Translation (Multilingual)", "icon": "🌐", "default_config": {"columns": [], "target_language": "Spanish (es)", "source_language": "Auto-Detect (auto)", "engine": "Offline Dictionary (Fast & Deterministic)", "append_columns": True, "output_suffix": "_translated"}},
-        {"id": "text_vectorizer", "name": "Text Vectorizer (TF-IDF / Word2Vec / Count)", "icon": "🔤", "default_config": {"method": "tfidf", "max_features": 50, "drop_original": True}}
-    ],
-    "✂️ Splitting": [
-        {"id": "train_test_split", "name": "Train / Test Splitter", "icon": "✂️", "default_config": {"target_column": "", "test_size": 0.2}},
-        {"id": "stratified_split", "name": "Stratified Train / Test Splitter", "icon": "📊", "default_config": {"target_column": "", "test_size": 0.2}},
-        {"id": "time_series_split", "name": "Time-Series Chronological Splitter", "icon": "⏱️", "default_config": {"target_column": "", "date_column": "", "test_size": 0.2}},
-        {"id": "walk_forward_split", "name": "Walk-Forward Rolling Window Splitter", "icon": "🔄", "default_config": {"target_column": "", "date_column": "", "window_size": 100, "test_step_size": 20}}
-    ],
-    "🤖 Machine Learning Models": [
-        {"id": "xgboost_trainer", "name": "XGBoost Classifier / Regressor", "icon": "⚡", "default_config": {"task_type": "classification", "n_estimators": 100, "max_depth": 6}},
-        {"id": "lightgbm_trainer", "name": "LightGBM Classifier / Regressor", "icon": "🚀", "default_config": {"task_type": "classification", "n_estimators": 100, "num_leaves": 31}},
-        {"id": "catboost_trainer", "name": "CatBoost Classifier / Regressor", "icon": "🐱", "default_config": {"task_type": "classification", "iterations": 100, "depth": 6}},
-        {"id": "random_forest_trainer", "name": "Random Forest Classifier", "icon": "🌲", "default_config": {"task_type": "classification", "n_estimators": 50, "max_depth": 10}},
-        {"id": "linear_trainer", "name": "Logistic / Ridge Linear Model", "icon": "📈", "default_config": {"task_type": "classification", "max_iter": 200}}
-    ],
-    "🚨 Anomaly Detection (Unsupervised)": [
-        {"id": "isolation_forest", "name": "Isolation Forest Anomaly Detector", "icon": "🌲", "default_config": {"contamination": 0.05, "n_estimators": 100}},
-        {"id": "statistical_guardrail", "name": "Statistical Outlier Guardrail (Z-Score / IQR)", "icon": "🛡️", "default_config": {"method": "z_score", "threshold": 3.0, "action": "flag"}}
-    ],
-    "📈 Time-Series Forecasting": [
-        {"id": "prophet_forecaster", "name": "Prophet Time-Series Forecaster", "icon": "🔮", "default_config": {"horizon_periods": 14, "seasonality_mode": "additive"}},
-        {"id": "arima_forecaster", "name": "ARIMA Statistical Forecaster", "icon": "📊", "default_config": {"p": 1, "d": 1, "q": 1, "horizon_periods": 14}},
-        {"id": "lag_feature_engineering", "name": "Lag & Time Feature Engineer", "icon": "⏱️", "default_config": {"lag_periods": "1, 2, 3, 7, 14", "rolling_windows": "7"}}
-    ],
-    "🏛️ Governance & Model Registry": [
-        {"id": "mlflow_tracker", "name": "MLflow Governance & Registry", "icon": "🏛️", "default_config": {"experiment_name": "Enterprise_ML_Pipelines", "registered_model_name": "Production_Model", "stage": "Production"}}
-    ],
-    "🎯 Model Evaluation & Reports": [
-        {"id": "model_evaluator", "name": "Model Evaluator (Accuracy, F1, Confusion Matrix)", "icon": "🎯", "default_config": {"report_type": "Comprehensive (All Metrics + Confusion Matrix)"}}
-    ]
+CATEGORY_METADATA = {
+    "triggers": {"name": "⚡ Triggers & Inbound Events", "icon": "⚡", "color": "amber", "order": 1},
+    "ingestion": {"name": "📥 Ingestion & Sources", "icon": "📥", "color": "sky", "order": 2},
+    "export": {"name": "📥 Ingestion & Sources", "icon": "📥", "color": "sky", "order": 2},
+    "preprocessing": {"name": "🧹 Data Cleaning & Preprocessing", "icon": "🧹", "color": "indigo", "order": 3},
+    "flow_control": {"name": "🔀 Flow Control & Branching", "icon": "🔀", "color": "slate", "order": 4},
+    "splitting": {"name": "✂️ Dataset Splitting & Resampling", "icon": "✂️", "color": "emerald", "order": 5},
+    "training": {"name": "🤖 Machine Learning Models", "icon": "🤖", "color": "blue", "order": 6},
+    "forecasting": {"name": "📈 Time-Series Forecasting", "icon": "📈", "color": "teal", "order": 7},
+    "anomaly": {"name": "🚨 Anomaly Detection (Unsupervised)", "icon": "🚨", "color": "rose", "order": 8},
+    "unsupervised": {"name": "🌌 Unsupervised & Clustering", "icon": "🌌", "color": "violet", "order": 9},
+    "nlp": {"name": "🔤 NLP & Text Processing", "icon": "🔤", "color": "cyan", "order": 10},
+    "vision_audio": {"name": "👁️ Vision & Audio Processing", "icon": "👁️", "color": "fuchsia", "order": 11},
+    "agents": {"name": "🧠 AI Agents & LLM Orchestration", "icon": "🧠", "color": "purple", "order": 12},
+    "Agents & LLM Orchestration": {"name": "🧠 AI Agents & LLM Orchestration", "icon": "🧠", "color": "purple", "order": 12},
+    "integrations": {"name": "🔌 Cloud & Tool Integrations", "icon": "🔌", "color": "orange", "order": 13},
+    "monitoring": {"name": "📡 Drift & Performance Monitoring", "icon": "📡", "color": "yellow", "order": 14},
+    "governance": {"name": "🏛️ Governance & Model Registry", "icon": "🏛️", "color": "stone", "order": 15},
+    "evaluation": {"name": "🎯 Model Evaluation & Reports", "icon": "🎯", "color": "green", "order": 16}
 }
+
+RECIPE_SPECIFIC_ICONS = {
+    "csv_loader": "📄",
+    "export_writer": "💾",
+    "api_response_endpoint": "🌐",
+    "webhook_trigger": "⚡",
+    "cron_trigger": "⏰",
+    "kafka_consumer": "📨",
+    "column_selector": "🎯",
+    "data_type_converter": "🔄",
+    "duplicate_remover": "👯",
+    "category_sanitizer": "🔤",
+    "correlation_filter": "📊",
+    "variance_filter": "🛑",
+    "missing_value_imputer": "🧹",
+    "outlier_handler": "🛡️",
+    "feature_selector": "✨",
+    "feature_scaler": "⚖️",
+    "categorical_encoder": "🔤",
+    "text_preprocessor": "🧹",
+    "sentiment_analysis": "🎭",
+    "text_translation": "🌐",
+    "text_vectorizer": "🔤",
+    "train_test_split": "✂️",
+    "stratified_split": "📊",
+    "time_series_split": "⏱️",
+    "walk_forward_split": "🔄",
+    "xgboost_trainer": "⚡",
+    "lightgbm_trainer": "🚀",
+    "catboost_trainer": "🐱",
+    "random_forest_trainer": "🌲",
+    "linear_trainer": "📈",
+    "logistic_regression_trainer": "📈",
+    "isolation_forest": "🌲",
+    "statistical_guardrail": "🛡️",
+    "prophet_forecaster": "🔮",
+    "arima_forecaster": "📊",
+    "lag_feature_engineering": "⏱️",
+    "mlflow_tracker": "🏛️",
+    "model_evaluator": "🎯",
+}
+
+
+def build_recipe_palette() -> Dict[str, List[Dict[str, Any]]]:
+    """Dynamically aggregates all enabled backend recipes into enterprise categories with full metadata."""
+    palette: Dict[str, List[Dict[str, Any]]] = {}
+    all_recipes = recipe_registry.list_all(enabled=True)
+    
+    # Sort recipes by category predefined sequence and recipe name
+    sorted_recipes = sorted(
+        all_recipes,
+        key=lambda r: (
+            CATEGORY_METADATA.get(r.category, {}).get("order", 99),
+            r.name
+        )
+    )
+    
+    for r in sorted_recipes:
+        meta = CATEGORY_METADATA.get(r.category, {"name": f"📦 {r.category.title()}", "icon": "📦", "color": "slate"})
+        cat_name = meta["name"]
+        
+        # Determine specific or category icon
+        icon = RECIPE_SPECIFIC_ICONS.get(r.recipe_id, meta["icon"])
+        
+        # Build default config from schema defaults
+        def_config = {}
+        try:
+            schema = r.get_schema() or {}
+            props = schema.get("properties", {})
+            for p_name, p_spec in props.items():
+                if "default" in p_spec:
+                    def_config[p_name] = p_spec["default"]
+        except Exception:
+            def_config = {}
+
+        # Add helpful recipe-specific defaults
+        if r.recipe_id == "train_test_split" and "test_size" not in def_config:
+            def_config.update({"target_column": "", "test_size": 0.2})
+        elif r.recipe_id == "xgboost_trainer" and "task_type" not in def_config:
+            def_config.update({"task_type": "classification", "n_estimators": 100, "max_depth": 6})
+        elif r.recipe_id == "missing_value_imputer" and "strategy" not in def_config:
+            def_config["strategy"] = "median"
+        elif r.recipe_id == "feature_scaler" and "method" not in def_config:
+            def_config["method"] = "standard"
+
+        raw_ver = getattr(r, "version", "1.0.0") or "1.0.0"
+        version_str = raw_ver if str(raw_ver).startswith("v") else f"v{raw_ver}"
+
+        palette.setdefault(cat_name, []).append({
+            "id": r.recipe_id,
+            "name": r.name,
+            "icon": icon,
+            "category": cat_name,
+            "category_key": r.category,
+            "version": version_str,
+            "description": getattr(r, "description", "") or "Modular enterprise pipeline processor.",
+            "input_types": getattr(r, "input_types", ["dataframe"]),
+            "output_types": getattr(r, "output_types", ["dataframe"]),
+            "default_config": def_config
+        })
+    return palette
+
+
+RECIPE_CATEGORY_MAP = build_recipe_palette()
 
 # Canvas Flow State
 if "canvas_version" not in st.session_state:
@@ -333,22 +617,32 @@ def load_platform_dataset(storage_rel_path: str) -> Optional[pd.DataFrame]:
 # -------------------------------------------------------------
 # SIDEBAR NAVIGATION & PERSISTENT API INSPECTOR DOCK
 # -------------------------------------------------------------
-st.sidebar.title("⚡ AI/ML Pipeline Studio")
+st.sidebar.markdown("""
+<div style="display:flex; align-items:center; gap:10px; margin-bottom:14px; padding-bottom:12px; border-bottom:1px solid #E2E8F0;">
+    <div style="width:36px; height:36px; border-radius:10px; background:#2563EB; color:#FFFFFF; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:18px; box-shadow:0 2px 6px rgba(37,99,235,0.35);">
+        ⚡
+    </div>
+    <div>
+        <div style="font-weight:800; font-size:1.05rem; color:#0F172A; line-height:1.2; letter-spacing:-0.01em;">Datalect ML</div>
+        <div style="font-size:0.75rem; color:#64748B; font-weight:500;">Visual AI/ML Pipeline Studio</div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
 app_mode = st.sidebar.radio(
     "Navigation",
-    ["🎨 Pipeline Whiteboard", "📊 Dataset Studio & Profiler", "🧩 Recipe Catalog", "🌐 API & Telemetry Inspector"]
+    ["🎨 Pipeline Whiteboard", "📊 Dataset Studio & Profiler", "🧩 Recipe Catalog (187)", "🌐 API & Telemetry Inspector"]
 )
 
 # Track Tab Navigation GET APIs
 if st.session_state.get("_prev_app_mode") != app_mode:
     st.session_state["_prev_app_mode"] = app_mode
-    if app_mode == "🎨 Pipeline Whiteboard":
+    if "Pipeline Whiteboard" in app_mode:
         record_api_telemetry("View Pipeline Whiteboard Canvas", "/api/v1/workflows/canvas", "GET", {"view": "whiteboard_canvas"}, {"nodes_count": len(st.session_state.get("flow_state", StreamlitFlowState(nodes=[], edges=[])).nodes)}, 200, 0.8)
-    elif app_mode == "📊 Dataset Studio & Profiler":
+    elif "Dataset Studio" in app_mode:
         record_api_telemetry("View Dataset Profile & Preview", f"/api/v1/datasets/{st.session_state.get('active_dataset_name', 'churn')}/profile", "GET", {"dataset_name": st.session_state.get("active_dataset_name")}, {"rows": len(st.session_state.get("active_df", [])), "columns": list(st.session_state.get("active_df", pd.DataFrame()).columns)}, 200, 1.2)
-    elif app_mode == "🧩 Recipe Catalog":
+    elif "Recipe Catalog" in app_mode:
         record_api_telemetry("Fetch All Recipe Components", "/api/v1/recipes/", "GET", {}, {"total_recipes": len(recipe_registry.list_all())}, 200, 0.9)
-    elif app_mode == "🌐 API & Telemetry Inspector":
+    elif "API & Telemetry" in app_mode:
         record_api_telemetry("Fetch API Telemetry Stream", "/api/v1/telemetry", "GET", {}, {"events_count": len(st.session_state.get("api_telemetry_history", []))}, 200, 0.4)
 
 
@@ -923,8 +1217,72 @@ else:
         render_prediction_studio(bundle, schema, in_dialog=False)
 
 
-def create_flow_node(node_id: str, pos: tuple, content: str) -> StreamlitFlowNode:
-    """Helper to create fully interactive, connectable, and draggable React Flow nodes."""
+def create_flow_node(node_id: str, pos: tuple, content: str, category_key: str = "default") -> StreamlitFlowNode:
+    """Helper to create fully interactive, connectable, and draggable React Flow nodes styled with company design tokens."""
+    color_map = {
+        "triggers": {"border": "#F59E0B", "accent": "#D97706"},
+        "ingestion": {"border": "#0284C7", "accent": "#0369A1"},
+        "export": {"border": "#0284C7", "accent": "#0369A1"},
+        "preprocessing": {"border": "#6366F1", "accent": "#4F46E5"},
+        "splitting": {"border": "#10B981", "accent": "#059669"},
+        "training": {"border": "#2563EB", "accent": "#1D4ED8"},
+        "forecasting": {"border": "#0D9488", "accent": "#0F766E"},
+        "anomaly": {"border": "#E11D48", "accent": "#BE123C"},
+        "unsupervised": {"border": "#8B5CF6", "accent": "#7C3AED"},
+        "nlp": {"border": "#06B6D4", "accent": "#0891B2"},
+        "vision_audio": {"border": "#D946EF", "accent": "#C026D3"},
+        "agents": {"border": "#A855F7", "accent": "#9333EA"},
+        "Agents & LLM Orchestration": {"border": "#A855F7", "accent": "#9333EA"},
+        "integrations": {"border": "#F97316", "accent": "#EA580C"},
+        "monitoring": {"border": "#EAB308", "accent": "#CA8A04"},
+        "governance": {"border": "#78716C", "accent": "#57534E"},
+        "evaluation": {"border": "#16A34A", "accent": "#15803D"},
+        "flow_control": {"border": "#64748B", "accent": "#334155"},
+        "default": {"border": "#CBD5E1", "accent": "#2563EB"},
+    }
+
+    # Auto-infer category if default
+    effective_cat = category_key.lower()
+    if effective_cat == "default":
+        cfg = st.session_state.get("node_configs", {}).get(node_id, {})
+        r_id = cfg.get("recipe_id", "")
+        if r_id:
+            r_obj = recipe_registry.get(r_id)
+            if r_obj:
+                effective_cat = r_obj.category.lower()
+        if effective_cat == "default":
+            nid_low = node_id.lower()
+            if any(k in nid_low for k in ["trigger", "cron", "webhook"]):
+                effective_cat = "triggers"
+            elif any(k in nid_low for k in ["csv", "load", "ingest", "source"]):
+                effective_cat = "ingestion"
+            elif any(k in nid_low for k in ["impute", "scale", "clean", "encode", "prep"]):
+                effective_cat = "preprocessing"
+            elif any(k in nid_low for k in ["split", "strat"]):
+                effective_cat = "splitting"
+            elif any(k in nid_low for k in ["xgb", "lightgbm", "catboost", "forest", "linear", "model", "train"]):
+                effective_cat = "training"
+            elif any(k in nid_low for k in ["prophet", "arima", "forecast"]):
+                effective_cat = "forecasting"
+            elif any(k in nid_low for k in ["anom", "outlier", "isolation"]):
+                effective_cat = "anomaly"
+            elif any(k in nid_low for k in ["eval"]):
+                effective_cat = "evaluation"
+
+    theme = color_map.get(effective_cat, color_map["default"])
+    node_style = {
+        "background": "#FFFFFF",
+        "color": "#0F172A",
+        "border": f"1.5px solid {theme['border']}",
+        "borderRadius": "10px",
+        "boxShadow": "0 2px 8px -2px rgba(15, 23, 42, 0.08), 0 1px 3px -1px rgba(15, 23, 42, 0.04)",
+        "fontFamily": "Inter, -apple-system, sans-serif",
+        "fontSize": "12px",
+        "fontWeight": "600",
+        "padding": "10px 14px",
+        "minWidth": "165px",
+    }
+
     return StreamlitFlowNode(
         id=node_id,
         pos=pos,
@@ -935,8 +1293,41 @@ def create_flow_node(node_id: str, pos: tuple, content: str) -> StreamlitFlowNod
         connectable=True,
         selectable=True,
         draggable=True,
-        deletable=True
+        deletable=True,
+        style=node_style
     )
+
+
+def auto_format_canvas_layout():
+    """Automatically spaces and arranges active whiteboard nodes into an aesthetic horizontal pipeline workflow."""
+    nodes = list(st.session_state["flow_state"].nodes)
+    if not nodes:
+        return
+
+    def get_order_score(nid: str) -> float:
+        cfg = st.session_state.get("node_configs", {}).get(nid, {})
+        r_id = cfg.get("recipe_id", "")
+        r_obj = recipe_registry.get(r_id) if r_id else None
+        if r_obj:
+            c = r_obj.category.lower()
+            if "trigger" in c: return 0.0
+            if "ingest" in c: return 1.0
+            if "prep" in c: return 2.0
+            if "split" in c: return 3.0
+            if "train" in c or "model" in c or "forecast" in c or "anom" in c: return 4.0
+            if "eval" in c or "gov" in c: return 5.0
+        return 2.5
+
+    nodes_sorted = sorted(nodes, key=lambda n: (get_order_score(n.id), get_node_position(n)[0]))
+    cur_x = 40
+    toggle_y = False
+    for n in nodes_sorted:
+        cur_y = 100 if not toggle_y else 60
+        toggle_y = not toggle_y
+        n.pos = (cur_x, cur_y)
+        cur_x += 240
+
+    st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
 
 
 def build_recommended_pipeline(rec_dict: dict = None, target_col: str = None, task_type: str = None):
@@ -1707,17 +2098,43 @@ def restore_saved_workflow(wf_data: dict):
 # -------------------------------------------------------------
 # TAB 1: VISUAL PIPELINE WHITEBOARD
 # -------------------------------------------------------------
-if app_mode == "🎨 Pipeline Whiteboard":
-    st.markdown('<div class="main-header">🎨 Visual Pipeline Studio</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sub-header">Construct, wire, and execute your machine learning, anomaly detection & forecasting pipelines.</div>', unsafe_allow_html=True)
+if "Pipeline Whiteboard" in app_mode:
+    curr_nodes_cnt = len(st.session_state["flow_state"].nodes)
+    curr_edges_cnt = len(st.session_state["flow_state"].edges)
+    active_ds_title = st.session_state.get('active_dataset_name', 'No Dataset Selected')
+
+    # Top Brand Bar & Pipeline Studio Header
+    st.markdown(f"""
+    <div style="display:flex; justify-content:space-between; align-items:center; background:#FFFFFF; border:1px solid #E2E8F0; border-radius:12px; padding:10px 18px; margin-bottom:14px; box-shadow:0 1px 3px rgba(15,23,42,0.03);">
+        <div style="display:flex; align-items:center; gap:12px;">
+            <div style="width:38px; height:38px; border-radius:10px; background:#EFF6FF; border:1px solid #DBEAFE; color:#2563EB; display:flex; align-items:center; justify-content:center; font-size:18px;">
+                ⚡
+            </div>
+            <div>
+                <div style="font-size:1.15rem; font-weight:800; color:#0F172A; letter-spacing:-0.02em;">Custom Pipeline Studio</div>
+                <div style="font-size:0.75rem; color:#64748B;">Datalect ML Enterprise AI/ML Pipeline Whiteboard</div>
+            </div>
+        </div>
+        <div style="display:flex; align-items:center; gap:10px;">
+            <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:8px; padding:5px 12px; font-size:11px; color:#475569; display:flex; gap:10px;">
+                <span>Nodes: <strong style="color:#0F172A;">{curr_nodes_cnt}</strong></span>
+                <span style="color:#CBD5E1;">|</span>
+                <span>Links: <strong style="color:#0F172A;">{curr_edges_cnt}</strong></span>
+            </div>
+            <div style="background:#EFF6FF; border:1px solid #DBEAFE; border-radius:8px; padding:5px 12px; font-size:11px; color:#1D4ED8; font-weight:600;">
+                📄 {active_ds_title[:24]}
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
     # Top Execution & Action Bar
-    bar_col1, bar_col2, bar_col3, bar_col4, bar_col5, bar_col6, bar_col7 = st.columns([2.2, 2.0, 1.8, 1.8, 1.8, 1.4, 1.4])
+    bar_col1, bar_col2, bar_col3, bar_col4, bar_col5, bar_col6, bar_col7, bar_col8 = st.columns([2.0, 1.8, 1.5, 1.5, 1.5, 1.4, 1.4, 1.2])
     with bar_col1:
         execute_clicked_top = st.button("▶️ RUN PIPELINE", type="primary", use_container_width=True)
 
     with bar_col2:
-        if st.button("🧠 AI Recommend", type="secondary", use_container_width=True):
+        if st.button("✨ AI Recommend", type="secondary", use_container_width=True):
             if len(st.session_state["flow_state"].nodes) > 0:
                 st.session_state["pending_action"] = "ai_recommend"
             else:
@@ -1767,28 +2184,21 @@ if app_mode == "🎨 Pipeline Whiteboard":
 
                 def get_category_order(nid: str) -> float:
                     r_id = get_recipe_type(nid)
-                    if r_id in ["cron_trigger", "webhook_trigger"]:
+                    r_obj = recipe_registry.get(r_id) if r_id else None
+                    if r_obj:
+                        c = r_obj.category.lower()
+                        if "trigger" in c: return 0.0
+                        if "ingest" in c: return 1.0
+                        if "prep" in c: return 2.0
+                        if "split" in c: return 3.0
+                        if "train" in c or "model" in c or "forecast" in c or "anom" in c: return 4.0
+                        if "eval" in c or "gov" in c: return 5.0
+                    if r_id in ["cron_trigger", "webhook_trigger", "kafka_consumer"]:
                         return 0.0
-                    if r_id in ["csv_loader"]:
+                    if r_id in ["csv_loader", "export_writer"]:
                         return 1.0
-                    if r_id in ["duplicate_remover", "duplicates", "column_selector"]:
-                        return 1.2
-                    if r_id in ["data_type_converter"]:
-                        return 1.4
-                    if r_id in ["missing_value_imputer", "missing_values", "outlier_handler", "statistical_guardrail"]:
-                        return 1.6
-                    if r_id in ["text_preprocessor", "sentiment_analysis", "text_translation", "translation", "text_vectorizer"]:
-                        return 1.8
-                    if r_id in ["category_sanitizer", "categorical_encoder", "feature_scaler", "lag_feature_engineering", "lag_features"]:
-                        return 2.0
-                    if r_id in ["correlation_filter", "variance_filter", "feature_selector"]:
-                        return 2.5
                     if r_id in ["train_test_split", "stratified_split", "time_series_split", "walk_forward_split"]:
                         return 3.0
-                    if r_id in ["class_imbalance_resampler"]:
-                        return 3.5
-                    if r_id in ["xgboost_trainer", "lightgbm_trainer", "catboost_trainer", "random_forest_trainer", "logistic_regression_trainer", "linear_trainer", "isolation_forest", "prophet_forecaster", "arima_forecaster"]:
-                        return 4.0
                     if r_id in ["model_evaluator", "mlflow_tracker"]:
                         return 5.0
                     return 2.0
@@ -1894,6 +2304,11 @@ if app_mode == "🎨 Pipeline Whiteboard":
                 st.rerun()
 
     with bar_col7:
+        if st.button("📐 Auto-Format", use_container_width=True):
+            auto_format_canvas_layout()
+            st.rerun()
+
+    with bar_col8:
         if st.button("🧹 Clear", use_container_width=True):
             if len(st.session_state["flow_state"].nodes) > 0:
                 st.session_state["pending_action"] = "clear_canvas"
@@ -2184,88 +2599,113 @@ if app_mode == "🎨 Pipeline Whiteboard":
                 st.write(f"• **{m['name']}** ({m['tier']}) ➔ *{m['reason'][:80]}...*")
 
     # ---------------------------------------------------------
-    # STEP 1: COMPONENT PALETTE (Top Toolbar)
+    # STEP 1: COMPONENT PALETTE (Enterprise Catalog Drawer)
     # ---------------------------------------------------------
-    with st.expander("📦 Step 1: Add New Component to Whiteboard", expanded=True):
+    total_procs = sum(len(v) for v in RECIPE_CATEGORY_MAP.values())
+    with st.expander(f"📦 Step 1: Recipe Palette ({total_procs} Enterprise Processors)", expanded=True):
         st.caption("🌐 **Active API:** `GET /api/v1/recipes?category=...` ➔ `GET /api/v1/recipes/{recipe_id}/schema`")
-        col_cat, col_recipe, col_add = st.columns([2, 3, 2])
-        
-        with col_cat:
-            selected_cat = st.selectbox("Category", list(RECIPE_CATEGORY_MAP.keys()), index=0, key="step1_cat_select")
-            cat_slug = selected_cat.split(" ")[-1].lower()
-            if st.session_state.get("_prev_cat_select") != selected_cat:
-                st.session_state["_prev_cat_select"] = selected_cat
-                record_api_telemetry(
-                    action_name=f"Browse Category: {selected_cat}",
-                    endpoint=f"/api/v1/recipes?category={cat_slug}",
-                    method="GET",
-                    request_payload={"query_param": {"category": cat_slug}},
-                    response_payload={"recipes_count": len(RECIPE_CATEGORY_MAP[selected_cat]), "recipes": [r['id'] for r in RECIPE_CATEGORY_MAP[selected_cat]]},
-                    status_code=200,
-                    duration_ms=1.1
-                )
 
-        with col_recipe:
+        # Search & Category Filter Row
+        pal_search_col, pal_cat_col = st.columns([1.8, 1.2])
+        with pal_search_col:
+            pal_search = st.text_input(
+                "Search Processors",
+                placeholder="Search recipes, groups, SQL joins, transforms...",
+                label_visibility="collapsed",
+                key="pal_search_filter"
+            )
+
+        cat_labels = {f"{c} ({len(RECIPE_CATEGORY_MAP[c])})": c for c in RECIPE_CATEGORY_MAP.keys()}
+        with pal_cat_col:
+            sel_cat_label = st.selectbox(
+                "Filter by Category",
+                list(cat_labels.keys()),
+                label_visibility="collapsed",
+                key="pal_cat_dropdown"
+            )
+            selected_cat = cat_labels[sel_cat_label]
+
+        if pal_search and pal_search.strip():
+            q = pal_search.strip().lower()
+            matching_recipes = []
+            for c_name, r_list in RECIPE_CATEGORY_MAP.items():
+                for r in r_list:
+                    if (q in r["name"].lower() or 
+                        q in r["id"].lower() or 
+                        q in r.get("description", "").lower() or 
+                        q in c_name.lower()):
+                        matching_recipes.append(r)
+            available = matching_recipes
+            st.caption(f"Showing **{len(available)}** matching processors for `{pal_search}` across all categories:")
+        else:
             available = RECIPE_CATEGORY_MAP[selected_cat]
-            recipe_map = {r["name"]: r for r in available}
-            chosen_name = st.selectbox("Subcategory / Recipe", list(recipe_map.keys()), key="step1_recipe_select")
-            chosen_meta = recipe_map[chosen_name]
-            
-            if st.session_state.get("_prev_recipe_select") != chosen_meta["id"]:
-                st.session_state["_prev_recipe_select"] = chosen_meta["id"]
-                r_obj_temp = recipe_registry.get(chosen_meta["id"])
-                record_api_telemetry(
-                    action_name=f"Fetch Recipe Schema: {chosen_meta['name']}",
-                    endpoint=f"/api/v1/recipes/{chosen_meta['id']}/schema",
-                    method="GET",
-                    request_payload={"path_param": {"recipe_id": chosen_meta["id"]}},
-                    response_payload={"recipe_id": chosen_meta["id"], "name": chosen_meta["name"], "parameters_schema": r_obj_temp.get_schema() if r_obj_temp else {}},
-                    status_code=200,
-                    duration_ms=0.9
-                )
 
-        with col_add:
-            st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-            if st.button("➕ Drop Node Onto Board", type="primary", use_container_width=True):
-                # Unique collision-free node counter
-                st.session_state["node_counter"] = st.session_state.get("node_counter", 0) + 1
-                counter = st.session_state["node_counter"]
-                count = len(st.session_state["flow_state"].nodes)
-                pos_x = 80 + (count % 3) * 260
-                pos_y = 60 + (count // 3) * 140
-                
-                node_id = f"{chosen_meta['id']}_{counter}"
-                node_title = f"{chosen_meta['icon']} {chosen_meta['name'].split('(')[0].strip()}"
-                
-                new_node = create_flow_node(
-                    node_id=node_id,
-                    pos=(pos_x, pos_y),
-                    content=f"{node_title}\n[{node_id}]"
+        if not available:
+            st.info(f"No processors matched '{pal_search}'. Try keywords like 'ingestion', 'imputer', 'xgboost', 'split', or 'transform'.")
+        else:
+            col_recipe, col_meta, col_add = st.columns([3, 2.5, 1.5])
+            with col_recipe:
+                recipe_map = {f"{r['icon']} {r['name']} ({r['version']})": r for r in available}
+                chosen_label = st.selectbox(
+                    "Select Processor",
+                    list(recipe_map.keys()),
+                    key="step1_recipe_select"
                 )
-                
-                st.session_state["flow_state"].nodes.append(new_node)
-                
-                init_cfg = dict(chosen_meta["default_config"])
-                if "target_column" in init_cfg:
-                    init_cfg["target_column"] = ""
+                chosen_meta = recipe_map[chosen_label]
 
-                st.session_state["node_configs"][node_id] = {
-                    "recipe_id": chosen_meta["id"],
-                    "label": node_title,
-                    "config": init_cfg
-                }
-                st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
-                
-                record_api_telemetry(
-                    action_name=f"➕ Drop Node: {chosen_meta['name']}",
-                    endpoint="/api/v1/recipes/instantiate",
-                    method="POST",
-                    request_payload={"recipe_id": chosen_meta["id"], "node_id": node_id, "default_config": init_cfg},
-                    response_payload={"status": "NODE_CREATED", "node_id": node_id, "schema": chosen_meta.get("default_config")},
-                    status_code=201,
-                    duration_ms=1.5
-                )
-                st.rerun()
+            with col_meta:
+                in_str = ", ".join(chosen_meta.get("input_types", ["dataframe"]))
+                out_str = ", ".join(chosen_meta.get("output_types", ["dataframe"]))
+                desc_snippet = chosen_meta.get("description", "")[:75]
+                st.markdown(f"""
+                <div style="font-size:11px; color:#475569; padding-top:6px;">
+                    <div><b>In:</b> <code>{in_str}</code> • <b>Out:</b> <code>{out_str}</code></div>
+                    <div style="color:#64748B; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="{chosen_meta.get('description','')}">{desc_snippet}...</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            with col_add:
+                st.markdown("<div style='height: 4px;'></div>", unsafe_allow_html=True)
+                if st.button("➕ Drop to Board", type="primary", use_container_width=True, key="btn_drop_processor"):
+                    st.session_state["node_counter"] = st.session_state.get("node_counter", 0) + 1
+                    counter = st.session_state["node_counter"]
+                    count = len(st.session_state["flow_state"].nodes)
+                    pos_x = 80 + (count % 3) * 260
+                    pos_y = 60 + (count // 3) * 140
+
+                    node_id = f"{chosen_meta['id']}_{counter}"
+                    node_title = f"{chosen_meta['icon']} {chosen_meta['name'].split('(')[0].strip()}"
+
+                    new_node = create_flow_node(
+                        node_id=node_id,
+                        pos=(pos_x, pos_y),
+                        content=f"{node_title}\n[{node_id}]",
+                        category_key=chosen_meta.get("category_key", "default")
+                    )
+
+                    st.session_state["flow_state"].nodes.append(new_node)
+
+                    init_cfg = dict(chosen_meta["default_config"])
+                    if "target_column" in init_cfg:
+                        init_cfg["target_column"] = ""
+
+                    st.session_state["node_configs"][node_id] = {
+                        "recipe_id": chosen_meta["id"],
+                        "label": node_title,
+                        "config": init_cfg
+                    }
+                    st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
+
+                    record_api_telemetry(
+                        action_name=f"➕ Drop Node: {chosen_meta['name']}",
+                        endpoint="/api/v1/recipes/instantiate",
+                        method="POST",
+                        request_payload={"recipe_id": chosen_meta["id"], "node_id": node_id, "default_config": init_cfg},
+                        response_payload={"status": "NODE_CREATED", "node_id": node_id, "schema": chosen_meta.get("default_config")},
+                        status_code=201,
+                        duration_ms=1.5
+                    )
+                    st.rerun()
 
     st.markdown("---")
 
@@ -2289,13 +2729,124 @@ if app_mode == "🎨 Pipeline Whiteboard":
                 del st.session_state["autowire_validation_error"]
                 st.rerun()
 
+    def render_chrysa_assistant_card():
+        st.markdown("""
+        <div class="chrysa-card">
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <div style="width:28px; height:28px; border-radius:8px; background:#EFF6FF; border:1px solid #DBEAFE; display:flex; align-items:center; justify-content:center; color:#2563EB;">✨</div>
+                    <div>
+                        <span class="chrysa-text-shimmer" style="font-weight:700; font-size:0.92rem;">Chrysa Copilot</span>
+                        <span class="badge badge-blue" style="font-size:9px; margin-left:4px;">AI ASSIST</span>
+                    </div>
+                </div>
+            </div>
+            <p style="font-size:0.78rem; color:#64748B; margin-bottom:10px; line-height:1.4;">
+                Ask about your dataset, pipeline architecture, metric interpretation, or guardrails.
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        q_prompts = [
+            "📊 Evaluate current pipeline metrics",
+            "🛡️ Check for data leakage in split",
+            "📈 How does MAPE handle zeros?",
+            "⚡ Recommend next processor step"
+        ]
+        sel_prompt = st.selectbox("Quick Inquiries", ["-- Select a prompt --"] + q_prompts, key="chrysa_quick_prompt")
+        user_query = st.text_input("Ask Chrysa anything...", placeholder="e.g. Which model is best for churn?", key="chrysa_custom_input")
+
+        active_q = user_query if user_query.strip() else (sel_prompt if sel_prompt != "-- Select a prompt --" else None)
+
+        if active_q:
+            with st.spinner("Chrysa is analyzing pipeline state..."):
+                answer = ""
+                df_curr = st.session_state.get("active_df")
+                last_exec = st.session_state.get("last_execution")
+
+                if "leak" in active_q.lower() or "split" in active_q.lower():
+                    split_cfg = None
+                    for nid, c in st.session_state.get("node_configs", {}).items():
+                        if "split" in c.get("recipe_id", ""):
+                            split_cfg = c.get("config", {})
+                            break
+                    if split_cfg:
+                        strat = split_cfg.get("stratify", False)
+                        ts = split_cfg.get("time_series_mode", False)
+                        answer = f"✅ **Split Analysis:** Active splitter detected. Stratification is **{'Enabled' if strat else 'Disabled'}** and Time-Series chronological ordering is **{'Active' if ts else 'Inactive'}**. All preprocessing encoders and scalers are fitted strictly on the training split to guarantee zero target or feature leakage."
+                    else:
+                        answer = "ℹ️ **Split Recommendation:** You currently do not have a dedicated Train/Test Split node wired. For supervised models, add a `Train / Test Splitter` or `Stratified Splitter` before the trainer to ensure robust evaluation on unseen test data."
+
+                elif "mape" in active_q.lower() or "zero" in active_q.lower():
+                    answer = "🛡️ **MAPE Zero Guardrail:** Standard MAPE divides by actual values: `|actual - pred| / actual`. When actuals contain zeros (e.g. 0 sales or churn = 0), division by zero causes runaway percentages (e.g. trillions %). The platform evaluator automatically displays **`N/A (Contains zeros)`** and reports **SMAPE (Symmetric MAPE)** to handle zero-grounded features safely."
+
+                elif "metric" in active_q.lower() or "evaluat" in active_q.lower() or "perform" in active_q.lower():
+                    if last_exec and last_exec.get("final_metrics"):
+                        m = last_exec["final_metrics"]
+                        if "accuracy" in m:
+                            answer = f"🏆 **Classification Executive Summary:** Model achieved **Accuracy = {m.get('accuracy', 0)*100:.2f}%**, **F1 Score = {m.get('f1_score', 0)*100:.2f}%**, and **Balanced Accuracy = {m.get('balanced_accuracy', 0)*100:.2f}%**. Status is **{last_exec.get('status', 'SUCCESS')}** across {len(last_exec.get('step_snapshots', {}))} steps."
+                        elif "r2_score" in m:
+                            answer = f"📈 **Regression Executive Summary:** Model achieved **R² = {m.get('r2_score', 0):.4f}**, **MAE = {m.get('mae', 0):.4f}**, and **RMSE = {m.get('rmse', 0):.4f}**. SMAPE is `{m.get('smape', 'N/A')}`."
+                        else:
+                            answer = f"📊 **Execution Metrics Summary:** Pipeline finished with status `{last_exec.get('status')}`. Final metrics recorded: `{list(m.keys())}`."
+                    else:
+                        answer = "ℹ️ No recent execution metrics found. Click **▶️ RUN PIPELINE** on the toolbar to execute the DAG and generate diagnostic performance reports."
+
+                elif "step" in active_q.lower() or "recommend" in active_q.lower() or "next" in active_q.lower():
+                    curr_nodes = st.session_state.get("flow_state", StreamlitFlowState([], [])).nodes
+                    if not curr_nodes:
+                        answer = "💡 **Recommended Next Step:** Drop a `Dataset Ingestion` node or click **✨ Recommend AI Pipeline** to automatically build a complete preprocessing and modeling pipeline."
+                    elif not any("split" in n.id for n in curr_nodes):
+                        answer = "💡 **Recommended Next Step:** Add a `Train / Test Splitter` (under Dataset Splitting) to prevent overfitting before training a model."
+                    elif not any("eval" in n.id for n in curr_nodes):
+                        answer = "💡 **Recommended Next Step:** Add a `Model Evaluator` node and connect your model to inspect Accuracy, F1, and Confusion Matrix heatmaps."
+                    else:
+                        answer = "✨ **Pipeline Complete:** Your architecture has ingestion, preprocessing, splitting, training, and evaluation nodes. Click **▶️ RUN PIPELINE** to test."
+
+                else:
+                    answer = f"🤖 **Chrysa Insights:** Active dataset has **{len(df_curr) if df_curr is not None else 0}** rows and **{len(df_curr.columns) if df_curr is not None else 0}** features. Active canvas has **{len(st.session_state['flow_state'].nodes)}** nodes. All 187 enterprise processors are available in the palette above."
+
+                st.markdown(f"""
+                <div style="background:#F0FDF4; border:1px solid #BBF7D0; border-radius:10px; padding:12px; margin-top:8px; font-size:0.82rem; color:#166534;">
+                    {answer}
+                </div>
+                """, unsafe_allow_html=True)
+
     canvas_col, right_col = st.columns([3, 1])
 
     with canvas_col:
         st.markdown("#### 🖱️ Step 2: Interactive Whiteboard")
-        
+
         if not st.session_state["flow_state"].nodes:
-            st.info("💡 Whiteboard is empty. Click **'🧠 AI Recommend'**, **'⚡ ML Template'**, **'🔮 Forecast'**, or drop nodes above to start!")
+            st.markdown("""
+            <div style="background:#FFFFFF; border:1px solid #E2E8F0; border-radius:16px; padding:28px 20px; text-align:center; box-shadow:0 4px 12px -2px rgba(15,23,42,0.04); margin-bottom:12px;">
+                <div style="width:48px; height:48px; border-radius:14px; background:#EFF6FF; border:1px solid #DBEAFE; color:#2563EB; display:flex; align-items:center; justify-content:center; margin:0 auto 10px auto; font-size:22px;">
+                    ⚡
+                </div>
+                <h3 style="font-size:1.1rem; font-weight:800; color:#0F172A; margin-bottom:4px; letter-spacing:-0.02em;">Canvas is Ready</h3>
+                <p style="font-size:0.82rem; color:#64748B; max-width:420px; margin:0 auto 14px auto; line-height:1.45;">
+                    Select a saved workflow from the top dropdown, let AI auto-architect an end-to-end pipeline, or drop components from the 187-processor catalog above.
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+
+            c_h1, c_h2, c_h3, c_h4 = st.columns(4)
+            with c_h1:
+                if st.button("✨ Recommend AI Pipeline", key="btn_hero_ai_rec", use_container_width=True, type="primary"):
+                    build_recommended_pipeline()
+                    st.rerun()
+            with c_h2:
+                if st.button("⚡ ML Supervised Template", key="btn_hero_ml_temp", use_container_width=True):
+                    load_ml_template(force_preset=True)
+                    st.rerun()
+            with c_h3:
+                if st.button("🔮 Forecasting Template", key="btn_hero_fc_temp", use_container_width=True):
+                    load_forecast_template(force_preset=True)
+                    st.rerun()
+            with c_h4:
+                if st.button("🚨 Anomaly Template", key="btn_hero_an_temp", use_container_width=True):
+                    load_anomaly_template(force_preset=True)
+                    st.rerun()
 
         # Render 2D React Flow Canvas with versioned key
         canvas_key = f"pipeline_flow_canvas_v{st.session_state.get('canvas_version', 1)}"
@@ -2900,8 +3451,11 @@ if app_mode == "🎨 Pipeline Whiteboard":
                 )
                 
                 st.rerun()
+
+            with st.expander("✨ Chrysa Copilot Assistant", expanded=False):
+                render_chrysa_assistant_card()
         else:
-            st.write("No nodes selected.")
+            render_chrysa_assistant_card()
 
     # Execute Trigger Check
     if execute_clicked_top:
@@ -3131,6 +3685,10 @@ if app_mode == "🎨 Pipeline Whiteboard":
                             xaxis_title=temp_col_label,
                             yaxis_title="Value",
                             height=400,
+                            template="plotly_white",
+                            paper_bgcolor="rgba(0,0,0,0)",
+                            plot_bgcolor="rgba(0,0,0,0)",
+                            font=dict(family="Inter, sans-serif", color="#0F172A"),
                             legend=dict(orientation="h", y=1.02, x=1, xanchor="right"),
                             margin=dict(l=40, r=20, t=55, b=40)
                         )
@@ -3146,12 +3704,16 @@ if app_mode == "🎨 Pipeline Whiteboard":
                                     lambda r: "#EF4444" if r < 0 else "#10B981"
                                 )
                             ))
-                            fig_res.add_hline(y=0, line_dash="dash", line_color="white", opacity=0.5)
+                            fig_res.add_hline(y=0, line_dash="dash", line_color="#94A3B8", opacity=0.6)
                             fig_res.update_layout(
                                 title="Residuals (Actual − Predicted)",
                                 xaxis_title=temp_col_label,
                                 yaxis_title="Residual",
                                 height=280,
+                                template="plotly_white",
+                                paper_bgcolor="rgba(0,0,0,0)",
+                                plot_bgcolor="rgba(0,0,0,0)",
+                                font=dict(family="Inter, sans-serif", color="#0F172A"),
                                 margin=dict(l=40, r=20, t=45, b=40)
                             )
                             st.plotly_chart(fig_res, use_container_width=True)
@@ -3171,7 +3733,13 @@ if app_mode == "🎨 Pipeline Whiteboard":
                         if "feature_importances" in out and out["feature_importances"]:
                             fi = out["feature_importances"]
                             fi_df = pd.DataFrame(list(fi.items()), columns=["Feature", "Importance"]).sort_values(by="Importance", ascending=True)
-                            fig_fi = px.bar(fi_df, x="Importance", y="Feature", orientation="h", title=f"Feature Importances from Node '{n_id}'")
+                            fig_fi = px.bar(
+                                fi_df, x="Importance", y="Feature", orientation="h",
+                                title=f"Feature Importances from Node '{n_id}'",
+                                color_discrete_sequence=["#2563EB"],
+                                template="plotly_white"
+                            )
+                            fig_fi.update_layout(paper_bgcolor="rgba(0,0,0,0)", font=dict(family="Inter, sans-serif", color="#0F172A"))
                             st.plotly_chart(fig_fi, use_container_width=True)
 
             else:
@@ -3223,6 +3791,9 @@ if app_mode == "🎨 Pipeline Whiteboard":
                             fig_cm.update_layout(
                                 title="Confusion Matrix Heatmap",
                                 height=380,
+                                template="plotly_white",
+                                paper_bgcolor="rgba(0,0,0,0)",
+                                font=dict(family="Inter, sans-serif", color="#0F172A"),
                                 xaxis_title="Predicted Label",
                                 yaxis_title="Actual Label",
                                 margin=dict(l=40, r=40, t=50, b=40)
@@ -3352,7 +3923,7 @@ if app_mode == "🎨 Pipeline Whiteboard":
 # -------------------------------------------------------------
 # TAB 2: DATASET STUDIO & PROFILER
 # -------------------------------------------------------------
-elif app_mode == "📊 Dataset Studio & Profiler":
+elif "Dataset Studio" in app_mode:
     st.markdown('<div class="main-header">📊 Dataset Studio & Automated Profiler</div>', unsafe_allow_html=True)
     st.markdown('<div class="sub-header">Upload your dataset to inspect preview rows and automatic statistical profiles.</div>', unsafe_allow_html=True)
 
@@ -3529,25 +4100,97 @@ elif app_mode == "📊 Dataset Studio & Profiler":
 # -------------------------------------------------------------
 # TAB 3: RECIPE CATALOG
 # -------------------------------------------------------------
-elif app_mode == "🧩 Recipe Catalog":
-    st.markdown('<div class="main-header">🧩 Dynamic Component & Recipe Catalog</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sub-header">All modular processing, transformation, and ML algorithms registered in the platform backend.</div>', unsafe_allow_html=True)
+elif "Recipe Catalog" in app_mode:
+    tot_recipes = sum(len(v) for v in RECIPE_CATEGORY_MAP.values())
+    st.markdown('<div class="main-header">🧩 Enterprise Component & Recipe Catalog</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="sub-header">All {tot_recipes} modular processing, transformation, AI agents, and ML algorithms registered in the platform backend.</div>', unsafe_allow_html=True)
+
+    # Catalog Overview Metrics
+    rc_m1, rc_m2, rc_m3, rc_m4 = st.columns(4)
+    rc_m1.metric("Registered Processors", f"{tot_recipes}")
+    rc_m2.metric("Component Categories", f"{len(RECIPE_CATEGORY_MAP)}")
+    rc_m3.metric("ML Frameworks", "8 Supported")
+    rc_m4.metric("Engine Execution", "Zero-Copy In-Memory")
+
+    # Search Bar
+    catalog_search = st.text_input(
+        "Search Catalog",
+        placeholder="Filter across 187 processors (e.g. XGBoost, Imputer, Kafka, Snowflake, Resampling...)",
+        label_visibility="collapsed",
+        key="cat_search_input"
+    )
+
+    q_cat = catalog_search.strip().lower() if catalog_search else ""
 
     for cat_name, recipes_list in RECIPE_CATEGORY_MAP.items():
-        st.markdown(f"### {cat_name}")
-        for r_meta in recipes_list:
-            r_obj = recipe_registry.get(r_meta["id"])
-            with st.expander(f"{r_meta['icon']} {r_obj.name} (`{r_obj.recipe_id}`)"):
-                st.markdown(f"**Description:** {r_obj.description}")
-                st.markdown(f"**Inputs:** `{r_obj.input_types}` ➔ **Outputs:** `{r_obj.output_types}`")
-                st.markdown("#### JSON Schema:")
-                st.json(r_obj.get_schema())
+        if q_cat:
+            filtered_list = [
+                r for r in recipes_list 
+                if (q_cat in r["name"].lower() or 
+                    q_cat in r["id"].lower() or 
+                    q_cat in r.get("description", "").lower() or 
+                    q_cat in cat_name.lower())
+            ]
+        else:
+            filtered_list = recipes_list
+
+        if filtered_list:
+            st.markdown(f"### {cat_name} ({len(filtered_list)})")
+            for r_meta in filtered_list:
+                r_obj = recipe_registry.get(r_meta["id"])
+                if not r_obj:
+                    continue
+                exp_title = f"{r_meta['icon']} {r_obj.name} (`{r_obj.recipe_id}`) — {r_meta.get('version', 'v1.0.0')}"
+                with st.expander(exp_title):
+                    r_col1, r_col2 = st.columns([3, 1])
+                    with r_col1:
+                        st.markdown(f"**Description:** {r_obj.description}")
+                        in_t = ", ".join(r_obj.input_types) if isinstance(r_obj.input_types, list) else str(r_obj.input_types)
+                        out_t = ", ".join(r_obj.output_types) if isinstance(r_obj.output_types, list) else str(r_obj.output_types)
+                        st.markdown(f"**Ports:** `In: {in_t}` ➔ `Out: {out_t}`")
+                    with r_col2:
+                        if st.button("➕ Drop to Board", key=f"btn_cat_add_{r_obj.recipe_id}"):
+                            st.session_state["node_counter"] = st.session_state.get("node_counter", 0) + 1
+                            counter = st.session_state["node_counter"]
+                            count = len(st.session_state["flow_state"].nodes)
+                            pos_x = 80 + (count % 3) * 260
+                            pos_y = 60 + (count // 3) * 140
+                            node_id = f"{r_meta['id']}_{counter}"
+                            node_title = f"{r_meta['icon']} {r_meta['name'].split('(')[0].strip()}"
+                            
+                            new_node = create_flow_node(
+                                node_id=node_id,
+                                pos=(pos_x, pos_y),
+                                content=f"{node_title}\n[{node_id}]",
+                                category_key=r_meta.get("category_key", "default")
+                            )
+                            st.session_state["flow_state"].nodes.append(new_node)
+                            st.session_state["node_configs"][node_id] = {
+                                "recipe_id": r_meta["id"],
+                                "label": node_title,
+                                "config": dict(r_meta.get("default_config", {}))
+                            }
+                            st.session_state["canvas_version"] = st.session_state.get("canvas_version", 1) + 1
+                            st.success(f"Added '{r_obj.name}' to Pipeline Whiteboard!")
+
+                    # Schema and Code View tabs
+                    c_tab1, c_tab2 = st.tabs(["📋 JSON Schema", "</> Generated Python Code"])
+                    with c_tab1:
+                        st.json(r_obj.get_schema())
+                    with c_tab2:
+                        sample_cfg = r_meta.get("default_config", {})
+                        if hasattr(r_obj, "to_code"):
+                            code_snip = r_obj.to_code(sample_cfg)
+                        else:
+                            args_str = ", ".join(f"{k}={repr(v)}" for k, v in sample_cfg.items())
+                            code_snip = f"# Recipe: {r_obj.name}\n# Category: {r_obj.category}\nresult = {r_obj.recipe_id}({args_str})"
+                        st.code(code_snip, language="python")
 
 
 # -------------------------------------------------------------
 # TAB 4: API & TELEMETRY INSPECTOR
 # -------------------------------------------------------------
-elif app_mode == "🌐 API & Telemetry Inspector":
+elif "API & Telemetry" in app_mode:
     st.markdown('<div class="main-header">🌐 REST API & Network Telemetry Inspector</div>', unsafe_allow_html=True)
     st.markdown('<div class="sub-header">Inspect API contracts, real-time JSON payloads, headers, cURL commands, and test all backend endpoints interactively.</div>', unsafe_allow_html=True)
 
