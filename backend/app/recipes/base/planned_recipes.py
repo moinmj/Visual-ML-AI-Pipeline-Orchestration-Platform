@@ -234,32 +234,6 @@ _PLANNED: List[Tuple[str, str, str, List[Tuple[str, str, str, str]]]] = [
         ("google_maps_connector", "Google Maps Connector", "transform", "Enriches rows with geocodes, places, distances and travel times from Google Maps."),
         ("mapbox_connector", "Mapbox Connector", "transform", "Enriches rows with geocodes and routing data from Mapbox."),
     ]),
-    ("Apps & Integrations", "CRM / Support / Business", "integrations", [
-
-
-        ("zendesk_connector", "Zendesk Connector", "source", "Reads Zendesk tickets, users and satisfaction ratings."),
-        ("freshdesk_connector", "Freshdesk Connector", "source", "Reads Freshdesk tickets and contacts."),
-        ("intercom_connector", "Intercom Connector", "source", "Reads Intercom conversations, users and companies."),
-        ("stripe_connector", "Stripe Payments Connector", "source", "Reads Stripe payments, customers and subscriptions."),
-        ("shopify_connector", "Shopify E-commerce Connector", "source", "Reads Shopify orders, products and customers."),
-        ("google_ads_connector", "Google Ads Connector", "source", "Reads Google Ads campaign performance data."),
-        ("meta_ads_connector", "Meta Ads Connector", "source", "Reads Facebook/Instagram (Meta) Ads campaign performance data."),
-    ]),
-    ("Apps & Integrations", "Project & Dev Tools", "integrations", [
-        ("jira_connector", "Jira Connector", "source", "Reads Jira issues, sprints and worklogs."),
-        ("linear_connector", "Linear Connector", "source", "Reads Linear issues, projects and cycles."),
-        ("asana_connector", "Asana Connector", "source", "Reads Asana tasks and projects."),
-        ("github_connector", "GitHub Connector", "source", "Reads GitHub issues, pull requests and repository activity."),
-        ("gitlab_connector", "GitLab Connector", "source", "Reads GitLab issues, merge requests and pipeline data."),
-    ]),
-    ("Apps & Integrations", "Productivity & Files", "integrations", [
-        ("google_calendar_connector", "Google Calendar Connector", "source", "Reads or creates Google Calendar events."),
-        ("outlook_calendar_connector", "Outlook Calendar Connector", "source", "Reads or creates Outlook calendar events."),
-        ("onedrive_sync", "OneDrive Sync", "source", "Reads and writes files in Microsoft OneDrive."),
-        ("dropbox_sync", "Dropbox Sync", "source", "Reads and writes files in Dropbox."),
-        ("airtable_connector", "Airtable Connector", "source", "Reads and writes Airtable base records."),
-        ("notion_connector", "Notion Connector", "source", "Reads and writes Notion databases and pages."),
-    ]),
     ("Apps & Integrations", "Generic", "integrations", [
         ("rest_graphql_caller", "Generic REST/GraphQL API Caller", "source", "Calls any REST or GraphQL API and turns the response into a table."),
     ]),
