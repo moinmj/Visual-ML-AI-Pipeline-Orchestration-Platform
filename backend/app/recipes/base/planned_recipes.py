@@ -200,21 +200,6 @@ _PLANNED: List[Tuple[str, str, str, List[Tuple[str, str, str, str]]]] = [
         #("model_card_generator", "Model Card Generator", "model_report", "Generates a model card documenting purpose, data, metrics and limitations."),
     ]),
 
-    # ------------------------------------------------------------------ 6. Integrations & Live APIs (35)
-    ("Apps & Integrations", "Social & Comms", "integrations", [
-        ("twitter_x_connector", "Twitter/X Connector", "source", "Fetches posts, mentions or metrics from Twitter/X."),
-        ("reddit_connector", "Reddit Connector", "source", "Fetches posts and comments from subreddits."),
-        ("linkedin_connector", "LinkedIn Connector", "source", "Fetches company page posts and engagement metrics from LinkedIn."),
-        ("ms_teams_notifier", "Microsoft Teams Notification Sender", "sink", "Posts pipeline alerts and summaries to a Microsoft Teams channel."),
-        ("sms_sender", "SMS Sender", "sink", "Sends SMS alerts to one or more phone numbers."),
-        ("push_notification_sender", "Push Notification Sender", "sink", "Sends mobile or web push notifications."),
-        ("twilio_connector", "Twilio Voice/SMS Connector", "sink", "Sends SMS or places voice calls through Twilio."),
-    ]),
-    ("Apps & Integrations", "Maps & Location", "integrations", [
-        ("google_maps_connector", "Google Maps Connector", "transform", "Enriches rows with geocodes, places, distances and travel times from Google Maps."),
-        ("mapbox_connector", "Mapbox Connector", "transform", "Enriches rows with geocodes and routing data from Mapbox."),
-    ]),
-
     # ------------------------------------------------------------------ 7. Agents & LLM Orchestration (18)
     ("Agents & LLM Orchestration", "Core Agents", "agents", [
         ("llm_agent", "LLM Agent (ReAct / tool-calling)", "transform", "Runs an LLM agent that reasons step by step and calls tools to complete a task."),
