@@ -41,13 +41,20 @@ class SwitchRecipe(BaseRecipe):
                     "items": {
                         "type": "object",
                         "properties": {
-                            "column": {"type": "string", "title": "Column"},
-                            "operator": {"type": "string", "default": "=="},
-                            "value": {"type": "string", "title": "Value"}
+                            "column": {"type": "string", "title": "Column",
+                                "description": 'Column evaluated for this branch condition.'
+                            },
+                            "operator": {"type": "string", "default": "==",
+                                "description": 'Comparison operator for this branch.'
+                            },
+                            "value": {"type": "string", "title": "Value",
+                                "description": 'Target value evaluated for this branch.'
+                            }
                         },
                         "required": ["column"]
                     },
-                    "default": []
+                    "default": [],
+                    "description": 'Condition rules for routing records to branch 1.'
                 },
                 "case_2_conditions": {
                     "type": "array",
@@ -55,13 +62,20 @@ class SwitchRecipe(BaseRecipe):
                     "items": {
                         "type": "object",
                         "properties": {
-                            "column": {"type": "string", "title": "Column"},
-                            "operator": {"type": "string", "default": "=="},
-                            "value": {"type": "string", "title": "Value"}
+                            "column": {"type": "string", "title": "Column",
+                                "description": 'Column evaluated for this branch condition.'
+                            },
+                            "operator": {"type": "string", "default": "==",
+                                "description": 'Comparison operator for this branch.'
+                            },
+                            "value": {"type": "string", "title": "Value",
+                                "description": 'Target value evaluated for this branch.'
+                            }
                         },
                         "required": ["column"]
                     },
-                    "default": []
+                    "default": [],
+                    "description": 'Condition rules for routing records to branch 2.'
                 },
                 "case_3_conditions": {
                     "type": "array",
@@ -69,13 +83,20 @@ class SwitchRecipe(BaseRecipe):
                     "items": {
                         "type": "object",
                         "properties": {
-                            "column": {"type": "string", "title": "Column"},
-                            "operator": {"type": "string", "default": "=="},
-                            "value": {"type": "string", "title": "Value"}
+                            "column": {"type": "string", "title": "Column",
+                                "description": 'Column evaluated for this branch condition.'
+                            },
+                            "operator": {"type": "string", "default": "==",
+                                "description": 'Comparison operator for this branch.'
+                            },
+                            "value": {"type": "string", "title": "Value",
+                                "description": 'Target value evaluated for this branch.'
+                            }
                         },
                         "required": ["column"]
                     },
-                    "default": []
+                    "default": [],
+                    "description": 'Condition rules for routing records to branch 3.'
                 }
             }
         }

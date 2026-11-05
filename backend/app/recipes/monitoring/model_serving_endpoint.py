@@ -44,7 +44,8 @@ class ModelServingEndpointRecipe(BaseRecipe):
                     "type": "string",
                     "title": "Deployment Environment",
                     "enum": ["production", "staging", "development", "canary"],
-                    "default": "production"
+                    "default": "production",
+                    "description": "Deployment target environment ('development', 'staging', or 'production')."
                 },
                 "compute_target": {
                     "type": "string",
@@ -78,36 +79,42 @@ class ModelServingEndpointRecipe(BaseRecipe):
                     "type": "integer",
                     "title": "Autoscaling Min Replicas",
                     "default": 1,
-                    "minimum": 0
+                    "minimum": 0,
+                    "description": 'Minimum number of serving instances to keep active.'
                 },
                 "autoscaling_max_replicas": {
                     "type": "integer",
                     "title": "Autoscaling Max Replicas",
                     "default": 5,
-                    "minimum": 1
+                    "minimum": 1,
+                    "description": 'Maximum number of serving instances allowed during high traffic.'
                 },
                 "target_concurrency": {
                     "type": "integer",
                     "title": "Target Concurrency",
                     "default": 50,
-                    "minimum": 1
+                    "minimum": 1,
+                    "description": 'Target concurrent requests per serving worker replica.'
                 },
                 "timeout_seconds": {
                     "type": "integer",
                     "title": "Request Timeout (seconds)",
                     "default": 30,
-                    "minimum": 1
+                    "minimum": 1,
+                    "description": 'Maximum allowed request processing time before returning a gateway timeout.'
                 },
                 "auth_enabled": {
                     "type": "boolean",
                     "title": "Require Bearer Token Authentication",
-                    "default": True
+                    "default": True,
+                    "description": 'Enforce API key or JWT authentication on serving endpoint requests.'
                 },
                 "logging_level": {
                     "type": "string",
                     "title": "Request/Response Logging Level",
                     "enum": ["INFO", "DEBUG", "WARN"],
-                    "default": "INFO"
+                    "default": "INFO",
+                    "description": "Verbosity level of inference request/response logs ('DEBUG', 'INFO', 'WARN', 'ERROR')."
                 }
             }
         }

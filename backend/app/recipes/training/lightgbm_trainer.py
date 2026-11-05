@@ -37,28 +37,32 @@ class LightGBMTrainerRecipe(BaseRecipe):
                     "type": "string",
                     "title": "ML Task Type",
                     "enum": ["classification", "regression"],
-                    "default": "classification"
+                    "default": "classification",
+                    "description": "Supervised learning objective ('classification' or 'regression')."
                 },
                 "n_estimators": {
                     "type": "integer",
                     "title": "Number of Trees (n_estimators)",
                     "default": 100,
                     "minimum": 10,
-                    "maximum": 2000
+                    "maximum": 2000,
+                    "description": 'Number of boosting iterations.'
                 },
                 "num_leaves": {
                     "type": "integer",
                     "title": "Max Tree Leaves (num_leaves)",
                     "default": 31,
                     "minimum": 2,
-                    "maximum": 256
+                    "maximum": 256,
+                    "description": 'Maximum number of tree leaves for base learners.'
                 },
                 "learning_rate": {
                     "type": "number",
                     "title": "Learning Rate",
                     "default": 0.1,
                     "minimum": 0.001,
-                    "maximum": 1.0
+                    "maximum": 1.0,
+                    "description": 'Boosting learning rate (shrinkage factor).'
                 },
                 "subsample": {
                     "type": "number",
@@ -81,14 +85,16 @@ class LightGBMTrainerRecipe(BaseRecipe):
                     "title": "L1 Regularization",
                     "default": 0.0,
                     "minimum": 0.0,
-                    "maximum": 100.0
+                    "maximum": 100.0,
+                    "description": 'L1 regularization term on model weights.'
                 },
                 "reg_lambda": {
                     "type": "number",
                     "title": "L2 Regularization",
                     "default": 0.0,
                     "minimum": 0.0,
-                    "maximum": 100.0
+                    "maximum": 100.0,
+                    "description": 'L2 regularization term on model weights.'
                 },
                 "scale_pos_weight": {
                     "type": "number",
@@ -103,7 +109,8 @@ class LightGBMTrainerRecipe(BaseRecipe):
                     "title": "Min Data in Leaf",
                     "default": 20,
                     "minimum": 1,
-                    "maximum": 200
+                    "maximum": 200,
+                    "description": 'Minimum number of data points required in a leaf node.'
                 },
                 "linear_tree": {
                     "type": "boolean",
@@ -114,7 +121,8 @@ class LightGBMTrainerRecipe(BaseRecipe):
                 "random_state": {
                     "type": "integer",
                     "title": "Random Seed",
-                    "default": 42
+                    "default": 42,
+                    "description": 'Random seed for reproducible gradient boosting.'
                 }
             },
             "required": ["task_type"]

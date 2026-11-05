@@ -79,6 +79,7 @@ class ImageClassifierRecipe(BaseRecipe):
                     "default": 224,
                     "minimum": 32,
                     "maximum": 1280,
+                    "description": 'Input image resize resolution for classification inference.'
                 },
             },
             "required": [],

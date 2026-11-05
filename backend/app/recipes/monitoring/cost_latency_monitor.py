@@ -49,7 +49,8 @@ class CostLatencyMonitorRecipe(BaseRecipe):
                         "GPU NVIDIA A10G ($1.00/hr)",
                         "Serverless Function ($0.20/1M invocations)"
                     ],
-                    "default": "CPU (2 vCPU, 4GB RAM - $0.04/hr)"
+                    "default": "CPU (2 vCPU, 4GB RAM - $0.04/hr)",
+                    "description": 'Hardware acceleration or compute profile used for cost projection.'
                 },
                 "cost_per_hour_usd": {
                     "type": "number",

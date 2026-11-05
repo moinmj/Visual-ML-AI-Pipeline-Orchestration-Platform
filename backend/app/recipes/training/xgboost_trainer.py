@@ -27,7 +27,8 @@ class XGBoostTrainerRecipe(BaseRecipe):
                     "type": "string",
                     "title": "ML Task Type",
                     "enum": ["classification", "regression"],
-                    "default": "classification"
+                    "default": "classification",
+                    "description": "Supervised learning objective ('classification' or 'regression')."
                 },
                 "target_column": {
                     "type": "string",
@@ -39,21 +40,24 @@ class XGBoostTrainerRecipe(BaseRecipe):
                     "title": "Number of Trees (n_estimators)",
                     "default": 100,
                     "minimum": 10,
-                    "maximum": 2000
+                    "maximum": 2000,
+                    "description": 'Number of gradient boosted trees to fit.'
                 },
                 "max_depth": {
                     "type": "integer",
                     "title": "Max Depth",
                     "default": 6,
                     "minimum": 1,
-                    "maximum": 20
+                    "maximum": 20,
+                    "description": 'Maximum tree depth for base learners. Deeper trees capture more interactions but increase overfitting.'
                 },
                 "learning_rate": {
                     "type": "number",
                     "title": "Learning Rate (eta)",
                     "default": 0.1,
                     "minimum": 0.001,
-                    "maximum": 1.0
+                    "maximum": 1.0,
+                    "description": 'Step size shrinkage factor used in boosting updates to prevent overfitting.'
                 },
                 "subsample": {
                     "type": "number",
@@ -100,12 +104,14 @@ class XGBoostTrainerRecipe(BaseRecipe):
                     "title": "Min Child Weight",
                     "default": 1.0,
                     "minimum": 0.1,
-                    "maximum": 50.0
+                    "maximum": 50.0,
+                    "description": 'Minimum sum of instance weight (hessian) needed in a child node.'
                 },
                 "random_state": {
                     "type": "integer",
                     "title": "Random Seed",
-                    "default": 42
+                    "default": 42,
+                    "description": 'Random seed for reproducible tree construction.'
                 }
             },
             "required": ["task_type"]

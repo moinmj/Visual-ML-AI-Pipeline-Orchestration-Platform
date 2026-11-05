@@ -56,7 +56,9 @@ class IfConditionRecipe(BaseRecipe):
                     "items": {
                         "type": "object",
                         "properties": {
-                            "column": {"type": "string", "title": "Column Name"},
+                            "column": {"type": "string", "title": "Column Name",
+                                "description": 'Feature or column to evaluate against the threshold condition.'
+                            },
                             "operator": {
                                 "type": "string",
                                 "title": "Operator",
@@ -65,9 +67,12 @@ class IfConditionRecipe(BaseRecipe):
                                     "contains", "not_contains", "starts_with", "ends_with",
                                     "in", "not_in", "is_null", "not_null"
                                 ],
-                                "default": "=="
+                                "default": "==",
+                                "description": "Comparison operator (e.g. '>', '<', '==', '!=', 'contains')."
                             },
-                            "value": {"type": "string", "title": "Comparison Value"}
+                            "value": {"type": "string", "title": "Comparison Value",
+                                "description": 'Comparison target value to evaluate.'
+                            }
                         },
                         "required": ["column", "operator"]
                     },

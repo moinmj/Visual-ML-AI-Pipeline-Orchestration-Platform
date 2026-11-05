@@ -48,7 +48,8 @@ class RowFilterRecipe(BaseRecipe):
                     "type": "string",
                     "title": "Combine Conditions",
                     "enum": ["AND", "OR"],
-                    "default": "AND"
+                    "default": "AND",
+                    "description": "Logical operator to combine multiple filter conditions ('AND' requires all, 'OR' requires any)."
                 },
                 "conditions": {
                     "type": "array",
@@ -60,7 +61,8 @@ class RowFilterRecipe(BaseRecipe):
                                 "type": "string",
                                 "title": "Column Name",
                                 "input_type": "column_select",
-                                "ui:widget": "column_select"
+                                "ui:widget": "column_select",
+                                "description": 'Column to apply filter condition against.'
                             },
                             "operator": {
                                 "type": "string",
@@ -70,13 +72,17 @@ class RowFilterRecipe(BaseRecipe):
                                     "contains", "not_contains", "starts_with", "ends_with",
                                     "in", "not_in", "is_null", "not_null"
                                 ],
-                                "default": "=="
+                                "default": "==",
+                                "description": 'Comparison operator for row filtering.'
                             },
-                            "value": {"type": "string", "title": "Value"}
+                            "value": {"type": "string", "title": "Value",
+                                "description": 'Target value to compare against for each row.'
+                            }
                         },
                         "required": ["column", "operator"]
                     },
-                    "default": [{"column": "", "operator": "==", "value": ""}]
+                    "default": [{"column": "", "operator": "==", "value": ""}],
+                    "description": 'List of filter conditions defining which rows to retain or discard.'
                 }
             },
             "required": ["conditions"]

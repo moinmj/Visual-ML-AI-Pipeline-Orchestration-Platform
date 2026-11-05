@@ -226,14 +226,17 @@ class VideoObjectTrackingRecipe(BaseRecipe):
                 "confidence_threshold": {
                     "type": "number", "title": "Confidence Threshold", "input_type": "slider",
                     "default": 0.25, "minimum": 0.01, "maximum": 1.0,
+                    "description": 'Minimum detection confidence score (0.0 to 1.0) required to initiate object tracking.'
                 },
                 "iou_threshold": {
                     "type": "number", "title": "Overlap (NMS IoU) Threshold", "input_type": "slider",
                     "default": 0.7, "minimum": 0.1, "maximum": 1.0,
+                    "description": 'Intersection-Over-Union overlap threshold used for non-maximum suppression.'
                 },
                 "image_size": {
                     "type": "integer", "title": "Inference Image Size (px)", "input_type": "number",
                     "default": 640, "minimum": 32, "maximum": 1920,
+                    "description": 'Video frame resize resolution dimension.'
                 },
                 "classes": {
                     "type": "array", "items": {"type": "string"}, "title": "Only These Classes",

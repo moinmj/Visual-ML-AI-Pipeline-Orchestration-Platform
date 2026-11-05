@@ -22,7 +22,8 @@ class MissingValueImputerRecipe(BaseRecipe):
                     "title": "Imputation Strategy",
                     "input_type": "dropdown",
                     "enum": ["mean", "median", "mode", "drop_rows", "constant", "ffill", "bfill"],
-                    "default": "median"
+                    "default": "median",
+                    "description": "Imputation strategy used to replace missing values ('mean', 'median', 'most_frequent', or 'constant')."
                 },
                 "columns": {
                     "type": "array",

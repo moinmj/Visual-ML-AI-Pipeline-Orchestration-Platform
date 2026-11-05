@@ -51,13 +51,15 @@ class AggregateRecipe(BaseRecipe):
                             "column": {
                                 "type": "string",
                                 "title": "Column",
-                                "input_type": "column_select"
+                                "input_type": "column_select",
+                                "description": 'Select the column to aggregate (e.g. Sales, Quantity).'
                             },
                             "func": {
                                 "type": "string",
                                 "title": "Function",
                                 "input_type": "dropdown",
-                                "enum": ["sum", "mean", "count", "min", "max", "median", "std", "nunique"]
+                                "enum": ["sum", "mean", "count", "min", "max", "median", "std", "nunique"],
+                                "description": 'Statistical aggregation function to calculate (e.g. sum, mean, count).'
                             }
                         },
                         "required": ["column", "func"]

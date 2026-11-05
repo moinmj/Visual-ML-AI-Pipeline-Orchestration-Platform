@@ -102,17 +102,20 @@ class CategorySanitizerRecipe(BaseRecipe):
                 "lowercase": {
                     "type": "boolean",
                     "title": "Lowercase Text",
-                    "default": True
+                    "default": True,
+                    "description": 'Convert categorical text to lowercase for uniform grouping and encoding.'
                 },
                 "strip_whitespace": {
                     "type": "boolean",
                     "title": "Strip Extra Whitespace",
-                    "default": True
+                    "default": True,
+                    "description": 'Trim leading and trailing whitespace from string categories.'
                 },
                 "remove_punctuation": {
                     "type": "boolean",
                     "title": "Remove Special Characters",
-                    "default": False
+                    "default": False,
+                    "description": 'Strip punctuation and special symbols from categorical values.'
                 },
                 "replace_with_space": {
                     "type": "boolean",
@@ -213,7 +216,8 @@ class CorrelationFilterRecipe(BaseRecipe):
                     "type": "string",
                     "title": "Correlation Method",
                     "enum": ["pearson", "spearman"],
-                    "default": "pearson"
+                    "default": "pearson",
+                    "description": "Correlation algorithm to measure pairwise feature dependency ('pearson', 'spearman', or 'kendall')."
                 }
             },
             "required": ["threshold"]

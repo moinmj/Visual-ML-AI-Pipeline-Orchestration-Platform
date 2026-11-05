@@ -27,7 +27,8 @@ class CSVLoaderRecipe(BaseRecipe):
                     "title": "Delimiter",
                     "default": ",",
                     "enum": [",", ";", "\t", "|"],
-                    "input_type": "dropdown"
+                    "input_type": "dropdown",
+                    "description": "Character separating columns in the CSV file (e.g. comma ',', tab '\\t', or semicolon ';')."
                 }
             },
             "required": ["dataset_id"]

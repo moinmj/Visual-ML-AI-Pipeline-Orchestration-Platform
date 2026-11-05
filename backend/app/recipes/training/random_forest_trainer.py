@@ -22,7 +22,8 @@ class RandomForestTrainerRecipe(BaseRecipe):
                     "title": "ML Task Type",
                     "input_type": "dropdown",
                     "enum": ["classification", "regression"],
-                    "default": "classification"
+                    "default": "classification",
+                    "description": "Supervised learning objective ('classification' or 'regression')."
                 },
                 "target_column": {
                     "type": "string",
@@ -35,7 +36,8 @@ class RandomForestTrainerRecipe(BaseRecipe):
                     "input_type": "slider",
                     "default": 100,
                     "minimum": 10,
-                    "maximum": 1000
+                    "maximum": 1000,
+                    "description": 'Number of decision trees in the ensemble forest.'
                 },
                 "max_depth": {
                     "type": "integer",
@@ -43,7 +45,8 @@ class RandomForestTrainerRecipe(BaseRecipe):
                     "input_type": "slider",
                     "default": 10,
                     "minimum": 1,
-                    "maximum": 50
+                    "maximum": 50,
+                    "description": 'Maximum depth of individual decision trees.'
                 },
                 "min_samples_split": {
                     "type": "integer",
@@ -68,7 +71,8 @@ class RandomForestTrainerRecipe(BaseRecipe):
                     "title": "Max Features per Split",
                     "input_type": "dropdown",
                     "enum": ["sqrt", "log2", "all"],
-                    "default": "sqrt"
+                    "default": "sqrt",
+                    "description": "Number of features to examine when searching for the best split ('sqrt', 'log2', or float)."
                 },
                 "class_weight": {
                     "type": "string",
@@ -82,7 +86,8 @@ class RandomForestTrainerRecipe(BaseRecipe):
                     "type": "integer",
                     "title": "Random Seed",
                     "input_type": "number",
-                    "default": 42
+                    "default": 42,
+                    "description": 'Random seed for reproducible bootstrap bagging and splits.'
                 }
             },
             "required": ["task_type"]

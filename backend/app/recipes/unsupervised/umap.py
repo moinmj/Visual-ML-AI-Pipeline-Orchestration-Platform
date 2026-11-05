@@ -110,7 +110,8 @@ class UMAPRecipe(BaseRecipe):
                 "random_state": {
                     "type": "integer",
                     "title": "Random Seed",
-                    "default": 42
+                    "default": 42,
+                    "description": 'Random seed for reproducible UMAP manifold projection.'
                 }
             }
         }

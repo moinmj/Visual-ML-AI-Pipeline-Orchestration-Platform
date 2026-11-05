@@ -120,19 +120,22 @@ class DatasetJoinRecipe(BaseRecipe):
                             "left": {
                                 "type": "string",
                                 "title": "Left Column",
-                                "input_type": "column_select"
+                                "input_type": "column_select",
+                                "description": 'Column from the left dataset to match on.'
                             },
                             "right": {
                                 "type": "string",
                                 "title": "Right Column",
-                                "input_type": "column_select"
+                                "input_type": "column_select",
+                                "description": 'Column from the right dataset to match on.'
                             },
                             "operator": {
                                 "type": "string",
                                 "title": "Operator",
                                 "input_type": "dropdown",
                                 "enum": ["=", "!=", ">", "<", ">=", "<="],
-                                "default": "="
+                                "default": "=",
+                                "description": "Join comparison operator (typically '=' for equi-join)."
                             }
                         },
                         "required": ["left", "right"]

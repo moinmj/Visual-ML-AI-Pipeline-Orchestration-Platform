@@ -127,13 +127,15 @@ class AutoMLSearchRecipe(BaseRecipe):
                     "input_type": "slider",
                     "default": 3,
                     "minimum": 2,
-                    "maximum": 10
+                    "maximum": 10,
+                    "description": 'Number of cross-validation folds for model ranking.'
                 },
                 "random_state": {
                     "type": "integer",
                     "title": "Random Seed",
                     "input_type": "number",
-                    "default": 42
+                    "default": 42,
+                    "description": 'Random seed for reproducible AutoML pipeline evaluation.'
                 }
             },
             "required": []

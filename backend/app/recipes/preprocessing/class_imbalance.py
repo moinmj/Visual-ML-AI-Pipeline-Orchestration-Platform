@@ -56,7 +56,8 @@ class ClassImbalanceResamplerRecipe(BaseRecipe):
                 "random_state": {
                     "type": "integer",
                     "title": "Random Seed",
-                    "default": 42
+                    "default": 42,
+                    "description": 'Random seed for reproducible resampling and synthetic data generation.'
                 }
             },
             "required": ["strategy"]
