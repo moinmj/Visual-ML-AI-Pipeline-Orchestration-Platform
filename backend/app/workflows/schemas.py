@@ -289,5 +289,39 @@ class SessionClearResponse(BaseModel):
     session_id: str
     message: str
 
+class WorkflowExportMetadata(BaseModel):
+    name: str = Field(..., description="Name of the workflow")
+    description: Optional[str] = Field(None, description="Workflow description")
+    platform_version: str = Field("2.0", description="Exporting platform version")
+    exported_by: Optional[str] = Field(None, description="Username or ID of exporter")
 
 
+class WorkflowDatasetRequirement(BaseModel):
+    node_id: Optional[str] = Field(None, description="Node ID referencing this dataset")
+    original_dataset_id: Optional[str] = Field(None, description="Original dataset ID in source system")
+    original_dataset_name: Optional[str] = Field(None, description="Display name or filename of dataset")
+    role: Optional[str] = Field("Primary", description="Role e.g. Primary or Secondary")
+
+
+class WorkflowPipelinePayload(BaseModel):
+    nodes: List[Dict[str, Any]] = Field(default_factory=list, description="Visual canvas nodes")
+    edges: List[Dict[str, Any]] = Field(default_factory=list, description="DAG edges connecting nodes")
+    node_configs: Dict[str, Any] = Field(default_factory=dict, description="Component parameter configurations")
+
+
+class WorkflowExportPayload(BaseModel):
+    schema_version: str = Field("1.0.0", description="Schema version of export payload")
+    exported_at: str = Field(..., description="UTC ISO timestamp of export")
+    metadata: WorkflowExportMetadata = Field(..., description="Workflow metadata")
+    dataset_requirements: List[WorkflowDatasetRequirement] = Field(default_factory=list, description="Datasets referenced by loader nodes")
+    pipeline: WorkflowPipelinePayload = Field(..., description="DAG pipeline nodes, edges, and configs")
+    last_execution_summary: Optional[Dict[str, Any]] = Field(None, description="Optional lightweight snapshot of last execution metrics")
+
+
+class WorkflowImportRequest(BaseModel):
+    name: Optional[str] = Field(None, description="Optional override name for imported workflow")
+    target_dataset_id: Optional[str] = Field(None, description="Optional dataset ID to map primary loader node(s) to in current tenant")
+    generate_new_ids: bool = Field(True, description="Generate fresh UUIDs for workflow and all nodes/edges to prevent collisions")
+    export_payload: Optional[Union[WorkflowExportPayload, Dict[str, Any]]] = Field(None, description="Workflow export payload to import")
+
+    model_config = {"extra": "allow"}
