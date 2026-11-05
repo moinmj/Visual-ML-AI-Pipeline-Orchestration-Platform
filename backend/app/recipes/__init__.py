@@ -153,6 +153,7 @@ from backend.app.recipes.integrations.onedrive_sync import OneDriveSyncRecipe
 from backend.app.recipes.integrations.dropbox_sync import DropboxSyncRecipe
 from backend.app.recipes.integrations.airtable_connector import AirtableConnectorRecipe
 from backend.app.recipes.integrations.notion_connector import NotionConnectorRecipe
+from backend.app.recipes.integrations.rest_graphql_caller import GenericRestGraphQLCallerRecipe
 
 # Unsupervised & Dimensionality Reduction Recipes
 from backend.app.recipes.unsupervised.clustering import ClusteringRecipe
@@ -381,6 +382,7 @@ def register_all_recipes():
     recipe_registry.register(DropboxSyncRecipe())
     recipe_registry.register(AirtableConnectorRecipe())
     recipe_registry.register(NotionConnectorRecipe())
+    recipe_registry.register(GenericRestGraphQLCallerRecipe())
 
     # Unsupervised & Dimensionality Reduction
     recipe_registry.register(ClusteringRecipe())
