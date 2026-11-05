@@ -164,25 +164,38 @@ class ChartVisualizationRecipe(BaseRecipe):
                     }]
                 }
             }
+            empty_echarts = {
+                "title": {"text": f"{title} (No Data)", "left": "center"},
+                "xAxis": {"type": "category", "data": []},
+                "yAxis": {"type": "value"},
+                "series": []
+            }
+            empty_report = {
+                "title": title,
+                "chart_type": chart_type,
+                "figure": empty_fig,
+                "figure_json": empty_fig,
+                "echarts_option": empty_echarts,
+                "chart_option": empty_echarts,
+                "markdown": f"### 📊 {title}\n*Warning: Input table was empty. No data points plotted.*",
+                "timestamp": now_iso
+            }
             return {
                 "chart_type": chart_type,
                 "title": title,
                 "figure_json": empty_fig,
+                "echarts_option": empty_echarts,
+                "chart_option": empty_echarts,
                 "metrics": {
                     "rows_evaluated": 0,
                     "columns_available": 0,
                     "downsampled": 0
                 },
-                "report": {
-                    "title": title,
-                    "chart_type": chart_type,
-                    "figure": empty_fig,
-                    "markdown": f"### 📊 {title}\n*Warning: Input table was empty. No data points plotted.*",
-                    "timestamp": now_iso
-                },
+                "report": empty_report,
+                "output": empty_report,
                 "dataframe": df if df is not None else pd.DataFrame(),
-                "output": df if df is not None else pd.DataFrame(),
-                "output_summary": {"status": "EMPTY_DATA", "rows": 0, "chart_type": chart_type}
+                "output_summary": {"status": "EMPTY_DATA", "rows": 0, "chart_type": chart_type, "echarts_option": empty_echarts},
+                "suppress_preview_rows": True
             }
 
         cols = list(df.columns)
@@ -319,6 +332,97 @@ class ChartVisualizationRecipe(BaseRecipe):
             }
         }
 
+        # Build Apache ECharts Option Specification (Matching Frontend Chart Engine)
+        echarts_spec: Dict[str, Any] = {
+            "title": {"text": title, "left": "center", "textStyle": {"fontSize": 14, "fontWeight": "bold"}},
+            "tooltip": {"trigger": "axis"},
+            "grid": {"left": "4%", "right": "4%", "bottom": "12%", "containLabel": True}
+        }
+
+        if chart_type == "bar":
+            echarts_spec["tooltip"] = {"trigger": "axis", "axisPointer": {"type": "shadow"}}
+            echarts_spec["xAxis"] = {"type": "category", "data": [str(x) for x in x_vals], "name": x_col}
+            echarts_spec["yAxis"] = {"type": "value", "name": y_col or "Count"}
+            echarts_spec["series"] = [{
+                "name": y_col or "Count",
+                "type": "bar",
+                "data": y_vals if y_vals else [1] * len(x_vals),
+                "itemStyle": {"color": "#3B82F6", "borderRadius": [4, 4, 0, 0]}
+            }]
+        elif chart_type == "line":
+            echarts_spec["xAxis"] = {"type": "category", "data": [str(x) for x in x_vals], "name": x_col}
+            echarts_spec["yAxis"] = {"type": "value", "name": y_col or "Metric"}
+            echarts_spec["series"] = [{
+                "name": y_col or "Metric",
+                "type": "line",
+                "data": y_vals if y_vals else list(range(len(x_vals))),
+                "smooth": True,
+                "lineStyle": {"color": "#2563EB", "width": 2},
+                "itemStyle": {"color": "#2563EB"}
+            }]
+        elif chart_type == "scatter":
+            scatter_pts = [[x, y] for x, y in zip(x_vals, y_vals if y_vals else range(len(x_vals)))]
+            echarts_spec["tooltip"] = {"trigger": "item"}
+            echarts_spec["xAxis"] = {"name": x_col, "type": "value" if x_vals and isinstance(x_vals[0], (int, float)) else "category"}
+            echarts_spec["yAxis"] = {"name": y_col or "Value", "type": "value"}
+            echarts_spec["series"] = [{
+                "name": f"{x_col} vs {y_col}",
+                "type": "scatter",
+                "data": scatter_pts,
+                "symbolSize": 8,
+                "itemStyle": {"color": "#6366F1"}
+            }]
+        elif chart_type == "histogram":
+            echarts_spec["tooltip"] = {"trigger": "axis", "axisPointer": {"type": "shadow"}}
+            echarts_spec["xAxis"] = {"type": "category", "data": [str(x) for x in clean_plot_df[x_col].tolist()[:30]], "name": x_col}
+            echarts_spec["yAxis"] = {"type": "value", "name": "Frequency"}
+            echarts_spec["series"] = [{
+                "name": "Frequency",
+                "type": "bar",
+                "data": y_vals if y_vals else [1] * len(clean_plot_df),
+                "itemStyle": {"color": "#10B981", "borderRadius": [4, 4, 0, 0]}
+            }]
+        elif chart_type == "box":
+            num_y = [v for v in (y_vals if y_vals else clean_plot_df[x_col].tolist()) if isinstance(v, (int, float)) and not np.isnan(v)]
+            b_data = []
+            if num_y:
+                b_data = [[float(min(num_y)), float(np.percentile(num_y, 25)), float(np.median(num_y)), float(np.percentile(num_y, 75)), float(max(num_y))]]
+            echarts_spec["tooltip"] = {"trigger": "item"}
+            echarts_spec["xAxis"] = {"type": "category", "data": [x_col]}
+            echarts_spec["yAxis"] = {"type": "value", "name": y_col or x_col}
+            echarts_spec["series"] = [{
+                "name": y_col or x_col,
+                "type": "boxplot",
+                "data": b_data,
+                "itemStyle": {"borderColor": "#8B5CF6", "borderWidth": 2}
+            }]
+        elif chart_type == "pie":
+            val_counts = clean_plot_df[x_col].value_counts().head(10)
+            echarts_spec["tooltip"] = {"trigger": "item", "formatter": "{a} <br/>{b}: {c} ({d}%)"}
+            echarts_spec["legend"] = {"orient": "horizontal", "bottom": "3%", "left": "center"}
+            echarts_spec["series"] = [{
+                "name": x_col,
+                "type": "pie",
+                "radius": "55%",
+                "center": ["50%", "45%"],
+                "data": [{"name": str(k), "value": int(v)} for k, v in val_counts.items()],
+                "emphasis": {"itemStyle": {"shadowBlur": 10, "shadowOffsetX": 0, "shadowColor": "rgba(0, 0, 0, 0.5)"}}
+            }]
+        else: # heatmap
+            x_uniq = list(dict.fromkeys(str(x) for x in x_vals))[:15]
+            y_uniq = list(dict.fromkeys(str(y) for y in (y_vals if y_vals else [1])))[:15]
+            h_data = [[i, j, 1] for i in range(len(x_uniq)) for j in range(len(y_uniq))]
+            echarts_spec["tooltip"] = {"position": "top"}
+            echarts_spec["xAxis"] = {"type": "category", "data": x_uniq, "name": x_col}
+            echarts_spec["yAxis"] = {"type": "category", "data": y_uniq, "name": y_col or "Value"}
+            echarts_spec["visualMap"] = {"min": 0, "max": 10, "calculable": True, "orient": "horizontal", "left": "center", "bottom": "0%"}
+            echarts_spec["series"] = [{
+                "name": "Density",
+                "type": "heatmap",
+                "data": h_data,
+                "label": {"show": False}
+            }]
+
         md_summary = (
             f"### 📊 {title} ({chart_type.upper()})\n"
             f"**Plotted:** `{x_col}`" + (f" ➔ `{y_col}`" if y_col else "") + "\n\n"
@@ -327,32 +431,57 @@ class ChartVisualizationRecipe(BaseRecipe):
             f"- **Aggregation:** `{agg_func}` | **Theme:** `{theme}`"
         )
 
-        return {
-            "chart_type": chart_type,
+        chart_report = {
             "title": title,
+            "chart_type": chart_type,
             "x_column": x_col,
             "y_column": y_col,
             "figure_json": figure_spec,
+            "echarts_option": echarts_spec,
+            "chart_option": echarts_spec,
+            "markdown": md_summary,
             "metrics": {
                 "total_rows": total_rows,
                 "points_rendered": len(clean_plot_df),
                 "downsampled": int(is_downsampled),
                 "aggregation_applied": int(agg_func != "none")
             },
-            "report": {
-                "title": title,
-                "chart_type": chart_type,
-                "figure": figure_spec,
-                "markdown": md_summary,
-                "timestamp": now_iso
+            "timestamp": now_iso
+        }
+
+        output_summary = {
+            "title": f"Chart: {title} ({chart_type.upper()})",
+            "chart_type": chart_type.upper(),
+            "chart_title": title,
+            "x_axis": x_col,
+            "y_axis": y_col or "Count",
+            "aggregation": agg_func,
+            "points_rendered": len(clean_plot_df),
+            "downsampled": "Yes" if is_downsampled else "No",
+            "theme": theme,
+            "status": "CHART_RENDERED",
+            "echarts_option": echarts_spec,
+            "figure_json": figure_spec
+        }
+
+        return {
+            "output": chart_report,       # Fixed: Output port "output" is the Chart Report dict
+            "report": chart_report,       # Full visual chart report
+            "figure_json": figure_spec,   # Plotly specification
+            "echarts_option": echarts_spec, # Apache ECharts specification (Company UI standard)
+            "chart_option": echarts_spec, # Alias
+            "chart_type": chart_type,
+            "title": title,
+            "x_column": x_col,
+            "y_column": y_col,
+            "dataframe": df,              # Passthrough original dataframe for downstream nodes
+            "plot_data": clean_plot_df,   # Plotted coordinates table
+            "metrics": {
+                "total_rows": total_rows,
+                "points_rendered": len(clean_plot_df),
+                "downsampled": int(is_downsampled),
+                "aggregation_applied": int(agg_func != "none")
             },
-            "dataframe": df,
-            "output": df,
-            "output_summary": {
-                "status": "CHART_RENDERED",
-                "chart_type": chart_type,
-                "points": len(clean_plot_df),
-                "x": x_col,
-                "y": y_col or "N/A"
-            }
+            "output_summary": output_summary,
+            "suppress_preview_rows": True
         }

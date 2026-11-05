@@ -607,22 +607,37 @@ class DAGExecutor:
                         summary[k] = {"shape": list(v.shape), "type": "DataFrame"}
                     elif hasattr(v, "shape"):
                         summary[k] = {"shape": list(v.shape), "type": "Array"}
-                    elif k in ["metrics", "anomaly_summary", "forecasting_summary", "feature_importances", "output_summary"]:
+                    elif k in ["metrics", "anomaly_summary", "forecasting_summary", "feature_importances", "output_summary", "report", "figure_json", "echarts_option", "chart_option", "chart"]:
                         summary[k] = make_json_safe(v)
                     else:
                         summary[k] = {"type": type(v).__name__}
 
+                is_chart_recipe = (
+                    getattr(recipe, "recipe_id", "") == "chart_visualization"
+                    or bool(outputs.get("suppress_preview_rows"))
+                )
+
                 if primary_df is not None and isinstance(primary_df, pd.DataFrame):
                     snapshot_info["row_count"] = int(primary_df.shape[0])
                     snapshot_info["columns"] = list(primary_df.columns)
-                    try:
-                        clean_v = primary_df.head(5).replace({float("nan"): None, float("inf"): None, float("-inf"): None})
-                        snapshot_info["preview_rows"] = clean_v.to_dict(orient="records")
-                    except Exception:
-                        pass
+                    if not is_chart_recipe:
+                        try:
+                            clean_v = primary_df.head(5).replace({float("nan"): None, float("inf"): None, float("-inf"): None})
+                            snapshot_info["preview_rows"] = clean_v.to_dict(orient="records")
+                        except Exception:
+                            pass
+                    else:
+                        # For chart visualization recipes, suppress preview_rows so frontend doesn't force a table view
+                        snapshot_info["preview_rows"] = []
 
                 if "output_summary" in outputs:
                     snapshot_info["output_summary"] = make_json_safe(outputs["output_summary"])
+                if "echarts_option" in outputs:
+                    snapshot_info["echarts_option"] = make_json_safe(outputs["echarts_option"])
+                if "figure_json" in outputs:
+                    snapshot_info["figure_json"] = make_json_safe(outputs["figure_json"])
+                if "report" in outputs:
+                    snapshot_info["report"] = make_json_safe(outputs["report"])
 
                 step_snapshots[node.id] = snapshot_info
                 # Save this node's result so a later run can resume after it
