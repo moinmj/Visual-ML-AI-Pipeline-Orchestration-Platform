@@ -161,7 +161,8 @@ class EnsembleStackerRecipe(BaseRecipe):
                     "type": "integer",
                     "title": "Random Seed",
                     "input_type": "number",
-                    "default": 42
+                    "default": 42,
+                    "description": 'Random seed for cross-validated out-of-fold meta-learner generation.'
                 }
             },
             "required": []

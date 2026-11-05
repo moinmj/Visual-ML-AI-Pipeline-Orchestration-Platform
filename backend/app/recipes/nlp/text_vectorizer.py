@@ -43,7 +43,8 @@ class TextVectorizerRecipe(BaseRecipe):
                     "type": "string",
                     "title": "N-gram Range",
                     "enum": ["unigram (1,1)", "bigram (1,2)", "trigram (1,3)"],
-                    "default": "unigram (1,1)"
+                    "default": "unigram (1,1)",
+                    "description": 'Lower and upper boundary range of n-values for n-grams to extract (e.g. [1, 2] for unigrams and bigrams).'
                 },
                 "drop_original": {
                     "type": "boolean",

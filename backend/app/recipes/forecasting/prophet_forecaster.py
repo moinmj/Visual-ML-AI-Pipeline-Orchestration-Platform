@@ -60,19 +60,22 @@ class ProphetForecasterRecipe(BaseRecipe):
                 "title": "Forecast Horizon (Steps ahead)",
                 "default": 14,
                 "minimum": 1,
-                "maximum": 365
+                "maximum": 365,
+                "description": 'Number of future time steps to forecast.'
             },
             "frequency": {
                 "type": "string",
                 "title": "Data Frequency",
                 "enum": ["D (Daily)", "W (Weekly)", "M (Monthly)", "H (Hourly)"],
-                "default": "D (Daily)"
+                "default": "D (Daily)",
+                "description": "Time series observation frequency ('D' for daily, 'W' for weekly, 'M' for monthly, 'H' for hourly)."
             },
             "seasonality_mode": {
                 "type": "string",
                 "title": "Seasonality Mode",
                 "enum": ["additive", "multiplicative"],
-                "default": "additive"
+                "default": "additive",
+                "description": "Seasonality decomposition type ('additive' or 'multiplicative')."
             },
             "test_size_pct": {
                 "type": "number",

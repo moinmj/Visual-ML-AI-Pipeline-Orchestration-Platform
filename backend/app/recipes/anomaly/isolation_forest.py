@@ -31,12 +31,14 @@ class IsolationForestRecipe(BaseRecipe):
                     "title": "Number of Isolation Trees",
                     "default": 100,
                     "minimum": 10,
-                    "maximum": 500
+                    "maximum": 500,
+                    "description": 'Number of isolation trees in the ensemble.'
                 },
                 "random_state": {
                     "type": "integer",
                     "title": "Random Seed",
-                    "default": 42
+                    "default": 42,
+                    "description": 'Random seed for reproducible anomaly tree partitioning.'
                 }
             }
         }

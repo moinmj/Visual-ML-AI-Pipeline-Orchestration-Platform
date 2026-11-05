@@ -69,8 +69,12 @@ class FormulaCalculatorRecipe(BaseRecipe):
                     "items": {
                         "type": "object",
                         "properties": {
-                            "target_column": {"type": "string", "title": "Target Column"},
-                            "formula": {"type": "string", "title": "Formula"}
+                            "target_column": {"type": "string", "title": "Target Column",
+                                "description": 'Name of the new or existing column to store the calculated formula output.'
+                            },
+                            "formula": {"type": "string", "title": "Formula",
+                                "description": "Mathematical expression to evaluate across columns (e.g. 'col_a + col_b * 10')."
+                            }
                         },
                         "required": ["target_column", "formula"]
                     },

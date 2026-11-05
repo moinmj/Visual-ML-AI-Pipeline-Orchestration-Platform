@@ -22,13 +22,15 @@ class FeatureScalerRecipe(BaseRecipe):
                     "title": "Scaling Method",
                     "input_type": "dropdown",
                     "enum": ["standard", "minmax", "robust"],
-                    "default": "standard"
+                    "default": "standard",
+                    "description": "Scaling algorithm to normalize numerical feature distributions ('standard', 'minmax', or 'robust')."
                 },
                 "exclude_target": {
                     "type": "boolean",
                     "title": "Exclude Target / Label Column from Scaling",
                     "input_type": "checkbox",
-                    "default": True
+                    "default": True,
+                    "description": 'When enabled, protects the target label column from being transformed.'
                 },
                 "columns": {
                     "type": "array",

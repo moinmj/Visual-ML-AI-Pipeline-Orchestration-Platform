@@ -100,7 +100,8 @@ class RollbackTriggerRecipe(BaseRecipe):
                     "type": "string",
                     "title": "Comparison Operator",
                     "enum": ["less_than", "greater_than", "equals", "is_true"],
-                    "default": "less_than"
+                    "default": "less_than",
+                    "description": "Comparison operator that triggers rollback when metric condition is met (e.g. '<', '>')."
                 },
                 "threshold_value": {
                     "type": "number",
@@ -117,7 +118,8 @@ class RollbackTriggerRecipe(BaseRecipe):
                 "notification_channel": {
                     "type": "string",
                     "title": "Incident Notification Target",
-                    "default": "ops-team@company.com"
+                    "default": "ops-team@company.com",
+                    "description": 'Destination channel to notify when automated model rollback executes.'
                 }
             }
         }

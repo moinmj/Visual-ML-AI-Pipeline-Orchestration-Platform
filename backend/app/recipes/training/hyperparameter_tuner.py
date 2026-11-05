@@ -125,14 +125,16 @@ class HyperparameterTunerRecipe(BaseRecipe):
                     "title": "ML Task Type",
                     "input_type": "dropdown",
                     "enum": ["auto", "classification", "regression"],
-                    "default": "auto"
+                    "default": "auto",
+                    "description": "Supervised learning objective ('classification' or 'regression')."
                 },
                 "scoring_metric": {
                     "type": "string",
                     "title": "Optimization Metric",
                     "input_type": "dropdown",
                     "enum": ["auto", "accuracy", "f1_macro", "f1_weighted", "roc_auc", "r2", "neg_root_mean_squared_error", "neg_mean_absolute_error"],
-                    "default": "auto"
+                    "default": "auto",
+                    "description": "Evaluation metric optimized during hyperparameter search (e.g. 'accuracy', 'f1', 'r2', 'rmse')."
                 },
                 "n_trials": {
                     "type": "integer",
@@ -149,13 +151,15 @@ class HyperparameterTunerRecipe(BaseRecipe):
                     "input_type": "slider",
                     "default": 3,
                     "minimum": 2,
-                    "maximum": 10
+                    "maximum": 10,
+                    "description": 'Number of cross-validation folds used to evaluate hyperparameter candidates.'
                 },
                 "random_state": {
                     "type": "integer",
                     "title": "Random Seed",
                     "input_type": "number",
-                    "default": 42
+                    "default": 42,
+                    "description": 'Random seed for reproducible hyperparameter sampling.'
                 }
             },
             "required": []

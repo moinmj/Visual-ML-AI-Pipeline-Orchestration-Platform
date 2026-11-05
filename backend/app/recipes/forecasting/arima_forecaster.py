@@ -70,7 +70,8 @@ class ARIMAForecasterRecipe(BaseRecipe):
                 "default": 14,
                 "minimum": 1,
                 "maximum": 365,
-                "input_type": "number"
+                "input_type": "number",
+                "description": 'Number of future time steps to predict beyond historical observations.'
             },
             "test_size_pct": {
                 "type": "number",

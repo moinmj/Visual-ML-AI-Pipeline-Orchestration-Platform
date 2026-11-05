@@ -181,6 +181,7 @@ class ObjectDetectionRecipe(BaseRecipe):
                     "default": 100,
                     "minimum": 1,
                     "maximum": 1000,
+                    "description": 'Maximum number of bounding boxes to detect per image.'
                 },
                 "image_size": {
                     "type": "integer",
@@ -189,6 +190,7 @@ class ObjectDetectionRecipe(BaseRecipe):
                     "default": 640,
                     "minimum": 32,
                     "maximum": 1920,
+                    "description": 'Input image resolution dimension for model inference (e.g. 640).'
                 },
                 "classes": {
                     "type": "array",

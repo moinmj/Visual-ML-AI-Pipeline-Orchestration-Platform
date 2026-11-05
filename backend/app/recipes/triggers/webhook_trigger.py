@@ -31,13 +31,15 @@ class WebhookTriggerRecipe(BaseRecipe):
                     "type": "string",
                     "title": "Authentication Mode",
                     "enum": ["None (Public)", "Bearer Token", "API Key"],
-                    "default": "None (Public)"
+                    "default": "None (Public)",
+                    "description": 'Require a valid Bearer or custom authorization header in incoming webhook calls.'
                 },
                 "payload_format": {
                     "type": "string",
                     "title": "Expected Inbound Payload Format",
                     "enum": ["JSON Array of Objects", "Single JSON Object (Single Row)", "Key-Value Form Data"],
-                    "default": "JSON Array of Objects"
+                    "default": "JSON Array of Objects",
+                    "description": "Expected incoming payload content format ('json' or 'form-data')."
                 }
             }
         }

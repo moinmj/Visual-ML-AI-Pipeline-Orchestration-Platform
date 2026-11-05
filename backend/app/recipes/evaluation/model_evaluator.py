@@ -36,14 +36,16 @@ class ModelEvaluatorRecipe(BaseRecipe):
                         "Per-Class Deep Dive (Precision/Recall per label)",
                         "Regression Diagnostics (MAE, RMSE, R2, MAPE)"
                     ],
-                    "default": "Comprehensive (All Metrics + Confusion Matrix)"
+                    "default": "Comprehensive (All Metrics + Confusion Matrix)",
+                    "description": "Granularity of generated evaluation metrics ('Basic', 'Standard', or 'Comprehensive')."
                 },
                 "average_strategy": {
                     "type": "string",
                     "title": "Multiclass Averaging Strategy",
                     "input_type": "dropdown",
                     "enum": ["weighted", "macro", "micro"],
-                    "default": "weighted"
+                    "default": "weighted",
+                    "description": "Multiclass averaging calculation method ('macro', 'weighted', or 'micro')."
                 },
                 "decision_threshold": {
                     "type": "number",

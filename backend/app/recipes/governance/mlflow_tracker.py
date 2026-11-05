@@ -42,7 +42,8 @@ class MLflowTrackerRecipe(BaseRecipe):
                 "experiment_name": {
                     "type": "string",
                     "title": "MLflow Experiment Name",
-                    "default": "Enterprise_ML_Pipelines"
+                    "default": "Enterprise_ML_Pipelines",
+                    "description": 'Name of the MLflow experiment under which runs will be organized.'
                 },
                 "registered_model_name": {
                     "type": "string",
@@ -54,7 +55,8 @@ class MLflowTrackerRecipe(BaseRecipe):
                     "type": "string",
                     "title": "Promotion Stage",
                     "enum": ["Staging", "Production", "Archived", "None"],
-                    "default": "Staging"
+                    "default": "Staging",
+                    "description": "Deployment target stage tag ('Staging', 'Production', or 'Archived')."
                 },
                 "tracking_uri": {
                     "type": "string",

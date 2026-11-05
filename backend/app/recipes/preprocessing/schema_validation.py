@@ -53,20 +53,30 @@ class SchemaContractValidationRecipe(BaseRecipe):
                     "items": {
                         "type": "object",
                         "properties": {
-                            "name": {"type": "string", "title": "Column Name"},
+                            "name": {"type": "string", "title": "Column Name",
+                                "description": 'Column name expected to be present in the dataset.'
+                            },
                             "type": {
                                 "type": "string",
                                 "title": "Data Type",
                                 "enum": ["string", "integer", "float", "boolean", "datetime", "any"],
-                                "default": "any"
+                                "default": "any",
+                                "description": "Expected column data type (e.g. 'int', 'float', 'string', 'datetime', 'bool')."
                             },
-                            "nullable": {"type": "boolean", "title": "Nullable", "default": True},
-                            "min_value": {"type": "number", "title": "Min Value"},
-                            "max_value": {"type": "number", "title": "Max Value"},
+                            "nullable": {"type": "boolean", "title": "Nullable", "default": True,
+                                "description": 'Whether missing or null values are allowed in this column.'
+                            },
+                            "min_value": {"type": "number", "title": "Min Value",
+                                "description": 'Minimum permissible numerical or date value.'
+                            },
+                            "max_value": {"type": "number", "title": "Max Value",
+                                "description": 'Maximum permissible numerical or date value.'
+                            },
                             "allowed_values": {
                                 "type": "array",
                                 "items": {"type": "string"},
-                                "title": "Allowed Values (Enum)"
+                                "title": "Allowed Values (Enum)",
+                                "description": 'Explicit list of permissible categorical values.'
                             }
                         },
                         "required": ["name"]

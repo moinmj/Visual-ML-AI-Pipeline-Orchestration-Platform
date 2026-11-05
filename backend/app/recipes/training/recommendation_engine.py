@@ -182,13 +182,15 @@ class RecommendationEngineRecipe(BaseRecipe):
                     "type": "string",
                     "title": "User Identifier Column",
                     "input_type": "text",
-                    "default": "user_id"
+                    "default": "user_id",
+                    "description": 'Column identifying the user or entity receiving recommendations.'
                 },
                 "item_col": {
                     "type": "string",
                     "title": "Item Identifier Column",
                     "input_type": "text",
-                    "default": "item_id"
+                    "default": "item_id",
+                    "description": 'Column identifying the product, item, or content being recommended.'
                 },
                 "rating_col": {
                     "type": "string",
@@ -203,7 +205,8 @@ class RecommendationEngineRecipe(BaseRecipe):
                     "input_type": "slider",
                     "default": 10,
                     "minimum": 2,
-                    "maximum": 50
+                    "maximum": 50,
+                    "description": 'Number of latent factor dimensions in matrix factorization.'
                 },
                 "top_k": {
                     "type": "integer",
@@ -211,7 +214,8 @@ class RecommendationEngineRecipe(BaseRecipe):
                     "input_type": "slider",
                     "default": 5,
                     "minimum": 1,
-                    "maximum": 20
+                    "maximum": 20,
+                    "description": 'Number of top recommendation candidates to generate per user.'
                 }
             },
             "required": []
