@@ -182,6 +182,18 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "multimodal_agent": ("Agents & LLM Orchestration", "Core Agents"),
     "code_execution_sandbox": ("Agents & LLM Orchestration", "Core Agents"),
     "chatbot_endpoint": ("Agents & LLM Orchestration", "Core Agents"),
+
+    # Canvas Tools
+    "canvas_note": ("Canvas Tools", "Documentation & Layout"),
+    "canvas_group": ("Canvas Tools", "Documentation & Layout"),
+    "canvas_comments": ("Canvas Tools", "Documentation & Layout"),
+    "chart_visualization": ("Canvas Tools", "Visualization"),
+    "version_snapshot": ("Canvas Tools", "Versioning & Reuse"),
+    "template_macro_library": ("Canvas Tools", "Versioning & Reuse"),
+    "pipeline_diff_viewer": ("Canvas Tools", "Versioning & Reuse"),
+    "readonly_pipeline_snapshot": ("Canvas Tools", "Versioning & Reuse"),
+    "secrets_manager_block": ("Canvas Tools", "Configuration"),
+    "parameter_sweep_runner": ("Canvas Tools", "Configuration"),
 }
 
 
@@ -431,6 +443,30 @@ class RecipeRegistry:
             "model_documentation": "model_card_generator",
             "model_card_report": "model_card_generator",
             "mitchell_model_card": "model_card_generator",
+
+            # Canvas Tools Aliases
+            "note": "canvas_note",
+            "canvas_annotation": "canvas_note",
+            "group": "canvas_group",
+            "visual_grouping": "canvas_group",
+            "comments": "canvas_comments",
+            "comment_threads": "canvas_comments",
+            "chart": "chart_visualization",
+            "chart_operator": "chart_visualization",
+            "visualization": "chart_visualization",
+            "snapshot": "version_snapshot",
+            "version_checkpoint": "version_snapshot",
+            "macro_library": "template_macro_library",
+            "template_library": "template_macro_library",
+            "macro": "template_macro_library",
+            "diff_viewer": "pipeline_diff_viewer",
+            "pipeline_diff": "pipeline_diff_viewer",
+            "readonly_snapshot": "readonly_pipeline_snapshot",
+            "shareable_pipeline": "readonly_pipeline_snapshot",
+            "secrets_manager": "secrets_manager_block",
+            "secrets_block": "secrets_manager_block",
+            "parameter_sweep": "parameter_sweep_runner",
+            "param_sweep": "parameter_sweep_runner",
         }
 
 

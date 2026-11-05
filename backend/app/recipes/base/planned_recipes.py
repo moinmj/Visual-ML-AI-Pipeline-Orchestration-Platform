@@ -200,26 +200,6 @@ _PLANNED: List[Tuple[str, str, str, List[Tuple[str, str, str, str]]]] = [
         #("model_card_generator", "Model Card Generator", "model_report", "Generates a model card documenting purpose, data, metrics and limitations."),
     ]),
 
-    # ------------------------------------------------------------------ 5. Canvas Tools (10)
-    ("Canvas Tools", "Documentation & Layout", "canvas", [
-        ("canvas_note", "Note (canvas annotation)", "canvas", "Adds a text note to the canvas to document the pipeline."),
-        ("canvas_group", "Group (visual grouping)", "canvas", "Visually groups related nodes on the canvas."),
-        ("canvas_comments", "Comment / Annotation Threads", "canvas", "Adds discussion threads to nodes for team collaboration."),
-    ]),
-    ("Canvas Tools", "Visualization", "canvas", [
-        ("chart_visualization", "Chart / Visualization Operator", "report", "Creates charts (bar, line, scatter, histogram) from the incoming data."),
-    ]),
-    ("Canvas Tools", "Versioning & Reuse", "canvas", [
-        ("version_snapshot", "Version Snapshot / Checkpoint & Rollback", "canvas", "Saves a version checkpoint of the pipeline and restores it later."),
-        ("template_macro_library", "Reusable Template / Macro Block Library", "canvas", "Saves groups of nodes as reusable blocks and inserts them into other pipelines."),
-        ("pipeline_diff_viewer", "Pipeline Diff Viewer", "canvas", "Shows the differences between two versions of a pipeline."),
-        ("readonly_pipeline_snapshot", "Shareable Read-Only Pipeline Snapshot", "canvas", "Shares a read-only view of the pipeline via a link."),
-    ]),
-    ("Canvas Tools", "Configuration", "canvas", [
-        ("secrets_manager_block", "Environment Variable / Secrets Manager Block", "canvas", "Stores environment variables and secrets used by nodes, without exposing them."),
-        ("parameter_sweep_runner", "Parameter Sweep Runner", "canvas", "Runs the pipeline multiple times over a range of parameter values."),
-    ]),
-
     # ------------------------------------------------------------------ 6. Integrations & Live APIs (35)
     ("Apps & Integrations", "Social & Comms", "integrations", [
         ("twitter_x_connector", "Twitter/X Connector", "source", "Fetches posts, mentions or metrics from Twitter/X."),

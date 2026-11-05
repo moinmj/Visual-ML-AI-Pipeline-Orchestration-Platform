@@ -226,6 +226,20 @@ from backend.app.recipes.agents.chatbot_endpoint import ChatbotEndpointRecipe
 from backend.app.recipes.governance.audit_log_exporter import AuditLogExporterRecipe
 from backend.app.recipes.governance.model_card_generator import ModelCardGeneratorRecipe
 
+# Canvas Tools Recipes
+from backend.app.recipes.canvas import (
+    CanvasNoteRecipe,
+    CanvasGroupRecipe,
+    CanvasCommentsRecipe,
+    ChartVisualizationRecipe,
+    VersionSnapshotRecipe,
+    TemplateMacroLibraryRecipe,
+    PipelineDiffViewerRecipe,
+    ReadonlyPipelineSnapshotRecipe,
+    SecretsManagerBlockRecipe,
+    ParameterSweepRunnerRecipe,
+)
+
 
 def register_all_recipes():
     recipe_registry.register(CSVLoaderRecipe())
@@ -428,6 +442,18 @@ def register_all_recipes():
     recipe_registry.register(MultimodalAgentRecipe())
     recipe_registry.register(CodeExecutionSandboxRecipe())
     recipe_registry.register(ChatbotEndpointRecipe())
+
+    # Canvas Tools
+    recipe_registry.register(CanvasNoteRecipe())
+    recipe_registry.register(CanvasGroupRecipe())
+    recipe_registry.register(CanvasCommentsRecipe())
+    recipe_registry.register(ChartVisualizationRecipe())
+    recipe_registry.register(VersionSnapshotRecipe())
+    recipe_registry.register(TemplateMacroLibraryRecipe())
+    recipe_registry.register(PipelineDiffViewerRecipe())
+    recipe_registry.register(ReadonlyPipelineSnapshotRecipe())
+    recipe_registry.register(SecretsManagerBlockRecipe())
+    recipe_registry.register(ParameterSweepRunnerRecipe())
 
 
 
