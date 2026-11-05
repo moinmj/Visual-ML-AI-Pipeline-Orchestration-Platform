@@ -142,6 +142,17 @@ from backend.app.recipes.integrations.stripe_connector import StripeConnectorRec
 from backend.app.recipes.integrations.shopify_connector import ShopifyConnectorRecipe
 from backend.app.recipes.integrations.google_ads_connector import GoogleAdsConnectorRecipe
 from backend.app.recipes.integrations.meta_ads_connector import MetaAdsConnectorRecipe
+from backend.app.recipes.integrations.jira_connector import JiraConnectorRecipe
+from backend.app.recipes.integrations.linear_connector import LinearConnectorRecipe
+from backend.app.recipes.integrations.asana_connector import AsanaConnectorRecipe
+from backend.app.recipes.integrations.github_connector import GitHubConnectorRecipe
+from backend.app.recipes.integrations.gitlab_connector import GitLabConnectorRecipe
+from backend.app.recipes.integrations.google_calendar_connector import GoogleCalendarConnectorRecipe
+from backend.app.recipes.integrations.outlook_calendar_connector import OutlookCalendarConnectorRecipe
+from backend.app.recipes.integrations.onedrive_sync import OneDriveSyncRecipe
+from backend.app.recipes.integrations.dropbox_sync import DropboxSyncRecipe
+from backend.app.recipes.integrations.airtable_connector import AirtableConnectorRecipe
+from backend.app.recipes.integrations.notion_connector import NotionConnectorRecipe
 
 # Unsupervised & Dimensionality Reduction Recipes
 from backend.app.recipes.unsupervised.clustering import ClusteringRecipe
@@ -359,6 +370,17 @@ def register_all_recipes():
     recipe_registry.register(ShopifyConnectorRecipe())
     recipe_registry.register(GoogleAdsConnectorRecipe())
     recipe_registry.register(MetaAdsConnectorRecipe())
+    recipe_registry.register(JiraConnectorRecipe())
+    recipe_registry.register(LinearConnectorRecipe())
+    recipe_registry.register(AsanaConnectorRecipe())
+    recipe_registry.register(GitHubConnectorRecipe())
+    recipe_registry.register(GitLabConnectorRecipe())
+    recipe_registry.register(GoogleCalendarConnectorRecipe())
+    recipe_registry.register(OutlookCalendarConnectorRecipe())
+    recipe_registry.register(OneDriveSyncRecipe())
+    recipe_registry.register(DropboxSyncRecipe())
+    recipe_registry.register(AirtableConnectorRecipe())
+    recipe_registry.register(NotionConnectorRecipe())
 
     # Unsupervised & Dimensionality Reduction
     recipe_registry.register(ClusteringRecipe())
