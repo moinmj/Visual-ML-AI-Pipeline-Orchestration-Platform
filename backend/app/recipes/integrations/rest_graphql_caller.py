@@ -291,7 +291,7 @@ class GenericRestGraphQLCallerRecipe(BaseRecipe):
                 })
         return records
 
-    def execute(self, inputs: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+    def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None, **kwargs) -> Dict[str, Any]:
         api_type = str(config.get("api_type", "REST")).strip().upper()
         method = str(config.get("method", "GET")).strip().upper()
         endpoint_url = str(config.get("endpoint_url", "https://jsonplaceholder.typicode.com/posts")).strip()
