@@ -234,9 +234,6 @@ _PLANNED: List[Tuple[str, str, str, List[Tuple[str, str, str, str]]]] = [
         ("google_maps_connector", "Google Maps Connector", "transform", "Enriches rows with geocodes, places, distances and travel times from Google Maps."),
         ("mapbox_connector", "Mapbox Connector", "transform", "Enriches rows with geocodes and routing data from Mapbox."),
     ]),
-    ("Apps & Integrations", "Generic", "integrations", [
-        ("rest_graphql_caller", "Generic REST/GraphQL API Caller", "source", "Calls any REST or GraphQL API and turns the response into a table."),
-    ]),
 
     # ------------------------------------------------------------------ 7. Agents & LLM Orchestration (18)
     ("Agents & LLM Orchestration", "Core Agents", "agents", [
