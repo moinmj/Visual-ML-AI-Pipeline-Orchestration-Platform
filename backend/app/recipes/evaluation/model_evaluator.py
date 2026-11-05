@@ -525,10 +525,31 @@ class ModelEvaluatorRecipe(BaseRecipe):
             mse = float(round(mean_squared_error(y_test, predictions), 4))
             rmse = float(round(np.sqrt(mse), 4))
             r2 = float(round(r2_score(y_test, predictions), 4))
+            # Ingest any upstream trainer warnings
+            upstream_warns = inputs.get("warnings") or []
+            if isinstance(upstream_warns, list):
+                for uw in upstream_warns:
+                    if uw not in warnings:
+                        warnings.append(uw)
+
             # Zero-division guardrail for percentage metrics (MAPE / SMAPE)
             y_arr = np.asarray(y_test, dtype=float).ravel()
             pred_arr = np.asarray(predictions, dtype=float).ravel()
             has_zero_actuals = bool(np.any(np.isclose(y_arr, 0.0, atol=1e-9)))
+
+            # Check if discrete binary 0/1 column was evaluated in regression mode
+            unique_actuals = sorted(list(set(np.unique(y_arr[~np.isnan(y_arr)]))))
+            is_discrete_binary_target = (
+                len(unique_actuals) <= 2 and
+                set(unique_actuals).issubset({0.0, 1.0})
+            )
+            if is_discrete_binary_target:
+                warnings.append(
+                    f"[WARNING: DISCRETE 0/1 TARGET IN REGRESSION] Regression evaluation was executed on a discrete 0/1 binary column "
+                    f"(unique values: {unique_actuals}). Regression metrics (R2, RMSE, MAE, SMAPE) are intended for continuous numbers "
+                    f"(such as sales_amount, price, or temperature), not discrete categories like target_churn. "
+                    f"If predicting churn or binary outcomes, switch model task_type to 'classification' to evaluate Accuracy, ROC-AUC, F1-Score, and Confusion Matrix."
+                )
 
             # Compute SMAPE (Symmetric Mean Absolute Percentage Error) as a robust zero-safe alternative:
             # Formula: (100% / n) * sum( 2 * |y - y_hat| / (|y| + |y_hat|) )
@@ -590,6 +611,7 @@ class ModelEvaluatorRecipe(BaseRecipe):
                 "smape_display": f"{smape:.2f}%" if smape is not None else "N/A",
                 "sample_size": N,
                 "is_small_sample": is_small_sample,
+                "is_discrete_binary_target": is_discrete_binary_target,
                 "warnings": warnings,
                 "small_sample_guardrails": {
                     "triggered": is_small_sample or has_zero_actuals,
@@ -608,11 +630,15 @@ class ModelEvaluatorRecipe(BaseRecipe):
                 f"=== Model Evaluation Report ({report_type}) ===",
                 f"Task Type          : Regression",
                 f"Sample Size (N)    : {N}",
+            ]
+            if is_discrete_binary_target:
+                report_lines.append("Target Type        : Discrete Binary (0/1) [WARNING: MISCONFIGURED REGRESSION]")
+            report_lines.extend([
                 f"MAE                : {mae:.4f}",
                 f"RMSE               : {rmse:.4f}",
                 f"R2 Score           : {r2:.4f}",
                 f"MAPE               : {mape_display}",
-            ]
+            ])
             if smape is not None:
                 report_lines.append(f"SMAPE (Zero-Safe)  : {smape:.4f}%")
             if warnings:

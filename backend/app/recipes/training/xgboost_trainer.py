@@ -1,5 +1,5 @@
 import pandas as pd
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from backend.app.recipes.base.recipe import BaseRecipe
 
 try:
@@ -28,6 +28,11 @@ class XGBoostTrainerRecipe(BaseRecipe):
                     "title": "ML Task Type",
                     "enum": ["classification", "regression"],
                     "default": "classification"
+                },
+                "target_column": {
+                    "type": "string",
+                    "title": "Target Column (Optional)",
+                    "description": "Target column to predict. If left blank, automatically inherited from upstream Train/Test Split node."
                 },
                 "n_estimators": {
                     "type": "integer",
@@ -106,6 +111,23 @@ class XGBoostTrainerRecipe(BaseRecipe):
             "required": ["task_type"]
         }
 
+
+    def validate_config(self, config: Dict[str, Any]) -> List[str]:
+        errors = []
+        task_type = str(config.get("task_type", "classification")).lower()
+        target_col = str(config.get("target_column", "")).strip()
+
+        if task_type == "regression" and target_col:
+            binary_keywords = ["churn", "target_churn", "fraud", "default", "label", "binary", "class", "target_class", "survived", "promoted", "converted"]
+            t_lower = target_col.lower()
+            if any(k in t_lower for k in binary_keywords) or t_lower.startswith("is_"):
+                errors.append(
+                    f"⚠️ Inline Validation Warning: Target column '{target_col}' appears to be a discrete 0/1 category column, "
+                    f"but Regression mode is selected. Regression is intended for continuous numeric quantities (such as sales_amount, price, temperature). "
+                    f"For binary 0/1 outcomes like churn or fraud, switch task_type to 'classification' or select a continuous numeric target like 'sales_amount'."
+                )
+        return errors
+
     def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
         if not XGBOOST_AVAILABLE:
             raise ValueError("XGBoost is not installed in the environment. Please run 'pip install xgboost' or choose Random Forest / Logistic Regression.")
@@ -166,6 +188,18 @@ class XGBoostTrainerRecipe(BaseRecipe):
             model = xgb.XGBClassifier(**xgb_kwargs)
         else:
             task_type = "regression"
+            warnings_list = []
+            y_vals = pd.Series(y_train).dropna()
+            u_vals = sorted(list(set(y_vals.unique())))
+            if len(u_vals) <= 2 and (set(u_vals).issubset({0, 1, 0.0, 1.0, True, False, "0", "1", "yes", "no"}) or len(u_vals) <= 2):
+                discrete_warn = (
+                    f"[WARNING: DISCRETE TARGET IN REGRESSION] Target column appears to be a discrete 0/1 category column "
+                    f"(unique values: {u_vals}), but Regression mode was selected. "
+                    f"Regression is intended for continuous numeric quantities (such as sales_amount, price, or temperature). "
+                    f"Please switch task_type to 'classification' for binary targets like churn, or choose a continuous numeric target like 'sales_amount'."
+                )
+                warnings_list.append(discrete_warn)
+
             model = xgb.XGBRegressor(
                 n_estimators=n_estimators,
                 max_depth=max_depth,
@@ -191,7 +225,8 @@ class XGBoostTrainerRecipe(BaseRecipe):
             "model": model,
             "task_type": task_type,
             "feature_importances": importances,
-            "feature_names": feature_names
+            "feature_names": feature_names,
+            "warnings": locals().get("warnings_list", [])
         }
 
         upstream_classes = inputs.get("target_classes") or (context.get("target_classes") if isinstance(context, dict) else None)

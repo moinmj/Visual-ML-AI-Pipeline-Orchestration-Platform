@@ -1,3 +1,4 @@
+import pandas as pd
 from typing import List, Dict, Any, Optional, Set
 from collections import defaultdict, deque
 from pydantic import BaseModel, Field, model_validator
@@ -212,7 +213,10 @@ class WorkflowGraph(BaseModel):
             cfg = node.config or {}
             cfg_errors = recipe.validate_config(cfg)
             for ce in cfg_errors:
-                add_error(f"❌ Configuration Error for '{node.id}' [{recipe.name}]: {ce}", node_id=node.id, recipe_id=node.recipe_id)
+                if str(ce).startswith("⚠️") or str(ce).startswith("💡"):
+                    add_error(f"{ce}", node_id=node.id, recipe_id=node.recipe_id)
+                else:
+                    add_error(f"❌ Configuration Error for '{node.id}' [{recipe.name}]: {ce}", node_id=node.id, recipe_id=node.recipe_id)
 
         # 4. ML Best Practice Checks & Recommendations
         all_recipe_ids = {n.recipe_id for n in self.nodes}
@@ -231,6 +235,42 @@ class WorkflowGraph(BaseModel):
                         f"insert a 'Categorical Feature Encoder' before Train/Test Split to boost model accuracy.",
                         node_id=node.id, recipe_id=node.recipe_id
                     )
+
+                # Check for discrete 0/1 target column in Regression mode
+                cfg = node.config or {}
+                if str(cfg.get("task_type", "")).lower() == "regression":
+                    target_col = cfg.get("target_column")
+                    if not target_col:
+                        for p_id in parent_map.get(node.id, []):
+                            if p_id in node_dict:
+                                p_cfg = node_dict[p_id].config or {}
+                                if p_cfg.get("target_column"):
+                                    target_col = p_cfg.get("target_column")
+                                    break
+                    if target_col:
+                        is_binary_discrete = False
+                        for n in self.nodes:
+                            if n.config and isinstance(n.config.get("dataframe"), pd.DataFrame):
+                                df_c = n.config["dataframe"]
+                                if target_col in df_c.columns:
+                                    u_vals = set(df_c[target_col].dropna().unique())
+                                    if len(u_vals) <= 2 and (u_vals.issubset({0, 1, 0.0, 1.0, True, False, "0", "1", "yes", "no"}) or len(u_vals) <= 2):
+                                        is_binary_discrete = True
+                                        break
+                        if not is_binary_discrete:
+                            t_lower = str(target_col).lower()
+                            binary_keywords = ["churn", "target_churn", "fraud", "default", "label", "binary", "class", "target_class", "survived", "promoted", "converted"]
+                            if any(k in t_lower for k in binary_keywords) or t_lower.startswith("is_"):
+                                is_binary_discrete = True
+
+                        if is_binary_discrete:
+                            add_error(
+                                f"⚠️ Inline Validation Warning for '{node.id}' [{recipe.name}]: "
+                                f"Target column '{target_col}' appears to be a discrete 0/1 category column, but Regression mode is selected. "
+                                f"Regression is intended for continuous numeric quantities (such as sales_amount, price, or temperature). "
+                                f"Remedy: Switch ML Task Type to 'classification' for binary 0/1 predictions, or select a continuous numeric target like 'sales_amount'.",
+                                node_id=node.id, recipe_id=node.recipe_id
+                            )
 
         return errors
 
