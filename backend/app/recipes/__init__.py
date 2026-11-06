@@ -2,6 +2,7 @@ from backend.app.recipes.base.registry import recipe_registry
 from backend.app.recipes.ingestion.csv_loader import CSVLoaderRecipe
 from backend.app.recipes.ingestion.manual_data_entry import ManualDataEntryRecipe
 from backend.app.recipes.ingestion.export_writer import ExportWriterRecipe
+from backend.app.recipes.ingestion.notifications import NotificationsRecipe
 from backend.app.recipes.ingestion.api_response_endpoint import ApiResponseEndpointRecipe
 from backend.app.recipes.ingestion.postgresql_connector import PostgreSQLConnectorRecipe
 from backend.app.recipes.ingestion.mysql_connector import MySQLConnectorRecipe
@@ -246,6 +247,7 @@ def register_all_recipes():
     recipe_registry.register(CSVLoaderRecipe())
     recipe_registry.register(ManualDataEntryRecipe())
     recipe_registry.register(ExportWriterRecipe())
+    recipe_registry.register(NotificationsRecipe())
     recipe_registry.register(ApiResponseEndpointRecipe())
     recipe_registry.register(PostgreSQLConnectorRecipe())
     recipe_registry.register(MySQLConnectorRecipe())

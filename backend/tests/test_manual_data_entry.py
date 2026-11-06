@@ -257,3 +257,4 @@ def test_manual_data_entry_passthrough():
 
     res_config = recipe.execute(inputs={}, config={"dataframe": existing_df})
     assert res_config["dataframe"].equals(existing_df)
+

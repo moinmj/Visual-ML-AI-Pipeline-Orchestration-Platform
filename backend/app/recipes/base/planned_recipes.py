@@ -86,9 +86,6 @@ _PORTS: Dict[str, Tuple[List[RecipePort], List[RecipePort]]] = {
 # (group, subgroup, category, [(recipe_id, name, port_kind, description), ...])
 _PLANNED: List[Tuple[str, str, str, List[Tuple[str, str, str, str]]]] = [
     # ------------------------------------------------------------------ 1. Ingestion & Orchestration (28)
-    ("Ingestion & Orchestration", "Output", "ingestion", [
-        ("notifications", "Notifications", "sink", "Sends a generic pipeline notification to a configured channel (email, chat or webhook)."),
-    ]),
     ("Ingestion & Orchestration", "Database & Warehouse Connectors", "ingestion", [
         ("postgresql_connector", "PostgreSQL Connector", "source", "Reads tables or query results from a PostgreSQL database."),
         ("mysql_connector", "MySQL Connector", "source", "Reads tables or query results from a MySQL / MariaDB database."),

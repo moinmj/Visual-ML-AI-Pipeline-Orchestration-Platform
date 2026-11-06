@@ -11,6 +11,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "csv_loader": ("Ingestion & Orchestration", "Load"),
     "manual_data_entry": ("Ingestion & Orchestration", "Load"),
     "export_writer": ("Ingestion & Orchestration", "Output"),
+    "notifications": ("Ingestion & Orchestration", "Output"),
     "api_response_endpoint": ("Ingestion & Orchestration", "Output"),
     "dataset_join": ("Data Preparation & Transformation", "Combine/Structure"),
     "column_selector": ("Data Preparation & Transformation", "Combine/Structure"),
@@ -484,6 +485,10 @@ class RecipeRegistry:
             "manual_table": "manual_data_entry",
             "inline_data": "manual_data_entry",
             "editable_table": "manual_data_entry",
+            "notification": "notifications",
+            "pipeline_notification": "notifications",
+            "alert_sink": "notifications",
+            "webhook_notification": "notifications",
         }
 
 
