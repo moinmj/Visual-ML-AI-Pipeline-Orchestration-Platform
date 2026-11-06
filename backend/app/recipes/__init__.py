@@ -23,6 +23,7 @@ from backend.app.recipes.ingestion.cdc_replicator import CDCReplicatorRecipe
 from backend.app.recipes.ingestion.ftp_sftp_watcher import FTPSFTPWatcherRecipe
 from backend.app.recipes.ingestion.file_system_watcher import FileSystemWatcherRecipe
 from backend.app.recipes.ingestion.email_attachment_extractor import EmailAttachmentExtractorRecipe
+from backend.app.recipes.ingestion.web_scraper import WebScraperRecipe
 from backend.app.recipes.preprocessing.custom_python_step import CustomPythonStepRecipe
 from backend.app.recipes.preprocessing.missing_values import MissingValueImputerRecipe
 from backend.app.recipes.preprocessing.scaling import FeatureScalerRecipe
@@ -274,6 +275,7 @@ def register_all_recipes():
     recipe_registry.register(FTPSFTPWatcherRecipe())
     recipe_registry.register(FileSystemWatcherRecipe())
     recipe_registry.register(EmailAttachmentExtractorRecipe())
+    recipe_registry.register(WebScraperRecipe())
     recipe_registry.register(DatasetJoinRecipe())
     recipe_registry.register(WebhookTriggerRecipe())
     recipe_registry.register(CronScheduleTriggerRecipe())

@@ -98,7 +98,7 @@ _PLANNED: List[Tuple[str, str, str, List[Tuple[str, str, str, str]]]] = [
 
 
 
-        ("web_scraper", "Web Scraper / HTML Table Extractor", "source", "Extracts HTML tables or page content from a web page into a table."),
+
         ("rss_atom_aggregator", "RSS/Atom Aggregator (with dedup)", "source", "Aggregates items from multiple RSS/Atom feeds and removes duplicates."),
         ("archive_unpacker", "Zip/Archive Unpacker", "source", "Unpacks ZIP/TAR archives and loads the contained data files."),
     ]),
