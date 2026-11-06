@@ -17,6 +17,14 @@ from backend.app.recipes.ingestion.rabbitmq_consumer import RabbitMQConsumerReci
 from backend.app.recipes.ingestion.mqtt_iot_stream import MQTTStreamRecipe
 from backend.app.recipes.ingestion.websocket_listener import WebSocketListenerRecipe
 from backend.app.recipes.ingestion.event_bus_publisher import EventBusPublisherRecipe
+from backend.app.recipes.ingestion.cdc_ingestion import CDCIngestionRecipe
+from backend.app.recipes.ingestion.cdc_replicator import CDCReplicatorRecipe
+from backend.app.recipes.ingestion.ftp_sftp_watcher import FTPSFTPWatcherRecipe
+from backend.app.recipes.ingestion.file_system_watcher import FileSystemWatcherRecipe
+from backend.app.recipes.ingestion.email_attachment_extractor import EmailAttachmentExtractorRecipe
+from backend.app.recipes.ingestion.web_scraper import WebScraperRecipe
+from backend.app.recipes.ingestion.rss_atom_aggregator import RSSAtomAggregatorRecipe
+from backend.app.recipes.ingestion.archive_unpacker import ArchiveUnpackerRecipe
 
 __all__ = [
     "CSVLoaderRecipe",
@@ -37,5 +45,13 @@ __all__ = [
     "RabbitMQConsumerRecipe",
     "MQTTStreamRecipe",
     "WebSocketListenerRecipe",
-    "EventBusPublisherRecipe"
+    "EventBusPublisherRecipe",
+    "CDCIngestionRecipe",
+    "CDCReplicatorRecipe",
+    "FTPSFTPWatcherRecipe",
+    "FileSystemWatcherRecipe",
+    "EmailAttachmentExtractorRecipe",
+    "WebScraperRecipe",
+    "RSSAtomAggregatorRecipe",
+    "ArchiveUnpackerRecipe",
 ]

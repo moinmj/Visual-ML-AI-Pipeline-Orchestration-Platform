@@ -94,27 +94,19 @@ _PLANNED: List[Tuple[str, str, str, List[Tuple[str, str, str, str]]]] = [
         ("bigquery_connector", "BigQuery Connector", "source", "Reads tables or query results from Google BigQuery."),
         ("redshift_connector", "Redshift Connector", "source", "Reads tables or query results from Amazon Redshift."),
     ]),
-    ("Ingestion & Orchestration", "Streaming & Change Data", "ingestion", [
-        ("kafka_consumer", "Kafka Consumer", "source", "Consumes messages from Kafka topics into micro-batches of rows."),
-        ("mqtt_iot_stream", "MQTT / IoT Sensor Stream", "source", "Subscribes to MQTT topics to ingest IoT sensor readings."),
-        ("websocket_listener", "WebSocket Listener", "source", "Listens to a WebSocket feed and collects incoming messages as rows."),
-        ("cdc_ingestion", "Change Data Capture (CDC) Ingestion", "source", "Captures inserts, updates and deletes from a database change log."),
-        ("cdc_replicator", "Database CDC Replicator (real-time sync)", "source", "Continuously replicates database changes into the platform in near real time."),
-        ("event_bus_publisher", "Event Bus Publisher (Kafka/RabbitMQ/SNS)", "sink", "Publishes rows or pipeline events to Kafka, RabbitMQ or Amazon SNS."),
-    ]),
     ("Ingestion & Orchestration", "File & Web Ingestion", "ingestion", [
-        ("ftp_sftp_watcher", "FTP/SFTP File Watcher", "source", "Watches an FTP/SFTP folder and loads new files as they arrive."),
-        ("file_system_watcher", "File System Watcher", "source", "Watches a folder on a file system and loads new or changed files."),
-        ("email_attachment_extractor", "Email Attachment Extractor", "source", "Reads a mailbox and extracts CSV/Excel attachments as datasets."),
-        ("web_scraper", "Web Scraper / HTML Table Extractor", "source", "Extracts HTML tables or page content from a web page into a table."),
-        ("rss_atom_aggregator", "RSS/Atom Aggregator (with dedup)", "source", "Aggregates items from multiple RSS/Atom feeds and removes duplicates."),
-        ("archive_unpacker", "Zip/Archive Unpacker", "source", "Unpacks ZIP/TAR archives and loads the contained data files."),
+
+
+
+
+
+
     ]),
     ("Ingestion & Orchestration", "Control Flow & Reliability", "flow_control", [
-        ("sub_pipeline_call", "Sub-Pipeline Call", "transform", "Runs another saved pipeline as a single step and returns its output."),
-        ("retry_error_handler", "Retry / Error-Handling Wrapper", "transform", "Retries a failing step with backoff and routes errors to a fallback path."),
-        ("batch_scheduler", "Batch Scheduler with Dependency Graph", "transform", "Schedules batches of jobs that run in order of their dependencies."),
-        ("dead_letter_queue", "Dead-Letter Queue Handler", "transform", "Collects rows or events that failed processing for review and replay."),
+
+
+
+
     ]),
 
     # ------------------------------------------------------------------ 2. Data Preparation & Transformation (30)
@@ -219,18 +211,18 @@ _PLANNED: List[Tuple[str, str, str, List[Tuple[str, str, str, str]]]] = [
 
     # ------------------------------------------------------------------ 8. Reporting & Delivery (4)
     ("Reporting & Delivery", "Reports & Alerts", "reporting", [
-        ("scheduled_report_generator", "Scheduled Report Generator (PDF/Excel snapshot)", "report", "Generates PDF or Excel report snapshots on a schedule."),
-        ("dashboard_publisher", "Dashboard Embed / Publish Operator", "sink", "Publishes results to a dashboard or produces an embeddable view."),
-        ("threshold_alert_monitor", "Alert / Threshold Monitor", "monitor", "Raises alerts when a metric crosses a configured threshold."),
-        ("bi_tool_export", "BI Tool Export (Tableau / Power BI / Looker)", "sink", "Exports results in a format ready for Tableau, Power BI or Looker."),
+
+
+
+
     ]),
 
     # ------------------------------------------------------------------ 9. Security & Access (4)
     ("Security & Access", "Access & Audit", "security", [
-        ("row_level_access_control", "Row-Level Access Control Operator", "transform", "Restricts which rows each user or role can see."),
-        ("audit_trail_logger", "Audit Trail Logger", "sink", "Logs who ran what, when, and on which data."),
-        ("credential_rotation_manager", "API Key / Credential Rotation Manager", "canvas", "Rotates API keys and credentials used by pipeline nodes on a schedule."),
-        ("encryption_toggle", "Encryption At-Rest / In-Transit Toggle", "canvas", "Controls encryption of pipeline data at rest and in transit."),
+
+
+
+
     ]),
 ]
 

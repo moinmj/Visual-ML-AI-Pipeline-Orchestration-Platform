@@ -18,6 +18,14 @@ from backend.app.recipes.ingestion.rabbitmq_consumer import RabbitMQConsumerReci
 from backend.app.recipes.ingestion.mqtt_iot_stream import MQTTStreamRecipe
 from backend.app.recipes.ingestion.websocket_listener import WebSocketListenerRecipe
 from backend.app.recipes.ingestion.event_bus_publisher import EventBusPublisherRecipe
+from backend.app.recipes.ingestion.cdc_ingestion import CDCIngestionRecipe
+from backend.app.recipes.ingestion.cdc_replicator import CDCReplicatorRecipe
+from backend.app.recipes.ingestion.ftp_sftp_watcher import FTPSFTPWatcherRecipe
+from backend.app.recipes.ingestion.file_system_watcher import FileSystemWatcherRecipe
+from backend.app.recipes.ingestion.email_attachment_extractor import EmailAttachmentExtractorRecipe
+from backend.app.recipes.ingestion.web_scraper import WebScraperRecipe
+from backend.app.recipes.ingestion.rss_atom_aggregator import RSSAtomAggregatorRecipe
+from backend.app.recipes.ingestion.archive_unpacker import ArchiveUnpackerRecipe
 from backend.app.recipes.preprocessing.custom_python_step import CustomPythonStepRecipe
 from backend.app.recipes.preprocessing.missing_values import MissingValueImputerRecipe
 from backend.app.recipes.preprocessing.scaling import FeatureScalerRecipe
@@ -107,6 +115,18 @@ from backend.app.recipes.flow_control.switch_node import SwitchRecipe
 from backend.app.recipes.flow_control.merge_node import MergeDatasetsRecipe
 from backend.app.recipes.flow_control.loop_node import LoopBatchRecipe
 from backend.app.recipes.flow_control.delay_node import DelayRecipe
+from backend.app.recipes.flow_control.sub_pipeline_call import SubPipelineCallRecipe
+from backend.app.recipes.flow_control.retry_error_handler import RetryErrorHandlerRecipe
+from backend.app.recipes.flow_control.batch_scheduler import BatchSchedulerRecipe
+from backend.app.recipes.flow_control.dead_letter_queue import DeadLetterQueueRecipe
+from backend.app.recipes.reporting.scheduled_report_generator import ScheduledReportGeneratorRecipe
+from backend.app.recipes.reporting.dashboard_publisher import DashboardPublisherRecipe
+from backend.app.recipes.reporting.threshold_alert_monitor import ThresholdAlertMonitorRecipe
+from backend.app.recipes.reporting.bi_tool_export import BiToolExportRecipe
+from backend.app.recipes.security.row_level_access_control import RowLevelAccessControlRecipe
+from backend.app.recipes.security.audit_trail_logger import AuditTrailLoggerRecipe
+from backend.app.recipes.security.credential_rotation_manager import CredentialRotationManagerRecipe
+from backend.app.recipes.security.encryption_toggle import EncryptionToggleRecipe
 from backend.app.recipes.preprocessing.sql_step import SQLStepRecipe
 from backend.app.recipes.preprocessing.limit import LimitRecipe
 from backend.app.recipes.preprocessing.sort_rows import SortRecipe
@@ -264,6 +284,14 @@ def register_all_recipes():
     recipe_registry.register(MQTTStreamRecipe())
     recipe_registry.register(WebSocketListenerRecipe())
     recipe_registry.register(EventBusPublisherRecipe())
+    recipe_registry.register(CDCIngestionRecipe())
+    recipe_registry.register(CDCReplicatorRecipe())
+    recipe_registry.register(FTPSFTPWatcherRecipe())
+    recipe_registry.register(FileSystemWatcherRecipe())
+    recipe_registry.register(EmailAttachmentExtractorRecipe())
+    recipe_registry.register(WebScraperRecipe())
+    recipe_registry.register(RSSAtomAggregatorRecipe())
+    recipe_registry.register(ArchiveUnpackerRecipe())
     recipe_registry.register(DatasetJoinRecipe())
     recipe_registry.register(WebhookTriggerRecipe())
     recipe_registry.register(CronScheduleTriggerRecipe())
@@ -352,6 +380,20 @@ def register_all_recipes():
     recipe_registry.register(MergeDatasetsRecipe())
     recipe_registry.register(LoopBatchRecipe())
     recipe_registry.register(DelayRecipe())
+    recipe_registry.register(SubPipelineCallRecipe())
+    recipe_registry.register(RetryErrorHandlerRecipe())
+    recipe_registry.register(BatchSchedulerRecipe())
+    recipe_registry.register(DeadLetterQueueRecipe())
+    # Reporting & Delivery
+    recipe_registry.register(ScheduledReportGeneratorRecipe())
+    recipe_registry.register(DashboardPublisherRecipe())
+    recipe_registry.register(ThresholdAlertMonitorRecipe())
+    recipe_registry.register(BiToolExportRecipe())
+    # Security & Access
+    recipe_registry.register(RowLevelAccessControlRecipe())
+    recipe_registry.register(AuditTrailLoggerRecipe())
+    recipe_registry.register(CredentialRotationManagerRecipe())
+    recipe_registry.register(EncryptionToggleRecipe())
     recipe_registry.register(SQLStepRecipe())
     recipe_registry.register(CustomPythonStepRecipe())
     recipe_registry.register(LimitRecipe())
