@@ -159,6 +159,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "rss_atom_aggregator": ("Ingestion & Orchestration", "File & Web Ingestion"),
     "archive_unpacker": ("Ingestion & Orchestration", "File & Web Ingestion"),
     "sub_pipeline_call": ("Ingestion & Orchestration", "Control Flow & Reliability"),
+    "retry_error_handler": ("Ingestion & Orchestration", "Control Flow & Reliability"),
 
     # Unsupervised & Dimensionality Reduction
     "clustering": ("Modeling", "Unsupervised & Dimensionality Reduction"),
@@ -534,6 +535,9 @@ class RecipeRegistry:
             "sub_pipeline": "sub_pipeline_call",
             "call_pipeline": "sub_pipeline_call",
             "subworkflow": "sub_pipeline_call",
+            "retry_wrapper": "retry_error_handler",
+            "error_handler": "retry_error_handler",
+            "retry_policy": "retry_error_handler",
         }
 
 

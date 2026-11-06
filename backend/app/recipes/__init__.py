@@ -116,6 +116,7 @@ from backend.app.recipes.flow_control.merge_node import MergeDatasetsRecipe
 from backend.app.recipes.flow_control.loop_node import LoopBatchRecipe
 from backend.app.recipes.flow_control.delay_node import DelayRecipe
 from backend.app.recipes.flow_control.sub_pipeline_call import SubPipelineCallRecipe
+from backend.app.recipes.flow_control.retry_error_handler import RetryErrorHandlerRecipe
 from backend.app.recipes.preprocessing.sql_step import SQLStepRecipe
 from backend.app.recipes.preprocessing.limit import LimitRecipe
 from backend.app.recipes.preprocessing.sort_rows import SortRecipe
@@ -370,6 +371,7 @@ def register_all_recipes():
     recipe_registry.register(LoopBatchRecipe())
     recipe_registry.register(DelayRecipe())
     recipe_registry.register(SubPipelineCallRecipe())
+    recipe_registry.register(RetryErrorHandlerRecipe())
     recipe_registry.register(SQLStepRecipe())
     recipe_registry.register(CustomPythonStepRecipe())
     recipe_registry.register(LimitRecipe())

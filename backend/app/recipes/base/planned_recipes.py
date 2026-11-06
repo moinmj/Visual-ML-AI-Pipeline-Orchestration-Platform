@@ -104,7 +104,7 @@ _PLANNED: List[Tuple[str, str, str, List[Tuple[str, str, str, str]]]] = [
     ]),
     ("Ingestion & Orchestration", "Control Flow & Reliability", "flow_control", [
 
-        ("retry_error_handler", "Retry / Error-Handling Wrapper", "transform", "Retries a failing step with backoff and routes errors to a fallback path."),
+
         ("batch_scheduler", "Batch Scheduler with Dependency Graph", "transform", "Schedules batches of jobs that run in order of their dependencies."),
         ("dead_letter_queue", "Dead-Letter Queue Handler", "transform", "Collects rows or events that failed processing for review and replay."),
     ]),
