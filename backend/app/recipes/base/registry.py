@@ -160,6 +160,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "archive_unpacker": ("Ingestion & Orchestration", "File & Web Ingestion"),
     "sub_pipeline_call": ("Ingestion & Orchestration", "Control Flow & Reliability"),
     "retry_error_handler": ("Ingestion & Orchestration", "Control Flow & Reliability"),
+    "batch_scheduler": ("Ingestion & Orchestration", "Control Flow & Reliability"),
 
     # Unsupervised & Dimensionality Reduction
     "clustering": ("Modeling", "Unsupervised & Dimensionality Reduction"),
@@ -538,6 +539,9 @@ class RecipeRegistry:
             "retry_wrapper": "retry_error_handler",
             "error_handler": "retry_error_handler",
             "retry_policy": "retry_error_handler",
+            "dag_scheduler": "batch_scheduler",
+            "job_scheduler": "batch_scheduler",
+            "batch_orchestrator": "batch_scheduler",
         }
 
 
