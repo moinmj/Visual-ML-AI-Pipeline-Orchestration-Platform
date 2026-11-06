@@ -156,6 +156,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "file_system_watcher": ("Ingestion & Orchestration", "File & Web Ingestion"),
     "email_attachment_extractor": ("Ingestion & Orchestration", "File & Web Ingestion"),
     "web_scraper": ("Ingestion & Orchestration", "File & Web Ingestion"),
+    "rss_atom_aggregator": ("Ingestion & Orchestration", "File & Web Ingestion"),
 
     # Unsupervised & Dimensionality Reduction
     "clustering": ("Modeling", "Unsupervised & Dimensionality Reduction"),
@@ -522,6 +523,9 @@ class RecipeRegistry:
             "html_table_extractor": "web_scraper",
             "html_scraper": "web_scraper",
             "page_scraper": "web_scraper",
+            "rss_aggregator": "rss_atom_aggregator",
+            "atom_aggregator": "rss_atom_aggregator",
+            "feed_aggregator": "rss_atom_aggregator",
         }
 
 

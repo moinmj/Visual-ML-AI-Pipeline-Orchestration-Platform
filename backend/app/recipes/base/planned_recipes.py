@@ -99,7 +99,7 @@ _PLANNED: List[Tuple[str, str, str, List[Tuple[str, str, str, str]]]] = [
 
 
 
-        ("rss_atom_aggregator", "RSS/Atom Aggregator (with dedup)", "source", "Aggregates items from multiple RSS/Atom feeds and removes duplicates."),
+
         ("archive_unpacker", "Zip/Archive Unpacker", "source", "Unpacks ZIP/TAR archives and loads the contained data files."),
     ]),
     ("Ingestion & Orchestration", "Control Flow & Reliability", "flow_control", [

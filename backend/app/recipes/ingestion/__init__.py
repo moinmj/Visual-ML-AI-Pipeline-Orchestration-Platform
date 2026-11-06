@@ -23,6 +23,7 @@ from backend.app.recipes.ingestion.ftp_sftp_watcher import FTPSFTPWatcherRecipe
 from backend.app.recipes.ingestion.file_system_watcher import FileSystemWatcherRecipe
 from backend.app.recipes.ingestion.email_attachment_extractor import EmailAttachmentExtractorRecipe
 from backend.app.recipes.ingestion.web_scraper import WebScraperRecipe
+from backend.app.recipes.ingestion.rss_atom_aggregator import RSSAtomAggregatorRecipe
 
 __all__ = [
     "CSVLoaderRecipe",
@@ -50,4 +51,5 @@ __all__ = [
     "FileSystemWatcherRecipe",
     "EmailAttachmentExtractorRecipe",
     "WebScraperRecipe",
+    "RSSAtomAggregatorRecipe",
 ]
