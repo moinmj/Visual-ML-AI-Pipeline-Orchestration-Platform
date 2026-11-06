@@ -106,7 +106,7 @@ _PLANNED: List[Tuple[str, str, str, List[Tuple[str, str, str, str]]]] = [
 
 
 
-        ("dead_letter_queue", "Dead-Letter Queue Handler", "transform", "Collects rows or events that failed processing for review and replay."),
+
     ]),
 
     # ------------------------------------------------------------------ 2. Data Preparation & Transformation (30)

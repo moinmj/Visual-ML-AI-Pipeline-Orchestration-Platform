@@ -7,6 +7,7 @@ from backend.app.recipes.flow_control.delay_node import DelayRecipe
 from backend.app.recipes.flow_control.sub_pipeline_call import SubPipelineCallRecipe
 from backend.app.recipes.flow_control.retry_error_handler import RetryErrorHandlerRecipe
 from backend.app.recipes.flow_control.batch_scheduler import BatchSchedulerRecipe
+from backend.app.recipes.flow_control.dead_letter_queue import DeadLetterQueueRecipe
 
 __all__ = [
     "IfConditionRecipe",
@@ -18,4 +19,5 @@ __all__ = [
     "SubPipelineCallRecipe",
     "RetryErrorHandlerRecipe",
     "BatchSchedulerRecipe",
+    "DeadLetterQueueRecipe",
 ]

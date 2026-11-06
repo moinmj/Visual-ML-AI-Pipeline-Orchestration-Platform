@@ -161,6 +161,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "sub_pipeline_call": ("Ingestion & Orchestration", "Control Flow & Reliability"),
     "retry_error_handler": ("Ingestion & Orchestration", "Control Flow & Reliability"),
     "batch_scheduler": ("Ingestion & Orchestration", "Control Flow & Reliability"),
+    "dead_letter_queue": ("Ingestion & Orchestration", "Control Flow & Reliability"),
 
     # Unsupervised & Dimensionality Reduction
     "clustering": ("Modeling", "Unsupervised & Dimensionality Reduction"),
@@ -542,6 +543,9 @@ class RecipeRegistry:
             "dag_scheduler": "batch_scheduler",
             "job_scheduler": "batch_scheduler",
             "batch_orchestrator": "batch_scheduler",
+            "dlq": "dead_letter_queue",
+            "dlq_handler": "dead_letter_queue",
+            "poison_pill_handler": "dead_letter_queue",
         }
 
 
