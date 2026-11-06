@@ -96,7 +96,7 @@ _PLANNED: List[Tuple[str, str, str, List[Tuple[str, str, str, str]]]] = [
     ]),
     ("Ingestion & Orchestration", "File & Web Ingestion", "ingestion", [
 
-        ("file_system_watcher", "File System Watcher", "source", "Watches a folder on a file system and loads new or changed files."),
+
         ("email_attachment_extractor", "Email Attachment Extractor", "source", "Reads a mailbox and extracts CSV/Excel attachments as datasets."),
         ("web_scraper", "Web Scraper / HTML Table Extractor", "source", "Extracts HTML tables or page content from a web page into a table."),
         ("rss_atom_aggregator", "RSS/Atom Aggregator (with dedup)", "source", "Aggregates items from multiple RSS/Atom feeds and removes duplicates."),
