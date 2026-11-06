@@ -152,6 +152,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "event_bus_publisher": ("Ingestion & Orchestration", "Streaming & Change Data"),
     "cdc_ingestion": ("Ingestion & Orchestration", "Streaming & Change Data"),
     "cdc_replicator": ("Ingestion & Orchestration", "Streaming & Change Data"),
+    "ftp_sftp_watcher": ("Ingestion & Orchestration", "File & Web Ingestion"),
 
     # Unsupervised & Dimensionality Reduction
     "clustering": ("Modeling", "Unsupervised & Dimensionality Reduction"),
@@ -505,6 +506,10 @@ class RecipeRegistry:
             "pipeline_notification": "notifications",
             "alert_sink": "notifications",
             "webhook_notification": "notifications",
+            "ftp_watcher": "ftp_sftp_watcher",
+            "sftp_watcher": "ftp_sftp_watcher",
+            "ftp_connector": "ftp_sftp_watcher",
+            "sftp_connector": "ftp_sftp_watcher",
         }
 
 

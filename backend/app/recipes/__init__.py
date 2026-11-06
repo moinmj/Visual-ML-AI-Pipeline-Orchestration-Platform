@@ -20,6 +20,7 @@ from backend.app.recipes.ingestion.websocket_listener import WebSocketListenerRe
 from backend.app.recipes.ingestion.event_bus_publisher import EventBusPublisherRecipe
 from backend.app.recipes.ingestion.cdc_ingestion import CDCIngestionRecipe
 from backend.app.recipes.ingestion.cdc_replicator import CDCReplicatorRecipe
+from backend.app.recipes.ingestion.ftp_sftp_watcher import FTPSFTPWatcherRecipe
 from backend.app.recipes.preprocessing.custom_python_step import CustomPythonStepRecipe
 from backend.app.recipes.preprocessing.missing_values import MissingValueImputerRecipe
 from backend.app.recipes.preprocessing.scaling import FeatureScalerRecipe
@@ -268,6 +269,7 @@ def register_all_recipes():
     recipe_registry.register(EventBusPublisherRecipe())
     recipe_registry.register(CDCIngestionRecipe())
     recipe_registry.register(CDCReplicatorRecipe())
+    recipe_registry.register(FTPSFTPWatcherRecipe())
     recipe_registry.register(DatasetJoinRecipe())
     recipe_registry.register(WebhookTriggerRecipe())
     recipe_registry.register(CronScheduleTriggerRecipe())

@@ -95,7 +95,7 @@ _PLANNED: List[Tuple[str, str, str, List[Tuple[str, str, str, str]]]] = [
         ("redshift_connector", "Redshift Connector", "source", "Reads tables or query results from Amazon Redshift."),
     ]),
     ("Ingestion & Orchestration", "File & Web Ingestion", "ingestion", [
-        ("ftp_sftp_watcher", "FTP/SFTP File Watcher", "source", "Watches an FTP/SFTP folder and loads new files as they arrive."),
+
         ("file_system_watcher", "File System Watcher", "source", "Watches a folder on a file system and loads new or changed files."),
         ("email_attachment_extractor", "Email Attachment Extractor", "source", "Reads a mailbox and extracts CSV/Excel attachments as datasets."),
         ("web_scraper", "Web Scraper / HTML Table Extractor", "source", "Extracts HTML tables or page content from a web page into a table."),

@@ -19,6 +19,7 @@ from backend.app.recipes.ingestion.websocket_listener import WebSocketListenerRe
 from backend.app.recipes.ingestion.event_bus_publisher import EventBusPublisherRecipe
 from backend.app.recipes.ingestion.cdc_ingestion import CDCIngestionRecipe
 from backend.app.recipes.ingestion.cdc_replicator import CDCReplicatorRecipe
+from backend.app.recipes.ingestion.ftp_sftp_watcher import FTPSFTPWatcherRecipe
 
 __all__ = [
     "CSVLoaderRecipe",
@@ -41,5 +42,6 @@ __all__ = [
     "WebSocketListenerRecipe",
     "EventBusPublisherRecipe",
     "CDCIngestionRecipe",
-    "CDCReplicatorRecipe"
+    "CDCReplicatorRecipe",
+    "FTPSFTPWatcherRecipe",
 ]
