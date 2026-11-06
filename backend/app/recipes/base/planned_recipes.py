@@ -100,7 +100,7 @@ _PLANNED: List[Tuple[str, str, str, List[Tuple[str, str, str, str]]]] = [
 
 
 
-        ("archive_unpacker", "Zip/Archive Unpacker", "source", "Unpacks ZIP/TAR archives and loads the contained data files."),
+
     ]),
     ("Ingestion & Orchestration", "Control Flow & Reliability", "flow_control", [
         ("sub_pipeline_call", "Sub-Pipeline Call", "transform", "Runs another saved pipeline as a single step and returns its output."),

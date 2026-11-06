@@ -24,6 +24,7 @@ from backend.app.recipes.ingestion.file_system_watcher import FileSystemWatcherR
 from backend.app.recipes.ingestion.email_attachment_extractor import EmailAttachmentExtractorRecipe
 from backend.app.recipes.ingestion.web_scraper import WebScraperRecipe
 from backend.app.recipes.ingestion.rss_atom_aggregator import RSSAtomAggregatorRecipe
+from backend.app.recipes.ingestion.archive_unpacker import ArchiveUnpackerRecipe
 
 __all__ = [
     "CSVLoaderRecipe",
@@ -52,4 +53,5 @@ __all__ = [
     "EmailAttachmentExtractorRecipe",
     "WebScraperRecipe",
     "RSSAtomAggregatorRecipe",
+    "ArchiveUnpackerRecipe",
 ]
