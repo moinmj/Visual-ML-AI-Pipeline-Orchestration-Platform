@@ -119,6 +119,10 @@ from backend.app.recipes.flow_control.sub_pipeline_call import SubPipelineCallRe
 from backend.app.recipes.flow_control.retry_error_handler import RetryErrorHandlerRecipe
 from backend.app.recipes.flow_control.batch_scheduler import BatchSchedulerRecipe
 from backend.app.recipes.flow_control.dead_letter_queue import DeadLetterQueueRecipe
+from backend.app.recipes.reporting.scheduled_report_generator import ScheduledReportGeneratorRecipe
+from backend.app.recipes.reporting.dashboard_publisher import DashboardPublisherRecipe
+from backend.app.recipes.reporting.threshold_alert_monitor import ThresholdAlertMonitorRecipe
+from backend.app.recipes.reporting.bi_tool_export import BiToolExportRecipe
 from backend.app.recipes.preprocessing.sql_step import SQLStepRecipe
 from backend.app.recipes.preprocessing.limit import LimitRecipe
 from backend.app.recipes.preprocessing.sort_rows import SortRecipe
@@ -376,6 +380,11 @@ def register_all_recipes():
     recipe_registry.register(RetryErrorHandlerRecipe())
     recipe_registry.register(BatchSchedulerRecipe())
     recipe_registry.register(DeadLetterQueueRecipe())
+    # Reporting & Delivery
+    recipe_registry.register(ScheduledReportGeneratorRecipe())
+    recipe_registry.register(DashboardPublisherRecipe())
+    recipe_registry.register(ThresholdAlertMonitorRecipe())
+    recipe_registry.register(BiToolExportRecipe())
     recipe_registry.register(SQLStepRecipe())
     recipe_registry.register(CustomPythonStepRecipe())
     recipe_registry.register(LimitRecipe())

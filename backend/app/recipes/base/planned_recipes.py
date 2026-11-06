@@ -211,10 +211,10 @@ _PLANNED: List[Tuple[str, str, str, List[Tuple[str, str, str, str]]]] = [
 
     # ------------------------------------------------------------------ 8. Reporting & Delivery (4)
     ("Reporting & Delivery", "Reports & Alerts", "reporting", [
-        ("scheduled_report_generator", "Scheduled Report Generator (PDF/Excel snapshot)", "report", "Generates PDF or Excel report snapshots on a schedule."),
-        ("dashboard_publisher", "Dashboard Embed / Publish Operator", "sink", "Publishes results to a dashboard or produces an embeddable view."),
-        ("threshold_alert_monitor", "Alert / Threshold Monitor", "monitor", "Raises alerts when a metric crosses a configured threshold."),
-        ("bi_tool_export", "BI Tool Export (Tableau / Power BI / Looker)", "sink", "Exports results in a format ready for Tableau, Power BI or Looker."),
+
+
+
+
     ]),
 
     # ------------------------------------------------------------------ 9. Security & Access (4)

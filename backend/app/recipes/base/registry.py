@@ -209,6 +209,18 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "readonly_pipeline_snapshot": ("Canvas Tools", "Versioning & Reuse"),
     "secrets_manager_block": ("Canvas Tools", "Configuration"),
     "parameter_sweep_runner": ("Canvas Tools", "Configuration"),
+
+    # Reporting & Delivery
+    "scheduled_report_generator": ("Reporting & Delivery", "Reports & Alerts"),
+    "dashboard_publisher": ("Reporting & Delivery", "Reports & Alerts"),
+    "threshold_alert_monitor": ("Reporting & Delivery", "Reports & Alerts"),
+    "bi_tool_export": ("Reporting & Delivery", "Reports & Alerts"),
+
+    # Security & Access
+    "row_level_access_control": ("Security & Access", "Access & Audit"),
+    "audit_trail_logger": ("Security & Access", "Access & Audit"),
+    "credential_rotation_manager": ("Security & Access", "Access & Audit"),
+    "encryption_toggle": ("Security & Access", "Access & Audit"),
 }
 
 
@@ -546,6 +558,17 @@ class RecipeRegistry:
             "dlq": "dead_letter_queue",
             "dlq_handler": "dead_letter_queue",
             "poison_pill_handler": "dead_letter_queue",
+            "scheduled_report": "scheduled_report_generator",
+            "report_generator": "scheduled_report_generator",
+            "pdf_excel_report": "scheduled_report_generator",
+            "dashboard_embed": "dashboard_publisher",
+            "publish_dashboard": "dashboard_publisher",
+            "threshold_monitor": "threshold_alert_monitor",
+            "alert_monitor": "threshold_alert_monitor",
+            "bi_export": "bi_tool_export",
+            "tableau_export": "bi_tool_export",
+            "powerbi_export": "bi_tool_export",
+            "looker_export": "bi_tool_export",
         }
 
 
