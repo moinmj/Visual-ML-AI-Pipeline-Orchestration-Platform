@@ -219,10 +219,10 @@ _PLANNED: List[Tuple[str, str, str, List[Tuple[str, str, str, str]]]] = [
 
     # ------------------------------------------------------------------ 9. Security & Access (4)
     ("Security & Access", "Access & Audit", "security", [
-        ("row_level_access_control", "Row-Level Access Control Operator", "transform", "Restricts which rows each user or role can see."),
-        ("audit_trail_logger", "Audit Trail Logger", "sink", "Logs who ran what, when, and on which data."),
-        ("credential_rotation_manager", "API Key / Credential Rotation Manager", "canvas", "Rotates API keys and credentials used by pipeline nodes on a schedule."),
-        ("encryption_toggle", "Encryption At-Rest / In-Transit Toggle", "canvas", "Controls encryption of pipeline data at rest and in transit."),
+
+
+
+
     ]),
 ]
 

@@ -123,6 +123,10 @@ from backend.app.recipes.reporting.scheduled_report_generator import ScheduledRe
 from backend.app.recipes.reporting.dashboard_publisher import DashboardPublisherRecipe
 from backend.app.recipes.reporting.threshold_alert_monitor import ThresholdAlertMonitorRecipe
 from backend.app.recipes.reporting.bi_tool_export import BiToolExportRecipe
+from backend.app.recipes.security.row_level_access_control import RowLevelAccessControlRecipe
+from backend.app.recipes.security.audit_trail_logger import AuditTrailLoggerRecipe
+from backend.app.recipes.security.credential_rotation_manager import CredentialRotationManagerRecipe
+from backend.app.recipes.security.encryption_toggle import EncryptionToggleRecipe
 from backend.app.recipes.preprocessing.sql_step import SQLStepRecipe
 from backend.app.recipes.preprocessing.limit import LimitRecipe
 from backend.app.recipes.preprocessing.sort_rows import SortRecipe
@@ -385,6 +389,11 @@ def register_all_recipes():
     recipe_registry.register(DashboardPublisherRecipe())
     recipe_registry.register(ThresholdAlertMonitorRecipe())
     recipe_registry.register(BiToolExportRecipe())
+    # Security & Access
+    recipe_registry.register(RowLevelAccessControlRecipe())
+    recipe_registry.register(AuditTrailLoggerRecipe())
+    recipe_registry.register(CredentialRotationManagerRecipe())
+    recipe_registry.register(EncryptionToggleRecipe())
     recipe_registry.register(SQLStepRecipe())
     recipe_registry.register(CustomPythonStepRecipe())
     recipe_registry.register(LimitRecipe())

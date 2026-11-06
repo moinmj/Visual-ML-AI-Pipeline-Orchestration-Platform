@@ -569,6 +569,15 @@ class RecipeRegistry:
             "tableau_export": "bi_tool_export",
             "powerbi_export": "bi_tool_export",
             "looker_export": "bi_tool_export",
+            "rlac": "row_level_access_control",
+            "row_access_control": "row_level_access_control",
+            "row_level_security": "row_level_access_control",
+            "audit_logger": "audit_trail_logger",
+            "audit_trail": "audit_trail_logger",
+            "credential_rotation": "credential_rotation_manager",
+            "key_rotation": "credential_rotation_manager",
+            "encryption": "encryption_toggle",
+            "data_encryption": "encryption_toggle",
         }
 
 
