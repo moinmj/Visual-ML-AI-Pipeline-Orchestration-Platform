@@ -516,3 +516,4 @@ class NotificationsRecipe(BaseRecipe):
             err = f"SMTP Error: {str(e)}"
             logger.warning(f"Email delivery failed: {err}")
             return "FAILED", email_record, err
+

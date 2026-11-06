@@ -11,6 +11,7 @@ from backend.app.recipes.ingestion.bigquery_connector import BigQueryConnectorRe
 from backend.app.recipes.ingestion.redshift_connector import RedshiftConnectorRecipe
 from backend.app.recipes.ingestion.s3_data_lake_connector import S3DataLakeConnectorRecipe
 from backend.app.recipes.ingestion.azure_data_lake_connector import AzureDataLakeConnectorRecipe
+from backend.app.recipes.ingestion.gcs_connector import GCSConnectorRecipe
 from backend.app.recipes.ingestion.kafka_consumer import KafkaConsumerRecipe
 from backend.app.recipes.ingestion.rabbitmq_consumer import RabbitMQConsumerRecipe
 from backend.app.recipes.ingestion.mqtt_iot_stream import MQTTStreamRecipe
@@ -31,6 +32,7 @@ __all__ = [
     "RedshiftConnectorRecipe",
     "S3DataLakeConnectorRecipe",
     "AzureDataLakeConnectorRecipe",
+    "GCSConnectorRecipe",
     "KafkaConsumerRecipe",
     "RabbitMQConsumerRecipe",
     "MQTTStreamRecipe",

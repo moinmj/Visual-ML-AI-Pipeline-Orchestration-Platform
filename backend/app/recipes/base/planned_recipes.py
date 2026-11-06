@@ -94,11 +94,6 @@ _PLANNED: List[Tuple[str, str, str, List[Tuple[str, str, str, str]]]] = [
         ("bigquery_connector", "BigQuery Connector", "source", "Reads tables or query results from Google BigQuery."),
         ("redshift_connector", "Redshift Connector", "source", "Reads tables or query results from Amazon Redshift."),
     ]),
-    ("Ingestion & Orchestration", "Cloud Storage Connectors", "ingestion", [
-        ("s3_connector", "S3 Connector", "source", "Loads CSV, Parquet or JSON files from an Amazon S3 (or S3-compatible) bucket."),
-        ("gcs_connector", "GCS Connector", "source", "Loads CSV, Parquet or JSON files from a Google Cloud Storage bucket."),
-        ("azure_blob_connector", "Azure Blob Connector", "source", "Loads CSV, Parquet or JSON files from Azure Blob Storage."),
-    ]),
     ("Ingestion & Orchestration", "Streaming & Change Data", "ingestion", [
         ("kafka_consumer", "Kafka Consumer", "source", "Consumes messages from Kafka topics into micro-batches of rows."),
         ("mqtt_iot_stream", "MQTT / IoT Sensor Stream", "source", "Subscribes to MQTT topics to ingest IoT sensor readings."),

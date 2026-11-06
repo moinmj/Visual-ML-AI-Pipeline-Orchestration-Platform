@@ -208,3 +208,4 @@ def test_notifications_http_error_fail_on_error_true(mock_urlopen):
     with pytest.raises(ExecutionException) as exc_info:
         recipe.execute(inputs={}, config=config)
     assert "Notification dispatch failed" in str(exc_info.value)
+
