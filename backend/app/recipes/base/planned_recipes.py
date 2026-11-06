@@ -86,9 +86,6 @@ _PORTS: Dict[str, Tuple[List[RecipePort], List[RecipePort]]] = {
 # (group, subgroup, category, [(recipe_id, name, port_kind, description), ...])
 _PLANNED: List[Tuple[str, str, str, List[Tuple[str, str, str, str]]]] = [
     # ------------------------------------------------------------------ 1. Ingestion & Orchestration (28)
-    ("Ingestion & Orchestration", "Load", "ingestion", [
-        ("manual_data_entry", "Manual Data Entry", "source", "Type or paste rows directly into a small editable table and use it as pipeline input."),
-    ]),
     ("Ingestion & Orchestration", "Output", "ingestion", [
         ("notifications", "Notifications", "sink", "Sends a generic pipeline notification to a configured channel (email, chat or webhook)."),
     ]),

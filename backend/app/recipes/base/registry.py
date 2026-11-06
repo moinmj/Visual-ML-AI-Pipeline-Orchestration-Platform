@@ -9,6 +9,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "cron_trigger": ("Ingestion & Orchestration", "Triggers"),
     "email_trigger_imap": ("Ingestion & Orchestration", "Triggers"),
     "csv_loader": ("Ingestion & Orchestration", "Load"),
+    "manual_data_entry": ("Ingestion & Orchestration", "Load"),
     "export_writer": ("Ingestion & Orchestration", "Output"),
     "api_response_endpoint": ("Ingestion & Orchestration", "Output"),
     "dataset_join": ("Data Preparation & Transformation", "Combine/Structure"),
@@ -479,6 +480,10 @@ class RecipeRegistry:
             "secrets_block": "secrets_manager_block",
             "parameter_sweep": "parameter_sweep_runner",
             "param_sweep": "parameter_sweep_runner",
+            "manual_entry": "manual_data_entry",
+            "manual_table": "manual_data_entry",
+            "inline_data": "manual_data_entry",
+            "editable_table": "manual_data_entry",
         }
 
 

@@ -1,4 +1,5 @@
 from backend.app.recipes.ingestion.csv_loader import CSVLoaderRecipe
+from backend.app.recipes.ingestion.manual_data_entry import ManualDataEntryRecipe
 from backend.app.recipes.ingestion.export_writer import ExportWriterRecipe
 from backend.app.recipes.ingestion.api_response_endpoint import ApiResponseEndpointRecipe
 from backend.app.recipes.ingestion.postgresql_connector import PostgreSQLConnectorRecipe
@@ -17,6 +18,7 @@ from backend.app.recipes.ingestion.event_bus_publisher import EventBusPublisherR
 
 __all__ = [
     "CSVLoaderRecipe",
+    "ManualDataEntryRecipe",
     "ExportWriterRecipe",
     "ApiResponseEndpointRecipe",
     "PostgreSQLConnectorRecipe",
