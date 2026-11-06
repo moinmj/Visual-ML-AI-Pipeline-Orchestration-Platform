@@ -98,7 +98,6 @@ _PLANNED: List[Tuple[str, str, str, List[Tuple[str, str, str, str]]]] = [
         ("kafka_consumer", "Kafka Consumer", "source", "Consumes messages from Kafka topics into micro-batches of rows."),
         ("mqtt_iot_stream", "MQTT / IoT Sensor Stream", "source", "Subscribes to MQTT topics to ingest IoT sensor readings."),
         ("websocket_listener", "WebSocket Listener", "source", "Listens to a WebSocket feed and collects incoming messages as rows."),
-        ("cdc_ingestion", "Change Data Capture (CDC) Ingestion", "source", "Captures inserts, updates and deletes from a database change log."),
         ("cdc_replicator", "Database CDC Replicator (real-time sync)", "source", "Continuously replicates database changes into the platform in near real time."),
         ("event_bus_publisher", "Event Bus Publisher (Kafka/RabbitMQ/SNS)", "sink", "Publishes rows or pipeline events to Kafka, RabbitMQ or Amazon SNS."),
     ]),

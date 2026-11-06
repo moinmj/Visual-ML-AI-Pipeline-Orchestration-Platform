@@ -18,6 +18,7 @@ from backend.app.recipes.ingestion.rabbitmq_consumer import RabbitMQConsumerReci
 from backend.app.recipes.ingestion.mqtt_iot_stream import MQTTStreamRecipe
 from backend.app.recipes.ingestion.websocket_listener import WebSocketListenerRecipe
 from backend.app.recipes.ingestion.event_bus_publisher import EventBusPublisherRecipe
+from backend.app.recipes.ingestion.cdc_ingestion import CDCIngestionRecipe
 from backend.app.recipes.preprocessing.custom_python_step import CustomPythonStepRecipe
 from backend.app.recipes.preprocessing.missing_values import MissingValueImputerRecipe
 from backend.app.recipes.preprocessing.scaling import FeatureScalerRecipe
@@ -264,6 +265,7 @@ def register_all_recipes():
     recipe_registry.register(MQTTStreamRecipe())
     recipe_registry.register(WebSocketListenerRecipe())
     recipe_registry.register(EventBusPublisherRecipe())
+    recipe_registry.register(CDCIngestionRecipe())
     recipe_registry.register(DatasetJoinRecipe())
     recipe_registry.register(WebhookTriggerRecipe())
     recipe_registry.register(CronScheduleTriggerRecipe())

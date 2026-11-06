@@ -150,6 +150,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "mqtt_iot_stream": ("Ingestion & Orchestration", "Streaming & Change Data"),
     "websocket_listener": ("Ingestion & Orchestration", "Streaming & Change Data"),
     "event_bus_publisher": ("Ingestion & Orchestration", "Streaming & Change Data"),
+    "cdc_ingestion": ("Ingestion & Orchestration", "Streaming & Change Data"),
 
     # Unsupervised & Dimensionality Reduction
     "clustering": ("Modeling", "Unsupervised & Dimensionality Reduction"),
@@ -348,6 +349,11 @@ class RecipeRegistry:
             "event_bus": "event_bus_publisher",
             "event_publisher": "event_bus_publisher",
             "kafka_publisher": "event_bus_publisher",
+            "cdc": "cdc_ingestion",
+            "change_data_capture": "cdc_ingestion",
+            "debezium": "cdc_ingestion",
+            "debezium_cdc": "cdc_ingestion",
+            "cdc_stream": "cdc_ingestion",
             "missing_values": "missing_value_imputer",
             "scaling": "feature_scaler",
             "embeddings": "embedding_generator",
