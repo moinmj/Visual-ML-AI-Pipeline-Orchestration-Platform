@@ -227,3 +227,4 @@ def test_cdc_ingestion_invalid_json_raises():
     with pytest.raises(ValidationException) as exc_info:
         recipe.execute(inputs={}, config={"raw_events": "[[{unclosed json"})
     assert "Invalid JSON in raw_events" in str(exc_info.value)
+

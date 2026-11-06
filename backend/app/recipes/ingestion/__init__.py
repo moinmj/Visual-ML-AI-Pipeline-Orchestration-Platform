@@ -18,6 +18,7 @@ from backend.app.recipes.ingestion.mqtt_iot_stream import MQTTStreamRecipe
 from backend.app.recipes.ingestion.websocket_listener import WebSocketListenerRecipe
 from backend.app.recipes.ingestion.event_bus_publisher import EventBusPublisherRecipe
 from backend.app.recipes.ingestion.cdc_ingestion import CDCIngestionRecipe
+from backend.app.recipes.ingestion.cdc_replicator import CDCReplicatorRecipe
 
 __all__ = [
     "CSVLoaderRecipe",
@@ -39,5 +40,6 @@ __all__ = [
     "MQTTStreamRecipe",
     "WebSocketListenerRecipe",
     "EventBusPublisherRecipe",
-    "CDCIngestionRecipe"
+    "CDCIngestionRecipe",
+    "CDCReplicatorRecipe"
 ]

@@ -94,13 +94,6 @@ _PLANNED: List[Tuple[str, str, str, List[Tuple[str, str, str, str]]]] = [
         ("bigquery_connector", "BigQuery Connector", "source", "Reads tables or query results from Google BigQuery."),
         ("redshift_connector", "Redshift Connector", "source", "Reads tables or query results from Amazon Redshift."),
     ]),
-    ("Ingestion & Orchestration", "Streaming & Change Data", "ingestion", [
-        ("kafka_consumer", "Kafka Consumer", "source", "Consumes messages from Kafka topics into micro-batches of rows."),
-        ("mqtt_iot_stream", "MQTT / IoT Sensor Stream", "source", "Subscribes to MQTT topics to ingest IoT sensor readings."),
-        ("websocket_listener", "WebSocket Listener", "source", "Listens to a WebSocket feed and collects incoming messages as rows."),
-        ("cdc_replicator", "Database CDC Replicator (real-time sync)", "source", "Continuously replicates database changes into the platform in near real time."),
-        ("event_bus_publisher", "Event Bus Publisher (Kafka/RabbitMQ/SNS)", "sink", "Publishes rows or pipeline events to Kafka, RabbitMQ or Amazon SNS."),
-    ]),
     ("Ingestion & Orchestration", "File & Web Ingestion", "ingestion", [
         ("ftp_sftp_watcher", "FTP/SFTP File Watcher", "source", "Watches an FTP/SFTP folder and loads new files as they arrive."),
         ("file_system_watcher", "File System Watcher", "source", "Watches a folder on a file system and loads new or changed files."),

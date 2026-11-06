@@ -151,6 +151,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "websocket_listener": ("Ingestion & Orchestration", "Streaming & Change Data"),
     "event_bus_publisher": ("Ingestion & Orchestration", "Streaming & Change Data"),
     "cdc_ingestion": ("Ingestion & Orchestration", "Streaming & Change Data"),
+    "cdc_replicator": ("Ingestion & Orchestration", "Streaming & Change Data"),
 
     # Unsupervised & Dimensionality Reduction
     "clustering": ("Modeling", "Unsupervised & Dimensionality Reduction"),
@@ -354,6 +355,10 @@ class RecipeRegistry:
             "debezium": "cdc_ingestion",
             "debezium_cdc": "cdc_ingestion",
             "cdc_stream": "cdc_ingestion",
+            "replicator": "cdc_replicator",
+            "database_replicator": "cdc_replicator",
+            "cdc_sync": "cdc_replicator",
+            "db_replicator": "cdc_replicator",
             "missing_values": "missing_value_imputer",
             "scaling": "feature_scaler",
             "embeddings": "embedding_generator",
