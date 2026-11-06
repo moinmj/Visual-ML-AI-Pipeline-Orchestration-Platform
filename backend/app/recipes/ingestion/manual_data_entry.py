@@ -101,7 +101,7 @@ class ManualDataEntryRecipe(BaseRecipe):
                     "items": {"type": "string"},
                     "title": "Null Value Tokens",
                     "default": ["", "null", "NULL", "None", "NaN", "nan", "NA", "N/A"],
-                    "input_type": "list",
+                    "input_type": "tags",
                     "description": "List of string tokens to treat as null / missing values.",
                 },
                 "coerce_errors": {
