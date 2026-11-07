@@ -171,7 +171,7 @@ class WorkflowGraph(BaseModel):
             parents = parent_map[node.id]
 
             # Model Trainer Check: Trainer requires Train/Test Split or train data
-            if recipe.category == "training":
+            if recipe.category == "training" and node.recipe_id not in ["model_calibration", "ensemble_stacker"]:
                 has_split_parent = any("split" in p or "train" in p for p in parents)
                 if not has_split_parent and parents:
                     parent_recipes = [node_dict[p].recipe_id for p in parents if p in node_dict]
@@ -193,6 +193,25 @@ class WorkflowGraph(BaseModel):
                             f"Fix: Insert a '✂️ Train / Test Splitter' between data preparation and this trainer.",
                             node_id=node.id, recipe_id=node.recipe_id
                         )
+
+            # Model Calibration Check: Requires upstream trained model
+            if node.recipe_id == "model_calibration" and parents:
+                parent_recipes = [node_dict[p].recipe_id for p in parents if p in node_dict]
+                has_model_output = False
+                for r_id in parent_recipes:
+                    try:
+                        prec = recipe_registry.get(r_id)
+                        if "model" in getattr(prec, "output_types", []):
+                            has_model_output = True
+                            break
+                    except Exception:
+                        pass
+                if not has_model_output:
+                    add_error(
+                        f"❌ Incompatible Connection for '{node.id}' [{recipe.name}]: Model Calibration requires an upstream trained model (e.g. CatBoost, XGBoost, Random Forest). "
+                        f"Currently connected to '{', '.join(parents)}'.",
+                        node_id=node.id, recipe_id=node.recipe_id
+                    )
 
             # Dataset Join Check: Requires at least 2 incoming dataset connections
             if node.recipe_id == "dataset_join":

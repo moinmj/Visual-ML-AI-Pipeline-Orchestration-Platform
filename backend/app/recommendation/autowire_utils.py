@@ -66,14 +66,21 @@ def ensure_semantic_edge_handles(
             e["source_handle"] = "output_2"  # Te (Test Data port)
             e["target_handle"] = "input_2"   # Te (Test Data input port)
 
-        # Case B: Splitter -> Model Trainer or Resampler (Strictly Train Data 'Tr')
-        elif is_src_splitter and (is_src_trainer or "resampler" in tgt_recipe or "smote" in tgt_recipe or tgt_cat == "training"):
+        # Case B1: Splitter -> Model Trainer or Resampler (Strictly Train Data 'Tr')
+        elif is_src_splitter and tgt_recipe not in ["model_calibration"] and (is_src_trainer or "resampler" in tgt_recipe or "smote" in tgt_recipe or tgt_cat == "training"):
             e["source_handle"] = "output_1"  # Tr (Train Data port)
             if not e.get("target_handle"):
                 e["target_handle"] = "input"
 
-        # Case C: Model Trainer -> Model Evaluator (Strictly Trained Model 'M')
-        elif is_src_trainer and is_tgt_evaluator:
+        # Case B2: Model Trainer -> Model Calibration (Trained Model)
+        elif is_src_trainer and src_recipe not in ["model_calibration"] and (tgt_recipe == "model_calibration" or "calibrat" in tgt_recipe):
+            if not e.get("source_handle"):
+                e["source_handle"] = "output"
+            if not e.get("target_handle"):
+                e["target_handle"] = "input"
+
+        # Case C: Model Trainer or Calibration -> Model Evaluator (Strictly Trained/Calibrated Model 'M')
+        elif (is_src_trainer or src_recipe == "model_calibration" or "calibrat" in src_recipe) and is_tgt_evaluator:
             if not e.get("source_handle"):
                 e["source_handle"] = "output"
             e["target_handle"] = "input_1"       # M (Model port)
@@ -100,7 +107,15 @@ def ensure_semantic_edge_handles(
         # Case G: Switch Node Branching
         elif src_recipe == "switch":
             if not e.get("source_handle"):
-                e["source_handle"] = "case_1"
+                e["case_1"] = "case_1"
+
+        # Sync ReactFlow aliases
+        if e.get("source_handle"):
+            e["sourceHandle"] = e["source_handle"]
+            e["source_port"] = e["source_handle"]
+        if e.get("target_handle"):
+            e["targetHandle"] = e["target_handle"]
+            e["target_port"] = e["target_handle"]
 
         updated_edges.append(e)
 
