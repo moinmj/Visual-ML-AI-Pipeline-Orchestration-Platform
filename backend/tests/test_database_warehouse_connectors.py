@@ -681,20 +681,57 @@ def test_postgresql_connector_host_override_and_password_encoding():
     assert "Classic%40123@88.222.215.30:5432/walmart" in hp_params["connection_string"]
 
 
-def test_postgresql_connector_dropdown_schema_and_columns():
-    """Verify that schema_name, table_name, and columns are rendered with dropdowns / multi_select."""
+def test_postgresql_connector_schema_and_multi_table_and_column_isolation():
+    """Verify that schema properties have no static pre-populated enums, supports select_all_tables, multi-table lists, and strictly isolates 1 or 2 columns."""
     recipe = PostgreSQLConnectorRecipe()
     schema = recipe.get_schema()
     props = schema["properties"]
 
-    assert props["schema_name"]["input_type"] == "dropdown"
-    assert "public" in props["schema_name"]["enum"]
-
-    assert props["table_name"]["input_type"] == "dropdown"
-    assert "sales" in props["table_name"]["enum"]
-    assert "retail_sales" in props["table_name"]["enum"]
-
-    assert props["columns"]["input_type"] == "multi_select"
-    assert "invoice_id" in props["columns"]["enum"]
-    assert "total" in props["columns"]["enum"]
+    # 1. No static hardcoded enum before connection
+    assert "enum" not in props["schema_name"]
+    assert "enum" not in props["table_name"]
+    assert "enum" not in props["columns"]
+    assert props["select_all_tables"]["input_type"] == "checkbox"
     assert props["select_all_columns"]["input_type"] == "checkbox"
+
+    # 2. Strict 1 or 2 columns selection isolation (even if select_all_columns is left at True)
+    cfg_isolated_cols = {
+        "read_mode": "table",
+        "schema_name": "public",
+        "table_name": "sales",
+        "select_all_columns": True,  # User didn't uncheck checkbox
+        "columns": ["transaction_id", "amount"],  # But selected 2 specific columns
+        "limit": 5,
+        "simulation_mode": True,
+    }
+    res_iso = recipe.execute(inputs={}, config=cfg_isolated_cols)
+    df_iso = res_iso["dataframe"]
+    assert list(df_iso.columns) == ["transaction_id", "amount"]
+    assert len(df_iso) == 5
+
+    # 3. Multi-table selection
+    cfg_multi_tables = {
+        "read_mode": "table",
+        "schema_name": "public",
+        "tables": ["sales", "retail_sales"],
+        "limit": 4,
+        "simulation_mode": True,
+    }
+    res_multi = recipe.execute(inputs={}, config=cfg_multi_tables)
+    df_multi = res_multi["dataframe"]
+    assert "_table" in df_multi.columns
+    assert "tables" in res_multi
+    assert "sales" in res_multi["tables"]
+    assert "retail_sales" in res_multi["tables"]
+    assert len(df_multi) == 8
+
+    # 4. Select all tables checkbox enabled
+    cfg_all_tables = {
+        "read_mode": "table",
+        "schema_name": "public",
+        "select_all_tables": True,
+        "limit": 3,
+        "simulation_mode": True,
+    }
+    res_all_tbls = recipe.execute(inputs={}, config=cfg_all_tables)
+    assert res_all_tbls["output_summary"]["tables_count"] >= 1

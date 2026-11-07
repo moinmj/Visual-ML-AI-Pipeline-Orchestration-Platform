@@ -446,7 +446,7 @@ class WorkflowSchemaInferencer:
                 elif isinstance(cols_raw, str) and cols_raw.strip():
                     chosen_cols = [c.strip() for c in cols_raw.split(",") if c.strip() and c.strip() != "*"]
 
-                if select_all is False and chosen_cols:
+                if chosen_cols:
                     parent_cols = chosen_cols
                 else:
                     t_name = str(config.get("table_name", "")).lower().split(".")[-1]
