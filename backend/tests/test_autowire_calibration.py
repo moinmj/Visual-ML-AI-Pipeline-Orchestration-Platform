@@ -58,3 +58,4 @@ def test_dag_validation_calibration_after_trainer():
     # Ensure no incompatible connection error
     incomp_errors = [e for e in diag["errors"] if "Incompatible Connection" in str(e)]
     assert len(incomp_errors) == 0, f"Unexpected incompatible connection errors: {incomp_errors}"
+

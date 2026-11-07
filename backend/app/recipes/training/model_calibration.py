@@ -12,6 +12,7 @@ except ImportError:
     FrozenEstimator = None
 
 from backend.app.recipes.base.recipe import BaseRecipe, RecipePort
+from backend.app.core.logging import logger
 
 
 class ModelCalibrationRecipe(BaseRecipe):
@@ -228,8 +229,64 @@ class ModelCalibrationRecipe(BaseRecipe):
 
         _, class_counts = np.unique(y_calib_arr, return_counts=True)
         min_class_count = int(np.min(class_counts))
+
+        # If holdout split has < 2 samples for the smallest class, try training partition
         if min_class_count < 2:
-            raise ValueError(f"At least 2 samples per class are required for probability calibration, but the smallest class has only {min_class_count} sample(s).")
+            train_src = None
+            if "X_train" in inputs and "y_train" in inputs and inputs["y_train"] is not y_calib:
+                train_src = (inputs["X_train"], inputs["y_train"])
+            elif isinstance(context, dict) and "X_train" in context and "y_train" in context and context["y_train"] is not y_calib:
+                train_src = (context["X_train"], context["y_train"])
+
+            if train_src is not None:
+                X_tr, y_tr = train_src
+                y_tr_arr = np.array(y_tr)
+                _, tr_counts = np.unique(y_tr_arr, return_counts=True)
+                if len(tr_counts) >= 2 and int(np.min(tr_counts)) >= 2:
+                    X_calib = X_tr.copy() if isinstance(X_tr, pd.DataFrame) else pd.DataFrame(X_tr)
+                    for col in X_calib.columns:
+                        if not pd.api.types.is_numeric_dtype(X_calib[col]):
+                            try:
+                                X_calib[col] = pd.to_numeric(X_calib[col])
+                            except Exception:
+                                X_calib[col] = X_calib[col].astype("category").cat.codes
+                    X_calib = X_calib.fillna(X_calib.median(numeric_only=True).fillna(0))
+                    y_calib_arr = y_tr_arr
+                    if le is not None or isinstance(np.unique(y_calib_arr)[0], (str, bytes)):
+                        le = LabelEncoder()
+                        y_calib_arr = le.fit_transform(y_calib_arr)
+                    unique_classes = np.unique(y_calib_arr)
+                    N = len(y_calib_arr)
+                    _, class_counts = np.unique(y_calib_arr, return_counts=True)
+                    min_class_count = int(np.min(class_counts))
+
+        # Graceful fallback: If minority class still has < 2 samples, pass through fitted model safely
+        if min_class_count < 2:
+            warn_msg = (
+                f"Probability calibration requires at least 2 samples per class to fit reliability curves, "
+                f"but the smallest class has only {min_class_count} sample(s). "
+                f"Passing through original {type(model).__name__} without calibration."
+            )
+            logger.warning(warn_msg)
+            return {
+                "model": model,
+                "task_type": inputs.get("task_type", "classification"),
+                "metrics": {
+                    "calibration_method": "passthrough",
+                    "status": "SKIPPED_INSUFFICIENT_SAMPLES",
+                    "min_class_samples": min_class_count,
+                    "warnings": [warn_msg]
+                },
+                "report": [
+                    "=== Model Probability Calibration Bypassed ===",
+                    f"Warning: {warn_msg}",
+                    "",
+                    "Recommendations to enable probability calibration:",
+                    "1. In 'Train / Test Splitter', use 'Stratified Split' so both partitions retain proportional class representation.",
+                    "2. Adjust 'Test Split Ratio' (e.g. increase test size if minority class was split too thin).",
+                    "3. Add 'Class Imbalance Resampler' (SMOTE / Random Oversampling) before splitting."
+                ]
+            }
 
         estimator_to_fit = model
         cv_param = None
@@ -386,6 +443,7 @@ class ModelCalibrationRecipe(BaseRecipe):
         return {
             "model": calibrator,
             "calibrated_model": calibrator,
+            "task_type": inputs.get("task_type", "classification"),
             "metrics": metrics,
             "report": "\n".join(report_lines)
         }
