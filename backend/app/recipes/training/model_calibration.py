@@ -12,6 +12,7 @@ except ImportError:
     FrozenEstimator = None
 
 from backend.app.recipes.base.recipe import BaseRecipe, RecipePort
+from backend.app.core.logging import logger
 
 
 class ModelCalibrationRecipe(BaseRecipe):
