@@ -2,14 +2,17 @@
 PostgreSQL Connector Recipe (Ingestion & Orchestration -> Database & Warehouse Connectors).
 
 Reads tables or query results from a PostgreSQL database into the pipeline as a DataFrame.
-Supports host/port, connection string, or saved credentials, read-only query validation,
-SSL modes, benchmark simulation fallback, and code generation.
+Supports connection strings (URI), host/port, or saved credentials, schema selection,
+table selection, column selection ('all' or specific subset), WHERE filters, ORDER BY,
+SSL modes, dynamic database inspection (test connection, schemas, tables, columns),
+benchmark simulation fallback, and Python code generation.
 """
 
 import re
 import os
 import time
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, Union
+from urllib.parse import urlparse, unquote, parse_qs
 
 try:
     import pandas as pd
@@ -19,12 +22,13 @@ except ImportError:
 from backend.app.recipes.base.recipe import BaseRecipe, RecipePort
 from backend.app.core.logging import logger
 from backend.app.core.config import settings
+from backend.app.core.exceptions import ValidationException
 
 
 class PostgreSQLConnectorRecipe(BaseRecipe):
     recipe_id = "postgresql_connector"
     name = "PostgreSQL Connector"
-    version = "1.0.0"
+    version = "1.1.0"
     category = "ingestion"
     group = "Ingestion & Orchestration"
     subgroup = "Database & Warehouse Connectors"
@@ -39,7 +43,7 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
             type="dataframe",
             required=False,
             max_connections=1,
-            description="Optional upstream dataset for batch IDs or execution trigger"
+            description="Optional upstream dataset for batch IDs or execution trigger",
         )
     ]
 
@@ -48,7 +52,7 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
             id="output",
             label="PostgreSQL Dataset",
             type="dataframe",
-            description="DataFrame containing retrieved PostgreSQL records"
+            description="DataFrame containing retrieved PostgreSQL records",
         )
     ]
 
@@ -60,101 +64,58 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                     "type": "string",
                     "title": "Connection Mode",
                     "input_type": "dropdown",
-                    "enum": ["host_port", "connection_string", "credential"],
-                    "default": "host_port",
-                    "description": "Choose how to connect: standard host/port parameters, a full DSN/connection string, or stored credential."
-                },
-                "host": {
-                    "type": "string",
-                    "title": "Host",
-                    "input_type": "text",
-                    "default": "localhost",
-                    "description": "PostgreSQL server hostname or IP address."
-                },
-                "port": {
-                    "type": "integer",
-                    "title": "Port",
-                    "input_type": "number",
-                    "default": 5432,
-                    "description": "PostgreSQL server port (default 5432)."
-                },
-                "database": {
-                    "type": "string",
-                    "title": "Database Name",
-                    "input_type": "text",
-                    "default": "postgres",
-                    "description": "Name of the PostgreSQL database."
-                },
-                "username": {
-                    "type": "string",
-                    "title": "Username",
-                    "input_type": "text",
-                    "default": "postgres",
-                    "description": "PostgreSQL user role."
-                },
-                "password": {
-                    "type": "string",
-                    "title": "Password",
-                    "input_type": "password",
-                    "default": "",
-                    "description": "PostgreSQL user password."
+                    "enum": ["connection_string", "host_port", "credential"],
+                    "default": "connection_string",
+                    "description": "Choose how to connect: full connection string (URI), standard host/port parameters, or stored credential.",
                 },
                 "connection_string": {
                     "type": "string",
                     "title": "Connection String (URI)",
                     "input_type": "text",
                     "default": "",
-                    "description": "Full PostgreSQL DSN e.g. postgresql://user:pass@localhost:5432/dbname"
+                    "description": "Full PostgreSQL connection URI e.g. postgresql://user:password@localhost:5432/dbname",
+                },
+                "host": {
+                    "type": "string",
+                    "title": "Host",
+                    "input_type": "text",
+                    "default": "localhost",
+                    "description": "PostgreSQL server hostname or IP address (used in 'host_port' mode).",
+                },
+                "port": {
+                    "type": "integer",
+                    "title": "Port",
+                    "input_type": "number",
+                    "default": 5432,
+                    "description": "PostgreSQL server port (default 5432).",
+                },
+                "database": {
+                    "type": "string",
+                    "title": "Database Name",
+                    "input_type": "text",
+                    "default": "postgres",
+                    "description": "Name of the PostgreSQL database.",
+                },
+                "username": {
+                    "type": "string",
+                    "title": "Username",
+                    "input_type": "text",
+                    "default": "postgres",
+                    "description": "PostgreSQL user role.",
+                },
+                "password": {
+                    "type": "string",
+                    "title": "Password",
+                    "input_type": "password",
+                    "default": "",
+                    "description": "PostgreSQL user password.",
                 },
                 "credential_id": {
                     "type": "string",
                     "title": "Connected PostgreSQL Credential",
                     "input_type": "credential_dropdown",
                     "provider": "postgresql",
-                    "description": "Select a stored credential from platform settings."
-                },
-                "read_mode": {
-                    "type": "string",
-                    "title": "Read Mode",
-                    "input_type": "dropdown",
-                    "enum": ["table", "query"],
-                    "default": "table",
-                    "description": "Read an entire table or execute a custom SQL query."
-                },
-                "table_name": {
-                    "type": "string",
-                    "title": "Table Name",
-                    "input_type": "text",
-                    "default": "customers",
-                    "description": "Table to read (e.g. 'sales_data' or 'public.orders')."
-                },
-                "schema_name": {
-                    "type": "string",
-                    "title": "Schema Name",
-                    "input_type": "text",
-                    "default": "public",
-                    "description": "PostgreSQL schema name (default 'public')."
-                },
-                "columns": {
-                    "type": "string",
-                    "title": "Columns to Select",
-                    "input_type": "text",
-                    "default": "",
-                    "description": "Comma-separated column names to select (leave empty for all columns '*')."
-                },
-                "query": {
-                    "type": "string",
-                    "title": "SQL Query",
-                    "input_type": "textarea",
-                    "default": "SELECT * FROM public.customers LIMIT 100",
-                    "description": "Read-only SQL query to execute (SELECT, WITH, etc.)."
-                },
-                "limit": {
-                    "type": "integer",
-                    "title": "Row Limit",
-                    "input_type": "number",
-                    "default": 1000,
-                    "description": "Maximum number of rows to retrieve (1 to 100000)."
+                    "description": "Select a stored credential from platform settings.",
                 },
                 "ssl_mode": {
                     "type": "string",
@@ -162,50 +123,127 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                     "input_type": "dropdown",
                     "enum": ["prefer", "require", "disable", "verify-ca", "verify-full"],
                     "default": "prefer",
-                    "description": "PostgreSQL SSL connection mode."
+                    "description": "PostgreSQL SSL connection mode.",
                 },
                 "timeout": {
                     "type": "integer",
                     "title": "Timeout (seconds)",
                     "input_type": "number",
                     "default": 15,
-                    "description": "Query execution timeout in seconds."
+                    "description": "Connection and query execution timeout in seconds.",
+                },
+                "read_mode": {
+                    "type": "string",
+                    "title": "Read Mode",
+                    "input_type": "dropdown",
+                    "enum": ["table", "query"],
+                    "default": "table",
+                    "description": "Read from a table (specifying schema, table, columns) or execute a custom SQL query.",
+                },
+                "schema_name": {
+                    "type": "string",
+                    "title": "Schema Name",
+                    "input_type": "text",
+                    "default": "public",
+                    "description": "PostgreSQL schema name (e.g. 'public', 'analytics', 'staging').",
+                },
+                "table_name": {
+                    "type": "string",
+                    "title": "Table Name",
+                    "input_type": "text",
+                    "default": "customers",
+                    "description": "Table to read from the selected schema (e.g. 'customers', 'orders', 'sales_data').",
+                },
+                "select_all_columns": {
+                    "type": "boolean",
+                    "title": "Select All Columns (*)",
+                    "input_type": "checkbox",
+                    "default": True,
+                    "description": "If enabled, retrieves all columns ('*'). Disable to specify individual columns in 'Columns to Select'.",
+                },
+                "columns": {
+                    "type": "string",
+                    "title": "Columns to Select",
+                    "input_type": "text",
+                    "default": "",
+                    "description": "Comma-separated column names or list of columns to select when 'Select All Columns' is disabled (leave empty for all columns '*').",
+                },
+                "where_clause": {
+                    "type": "string",
+                    "title": "Filter Condition (WHERE)",
+                    "input_type": "text",
+                    "default": "",
+                    "description": "Optional SQL WHERE filter expression without 'WHERE' keyword (e.g. status = 'ACTIVE' AND amount > 0).",
+                },
+                "order_by": {
+                    "type": "string",
+                    "title": "Sort Order (ORDER BY)",
+                    "input_type": "text",
+                    "default": "",
+                    "description": "Optional SQL sort expression without 'ORDER BY' keyword (e.g. created_at DESC).",
+                },
+                "limit": {
+                    "type": "integer",
+                    "title": "Row Limit",
+                    "input_type": "number",
+                    "default": 1000,
+                    "description": "Maximum number of rows to retrieve (1 to 100000).",
+                },
+                "offset": {
+                    "type": "integer",
+                    "title": "Row Offset",
+                    "input_type": "number",
+                    "default": 0,
+                    "description": "Number of initial rows to skip for pagination.",
+                },
+                "query": {
+                    "type": "string",
+                    "title": "SQL Query",
+                    "input_type": "textarea",
+                    "default": "SELECT * FROM public.customers LIMIT 100",
+                    "description": "Read-only SQL query to execute when Read Mode is 'query' (SELECT, WITH, SHOW, etc.).",
                 },
                 "simulation_mode": {
                     "type": "boolean",
                     "title": "Simulation / Demo Mode",
                     "input_type": "checkbox",
                     "default": False,
-                    "description": "Generate realistic benchmark dataset without connecting to an external database."
-                }
+                    "description": "Generate realistic benchmark dataset without connecting to an external database.",
+                },
             },
             "required": ["read_mode"],
             "templates": [
                 {
-                    "label": "Read Table (Public)",
+                    "label": "Read Table (Public Schema - All Columns)",
                     "config": {
                         "read_mode": "table",
-                        "table_name": "users",
                         "schema_name": "public",
-                        "limit": 500
-                    }
+                        "table_name": "users",
+                        "select_all_columns": True,
+                        "limit": 500,
+                    },
+                },
+                {
+                    "label": "Read Selected Columns with Filter",
+                    "config": {
+                        "read_mode": "table",
+                        "schema_name": "public",
+                        "table_name": "sales",
+                        "select_all_columns": False,
+                        "columns": "transaction_id, customer_id, amount, status",
+                        "where_clause": "status = 'COMPLETED'",
+                        "limit": 1000,
+                    },
                 },
                 {
                     "label": "Custom Filter Query",
                     "config": {
                         "read_mode": "query",
-                        "query": "SELECT id, customer_name, total_amount, created_at FROM sales WHERE total_amount > 100.0 ORDER BY created_at DESC",
-                        "limit": 1000
-                    }
+                        "query": "SELECT id, customer_name, total_amount, created_at FROM public.sales WHERE total_amount > 100.0 ORDER BY created_at DESC",
+                        "limit": 1000,
+                    },
                 },
-                {
-                    "label": "Aggregated CTE Query",
-                    "config": {
-                        "read_mode": "query",
-                        "query": "WITH regional_sales AS (\n  SELECT region, SUM(amount) AS total_revenue\n  FROM transactions\n  GROUP BY region\n)\nSELECT * FROM regional_sales ORDER BY total_revenue DESC"
-                    }
-                }
-            ]
+            ],
         }
 
     def _strip_comments(self, sql: str) -> str:
@@ -233,6 +271,43 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
             table_name = str(config.get("table_name", "")).strip()
             if not table_name:
                 errors.append("Table name is required when read_mode is 'table'.")
+            schema_name = str(config.get("schema_name", "public")).strip()
+            if not schema_name:
+                errors.append("Schema name cannot be empty when read_mode is 'table'.")
+
+            # Check if select_all_columns is explicitly False and no columns provided
+            if config.get("select_all_columns") is False:
+                raw_cols = config.get("columns")
+                has_cols = False
+                if isinstance(raw_cols, list) and len(raw_cols) > 0:
+                    has_cols = True
+                elif isinstance(raw_cols, str) and raw_cols.strip():
+                    has_cols = True
+                if not has_cols:
+                    errors.append(
+                        "When 'Select All Columns' is disabled, at least one column must be specified in 'Columns to Select'."
+                    )
+
+            # Validate WHERE clause if present
+            where_clause = str(config.get("where_clause", "")).strip()
+            if where_clause:
+                cleaned_where = self._strip_comments(where_clause).lower()
+                disallowed = ["drop", "truncate", "delete", "insert", "update", "alter", "create", "grant", "revoke"]
+                for kw in disallowed:
+                    if re.search(rf"\b{kw}\b", cleaned_where):
+                        errors.append(f"Disallowed DDL/DML keyword '{kw.upper()}' detected in WHERE clause.")
+                        break
+
+            # Validate ORDER BY if present
+            order_by = str(config.get("order_by", "")).strip()
+            if order_by:
+                cleaned_order = self._strip_comments(order_by).lower()
+                disallowed = ["drop", "truncate", "delete", "insert", "update", "alter", "create", "grant", "revoke"]
+                for kw in disallowed:
+                    if re.search(rf"\b{kw}\b", cleaned_order):
+                        errors.append(f"Disallowed DDL/DML keyword '{kw.upper()}' detected in ORDER BY clause.")
+                        break
+
         elif read_mode == "query":
             q = (config.get("query") or "").strip()
             if not q:
@@ -241,9 +316,10 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                 cleaned = self._strip_comments(q).lower()
                 first_word = cleaned.split()[0] if cleaned.split() else ""
                 if first_word not in ("select", "with", "show", "explain"):
-                    errors.append(f"Only read-only queries (SELECT, WITH, SHOW, EXPLAIN) are permitted. Found '{first_word}'.")
+                    errors.append(
+                        f"Only read-only queries (SELECT, WITH, SHOW, EXPLAIN) are permitted. Found '{first_word}'."
+                    )
 
-                # Disallow destructive keywords
                 disallowed = ["drop", "truncate", "delete", "insert", "update", "alter", "create", "grant", "revoke"]
                 for kw in disallowed:
                     if re.search(rf"\b{kw}\b", cleaned):
@@ -251,7 +327,10 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                         break
 
         # Validate Connection mode requirements if not simulated
-        conn_mode = str(config.get("connection_mode", "host_port")).strip().lower()
+        conn_mode = str(
+            config.get("connection_mode", "connection_string" if config.get("connection_string") else "host_port")
+        ).strip().lower()
+
         if not config.get("simulation_mode"):
             if conn_mode == "connection_string":
                 cs = str(config.get("connection_string", "")).strip()
@@ -266,11 +345,16 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
 
     def _resolve_connection_params(self, config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
         """Resolves database credentials, connection strings, and parameters from config or context."""
-        mode = str(config.get("connection_mode", "host_port")).strip().lower()
+        mode = str(
+            config.get("connection_mode", "connection_string" if config.get("connection_string") else "host_port")
+        ).strip().lower()
         credential_id = str(config.get("credential_id", "")).strip()
 
         host = str(config.get("host", "localhost")).strip()
-        port = int(config.get("port", 5432))
+        try:
+            port = int(config.get("port", 5432))
+        except (ValueError, TypeError):
+            port = 5432
         database = str(config.get("database", "postgres")).strip()
         username = str(config.get("username", "postgres")).strip()
         password = str(config.get("password", "")).strip()
@@ -296,8 +380,32 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
         if not username:
             username = os.getenv("PGUSER", os.getenv("POSTGRES_USER", "postgres"))
 
-        # Build clean DSN if connection_string was not provided
-        if not conn_str and host and database:
+        # Synchronize parameters from connection_string if provided
+        if conn_str:
+            # Normalize postgres:// to postgresql://
+            if conn_str.startswith("postgres://"):
+                conn_str = "postgresql://" + conn_str.split("://", 1)[1]
+            try:
+                parsed = urlparse(conn_str)
+                if parsed.hostname:
+                    host = parsed.hostname
+                if parsed.port:
+                    port = parsed.port
+                if parsed.path and len(parsed.path) > 1:
+                    clean_path = parsed.path.lstrip("/").split("?")[0]
+                    if clean_path:
+                        database = clean_path
+                if parsed.username:
+                    username = unquote(parsed.username)
+                if parsed.password:
+                    password = unquote(parsed.password)
+                if parsed.query:
+                    qs = parse_qs(parsed.query)
+                    if "sslmode" in qs and qs["sslmode"]:
+                        ssl_mode = qs["sslmode"][0]
+            except Exception as parse_e:
+                logger.warning(f"Failed to parse connection_string URL: {parse_e}")
+        elif host and database:
             auth_part = f"{username}:{password}@" if username else ""
             conn_str = f"postgresql://{auth_part}{host}:{port}/{database}"
 
@@ -309,7 +417,7 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
             "username": username,
             "password": password,
             "connection_string": conn_str,
-            "ssl_mode": ssl_mode
+            "ssl_mode": ssl_mode,
         }
 
     def _generate_benchmark_data(self, config: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -330,7 +438,7 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                     "currency": "USD",
                     "status": statuses[i % len(statuses)],
                     "region": regions[i % len(regions)],
-                    "created_at": f"2026-03-{((i % 28) + 1):02d}T10:15:30Z"
+                    "created_at": f"2026-03-{((i % 28) + 1):02d}T10:15:30Z",
                 })
             elif "user" in table_name or "customer" in table_name or "account" in table_name:
                 records.append({
@@ -340,7 +448,7 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                     "email": f"client{i}@example-enterprise.com",
                     "tier": "Enterprise" if i % 3 == 0 else "Standard",
                     "is_active": (i % 7 != 0),
-                    "created_at": f"2026-01-{((i % 28) + 1):02d}T08:00:00Z"
+                    "created_at": f"2026-01-{((i % 28) + 1):02d}T08:00:00Z",
                 })
             else:
                 records.append({
@@ -349,7 +457,7 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                     "category": f"Category-{(i % 5) + 1}",
                     "value": round(10.0 + (i * 1.5), 2),
                     "status": statuses[i % len(statuses)],
-                    "updated_at": f"2026-04-{((i % 28) + 1):02d}T12:00:00Z"
+                    "updated_at": f"2026-04-{((i % 28) + 1):02d}T12:00:00Z",
                 })
         return records
 
@@ -361,23 +469,60 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
         params = self._resolve_connection_params(config, context)
 
         # Build execution SQL
+        select_all_columns = config.get("select_all_columns")
+        cols_raw = config.get("columns", "")
+        cols_list: List[str] = []
+
+        if isinstance(cols_raw, list):
+            cols_list = [str(c).strip() for c in cols_raw if str(c).strip() and str(c).strip() != "*"]
+        elif isinstance(cols_raw, str) and cols_raw.strip():
+            cols_list = [c.strip() for c in cols_raw.split(",") if c.strip() and c.strip() != "*"]
+
+        if select_all_columns is None:
+            select_all_columns = False if cols_list else True
+
         if read_mode == "table":
             table_name = str(config.get("table_name", "customers")).strip()
-            schema_name = str(config.get("schema_name", "public")).strip()
-            cols_raw = config.get("columns", "")
-            if isinstance(cols_raw, list):
-                cols = ", ".join(cols_raw) if cols_raw else "*"
-            elif isinstance(cols_raw, str) and cols_raw.strip():
-                cols = cols_raw.strip()
+            schema_name = str(config.get("schema_name", "public")).strip() or "public"
+
+            # Parse dot notation e.g. "analytics.orders"
+            if "." in table_name:
+                parts = table_name.split(".", 1)
+                schema_name = parts[0].strip() or schema_name
+                table_name = parts[1].strip()
+
+            if select_all_columns is False and cols_list:
+                cols_str = ", ".join(f'"{c}"' if not c.startswith('"') else c for c in cols_list)
             else:
-                cols = "*"
-            full_table = f"{schema_name}.{table_name}" if "." not in table_name and schema_name else table_name
-            query = f"SELECT {cols} FROM {full_table} LIMIT {limit}"
-            target_desc = full_table
+                cols_str = "*"
+
+            full_table = f'"{schema_name}"."{table_name}"'
+            target_desc = f"{schema_name}.{table_name}"
+
+            # WHERE clause
+            where_clause = str(config.get("where_clause", "")).strip()
+            where_sql = ""
+            if where_clause:
+                if where_clause.lower().startswith("where "):
+                    where_clause = where_clause[6:].strip()
+                where_sql = f" WHERE {where_clause}"
+
+            # ORDER BY clause
+            order_by = str(config.get("order_by", "")).strip()
+            order_sql = ""
+            if order_by:
+                if order_by.lower().startswith("order by "):
+                    order_by = order_by[9:].strip()
+                order_sql = f" ORDER BY {order_by}"
+
+            # OFFSET
+            offset = int(config.get("offset", 0))
+            offset_sql = f" OFFSET {offset}" if offset > 0 else ""
+
+            query = f"SELECT {cols_str} FROM {full_table}{where_sql}{order_sql} LIMIT {limit}{offset_sql}"
         else:
             query = str(config.get("query", "SELECT * FROM public.customers")).strip()
             target_desc = "Custom Query"
-            # Apply limit if not present in query
             if "limit" not in query.lower():
                 query = f"{query} LIMIT {limit}"
 
@@ -389,11 +534,10 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
         # Live Execution Attempt
         if not simulation_mode and params["connection_string"]:
             try:
-                # Attempt with SQLAlchemy or psycopg2
                 import sqlalchemy
                 engine = sqlalchemy.create_engine(
                     params["connection_string"],
-                    connect_args={"connect_timeout": int(config.get("timeout", 15))}
+                    connect_args={"connect_timeout": int(config.get("timeout", 15))},
                 )
                 with engine.connect() as conn:
                     result = conn.execute(sqlalchemy.text(query))
@@ -408,13 +552,8 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                     import psycopg2
                     import psycopg2.extras
                     conn = psycopg2.connect(
-                        dbname=params["database"],
-                        user=params["username"],
-                        password=params["password"],
-                        host=params["host"],
-                        port=params["port"],
-                        sslmode=params["ssl_mode"],
-                        connect_timeout=int(config.get("timeout", 15))
+                        dsn=params["connection_string"],
+                        connect_timeout=int(config.get("timeout", 15)),
                     )
                     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                         cur.execute(query)
@@ -435,6 +574,19 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
         # Fallback to realistic benchmark data
         if not records:
             records = self._generate_benchmark_data(config)
+            # If specific columns were requested, filter simulated records
+            if select_all_columns is False and cols_list:
+                filtered = []
+                for r in records:
+                    item = {}
+                    for col in cols_list:
+                        clean_col = col.strip('"')
+                        if clean_col in r:
+                            item[clean_col] = r[clean_col]
+                        else:
+                            item[clean_col] = f"{clean_col}_val"
+                    filtered.append(item)
+                records = filtered
             if records:
                 columns_retrieved = list(records[0].keys())
             if not status_msg:
@@ -450,37 +602,304 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
             "target": target_desc,
             "records_retrieved": len(records),
             "columns_count": len(columns_retrieved),
-            "duration_ms": duration_ms
+            "columns": columns_retrieved,
+            "duration_ms": duration_ms,
         }
 
         metrics = {
             "records_retrieved": len(records),
             "columns_count": len(columns_retrieved),
             "duration_ms": duration_ms,
-            "delivery_status": delivery_status
+            "delivery_status": delivery_status,
         }
 
         return {
             "dataframe": df_out,
             "output": df_out,
             "output_summary": summary,
-            "metrics": metrics
+            "metrics": metrics,
+        }
+
+    def inspect(
+        self,
+        action: str,
+        config: Dict[str, Any],
+        context: Optional[Any] = None,
+        schema_name: Optional[str] = None,
+        table_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Introspects the connected PostgreSQL database to discover:
+        - 'test_connection': verifies connectivity and returns database & engine info
+        - 'schemas': list of available database schemas
+        - 'tables': list of tables/views in a given schema
+        - 'columns': list of columns and types in a given table
+        Falls back gracefully to realistic simulated metadata when offline.
+        """
+        action = str(action or "test_connection").strip().lower()
+        params = self._resolve_connection_params(config, context)
+        timeout = int(config.get("timeout", 10))
+
+        engine = None
+        conn = None
+        is_live = False
+        server_info = ""
+
+        if not config.get("simulation_mode") and params.get("connection_string"):
+            try:
+                import sqlalchemy
+                engine = sqlalchemy.create_engine(
+                    params["connection_string"],
+                    connect_args={"connect_timeout": timeout},
+                )
+                with engine.connect() as test_conn:
+                    res = test_conn.execute(sqlalchemy.text("SELECT version();")).fetchone()
+                    if res:
+                        server_info = str(res[0])
+                        is_live = True
+            except Exception as e:
+                logger.debug(f"PostgreSQL live inspection via SQLAlchemy failed: {e}")
+                try:
+                    import psycopg2
+                    conn = psycopg2.connect(
+                        dsn=params["connection_string"],
+                        connect_timeout=timeout,
+                    )
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT version();")
+                        res = cur.fetchone()
+                        if res:
+                            server_info = str(res[0])
+                            is_live = True
+                except Exception as p_err:
+                    logger.debug(f"PostgreSQL live inspection via psycopg2 failed: {p_err}")
+
+        # 1. Action: test_connection
+        if action == "test_connection":
+            if is_live:
+                if conn:
+                    conn.close()
+                return {
+                    "success": True,
+                    "connected": True,
+                    "status": "LIVE",
+                    "server_version": server_info,
+                    "database": params["database"],
+                    "message": f"Successfully connected to PostgreSQL database '{params['database']}'.",
+                }
+            else:
+                return {
+                    "success": False,
+                    "connected": False,
+                    "status": "UNREACHABLE",
+                    "database": params["database"],
+                    "message": "Could not establish connection to PostgreSQL server. Check host, port, credentials, and network.",
+                }
+
+        # 2. Action: schemas
+        if action in ("schemas", "get_schemas", "list_schemas"):
+            schemas: List[str] = []
+            if is_live and engine:
+                try:
+                    import sqlalchemy
+                    with engine.connect() as c:
+                        res = c.execute(sqlalchemy.text(
+                            "SELECT schema_name FROM information_schema.schemata "
+                            "WHERE schema_name NOT IN ('pg_catalog', 'information_schema', 'pg_toast') "
+                            "ORDER BY schema_name;"
+                        ))
+                        schemas = [row[0] for row in res.fetchall()]
+                except Exception as ex:
+                    logger.warning(f"Failed to query schemas from live DB: {ex}")
+            elif is_live and conn:
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "SELECT schema_name FROM information_schema.schemata "
+                            "WHERE schema_name NOT IN ('pg_catalog', 'information_schema', 'pg_toast') "
+                            "ORDER BY schema_name;"
+                        )
+                        schemas = [row[0] for row in cur.fetchall()]
+                except Exception as ex:
+                    logger.warning(f"Failed to query schemas from live DB: {ex}")
+
+            if conn:
+                conn.close()
+
+            if not schemas:
+                schemas = ["public", "analytics", "staging", "reporting", "raw_data"]
+
+            return {
+                "success": True,
+                "schemas": schemas,
+                "count": len(schemas),
+                "source": "LIVE" if is_live else "SIMULATED",
+            }
+
+        # 3. Action: tables
+        if action in ("tables", "get_tables", "list_tables"):
+            target_schema = schema_name or config.get("schema_name") or "public"
+            tables: List[str] = []
+            if is_live and engine:
+                try:
+                    import sqlalchemy
+                    with engine.connect() as c:
+                        res = c.execute(
+                            sqlalchemy.text(
+                                "SELECT table_name FROM information_schema.tables "
+                                "WHERE table_schema = :schema AND table_type IN ('BASE TABLE', 'VIEW') "
+                                "ORDER BY table_name;"
+                            ),
+                            {"schema": target_schema},
+                        )
+                        tables = [row[0] for row in res.fetchall()]
+                except Exception as ex:
+                    logger.warning(f"Failed to query tables from live DB: {ex}")
+            elif is_live and conn:
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "SELECT table_name FROM information_schema.tables "
+                            "WHERE table_schema = %s AND table_type IN ('BASE TABLE', 'VIEW') "
+                            "ORDER BY table_name;",
+                            (target_schema,),
+                        )
+                        tables = [row[0] for row in cur.fetchall()]
+                except Exception as ex:
+                    logger.warning(f"Failed to query tables from live DB: {ex}")
+
+            if conn:
+                conn.close()
+
+            if not tables:
+                tables = ["customers", "orders", "sales_data", "users", "transactions", "inventory", "products"]
+
+            return {
+                "success": True,
+                "schema": target_schema,
+                "tables": tables,
+                "count": len(tables),
+                "source": "LIVE" if is_live else "SIMULATED",
+            }
+
+        # 4. Action: columns
+        if action in ("columns", "get_columns", "list_columns"):
+            target_schema = schema_name or config.get("schema_name") or "public"
+            target_table = table_name or config.get("table_name") or "customers"
+            if "." in target_table:
+                parts = target_table.split(".", 1)
+                target_schema = parts[0].strip() or target_schema
+                target_table = parts[1].strip()
+
+            columns: List[Dict[str, Any]] = []
+            if is_live and engine:
+                try:
+                    import sqlalchemy
+                    with engine.connect() as c:
+                        res = c.execute(
+                            sqlalchemy.text(
+                                "SELECT column_name, data_type, is_nullable "
+                                "FROM information_schema.columns "
+                                "WHERE table_schema = :schema AND table_name = :table "
+                                "ORDER BY ordinal_position;"
+                            ),
+                            {"schema": target_schema, "table": target_table},
+                        )
+                        columns = [
+                            {"name": row[0], "type": row[1], "nullable": row[2] == "YES"}
+                            for row in res.fetchall()
+                        ]
+                except Exception as ex:
+                    logger.warning(f"Failed to query columns from live DB: {ex}")
+            elif is_live and conn:
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "SELECT column_name, data_type, is_nullable "
+                            "FROM information_schema.columns "
+                            "WHERE table_schema = %s AND table_name = %s "
+                            "ORDER BY ordinal_position;",
+                            (target_schema, target_table),
+                        )
+                        columns = [
+                            {"name": row[0], "type": row[1], "nullable": row[2] == "YES"}
+                            for row in cur.fetchall()
+                        ]
+                except Exception as ex:
+                    logger.warning(f"Failed to query columns from live DB: {ex}")
+
+            if conn:
+                conn.close()
+
+            if not columns:
+                mock_config = {**config, "table_name": target_table}
+                mock_recs = self._generate_benchmark_data(mock_config)
+                if mock_recs:
+                    first = mock_recs[0]
+                    for k, v in first.items():
+                        dtype = "numeric" if isinstance(v, (int, float)) else "text"
+                        columns.append({"name": k, "type": dtype, "nullable": True})
+                else:
+                    columns = [
+                        {"name": "id", "type": "integer", "nullable": False},
+                        {"name": "name", "type": "character varying", "nullable": True},
+                        {"name": "status", "type": "character varying", "nullable": True},
+                        {"name": "created_at", "type": "timestamp with time zone", "nullable": True},
+                    ]
+
+            return {
+                "success": True,
+                "schema": target_schema,
+                "table": target_table,
+                "columns": columns,
+                "count": len(columns),
+                "source": "LIVE" if is_live else "SIMULATED",
+            }
+
+        if conn:
+            conn.close()
+
+        return {
+            "success": False,
+            "error": f"Unknown inspect action '{action}'. Supported actions: 'test_connection', 'schemas', 'tables', 'columns'.",
         }
 
     def to_code(self, config: Dict[str, Any]) -> str:
         read_mode = config.get("read_mode", "table")
-        host = config.get("host", "localhost")
-        port = config.get("port", 5432)
-        database = config.get("database", "postgres")
-        username = config.get("username", "postgres")
-        table_name = config.get("table_name", "customers")
-        query = config.get("query", f"SELECT * FROM {table_name}")
+        params = self._resolve_connection_params(config)
+        host = params.get("host", "localhost")
+        port = params.get("port", 5432)
+        database = params.get("database", "postgres")
+        username = params.get("username", "postgres")
+        conn_str = params.get("connection_string", "")
         limit = config.get("limit", 1000)
 
         if read_mode == "table":
-            sql_stmt = f"SELECT * FROM {table_name} LIMIT {limit}"
+            schema_name = config.get("schema_name", "public") or "public"
+            table_name = config.get("table_name", "customers")
+            if "." in table_name:
+                parts = table_name.split(".", 1)
+                schema_name = parts[0].strip() or schema_name
+                table_name = parts[1].strip()
+
+            select_all = config.get("select_all_columns", True)
+            raw_cols = config.get("columns", "")
+            cols_list = []
+            if isinstance(raw_cols, list):
+                cols_list = [str(c).strip() for c in raw_cols if str(c).strip() and str(c).strip() != "*"]
+            elif isinstance(raw_cols, str) and raw_cols.strip():
+                cols_list = [c.strip() for c in raw_cols.split(",") if c.strip() and c.strip() != "*"]
+
+            if select_all is False and cols_list:
+                cols_str = ", ".join(f'"{c}"' for c in cols_list)
+            else:
+                cols_str = "*"
+
+            where_clause = str(config.get("where_clause", "")).strip()
+            where_sql = f" WHERE {where_clause}" if where_clause else ""
+            sql_stmt = f'SELECT {cols_str} FROM "{schema_name}"."{table_name}"{where_sql} LIMIT {limit}'
         else:
-            sql_stmt = query
+            sql_stmt = config.get("query", f"SELECT * FROM public.customers LIMIT {limit}")
 
         return (
             f"# Recipe: PostgreSQL Connector\n"
@@ -488,7 +907,10 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
             f"import os\n"
             f"import pandas as pd\n"
             f"import psycopg2\n\n"
+            f"# Connect using DSN or connection parameters\n"
             f"conn = psycopg2.connect(\n"
+            f"    dsn=os.getenv('PG_CONNECTION_STRING', '{conn_str}')\n"
+            f") if os.getenv('PG_CONNECTION_STRING', '{conn_str}') else psycopg2.connect(\n"
             f"    host=os.getenv('PGHOST', '{host}'),\n"
             f"    port=int(os.getenv('PGPORT', {port})),\n"
             f"    dbname=os.getenv('PGDATABASE', '{database}'),\n"
