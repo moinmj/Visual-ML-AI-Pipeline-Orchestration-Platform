@@ -449,10 +449,19 @@ class WorkflowSchemaInferencer:
                 if select_all is False and chosen_cols:
                     parent_cols = chosen_cols
                 else:
-                    from backend.app.recipes.ingestion.postgresql_connector import PostgreSQLConnectorRecipe
-                    pg_recipe = PostgreSQLConnectorRecipe()
-                    mock_records = pg_recipe._generate_benchmark_data(config)
-                    parent_cols = list(mock_records[0].keys()) if mock_records else ["id", "name", "created_at"]
+                    t_name = str(config.get("table_name", "")).lower().split(".")[-1]
+                    if t_name in ("sales", "retail_sales"):
+                        parent_cols = [
+                            "invoice_id", "branch", "city", "customer_type", "gender",
+                            "product_line", "unit_price", "quantity", "tax_5", "total",
+                            "date", "time", "payment", "cogs", "gross_margin_percentage",
+                            "gross_income", "rating"
+                        ]
+                    else:
+                        from backend.app.recipes.ingestion.postgresql_connector import PostgreSQLConnectorRecipe
+                        pg_recipe = PostgreSQLConnectorRecipe()
+                        mock_records = pg_recipe._generate_benchmark_data(config)
+                        parent_cols = list(mock_records[0].keys()) if mock_records else ["id", "name", "created_at"]
 
                 parent_details = [
                     NodeColumnInfo(
