@@ -12,7 +12,7 @@ import re
 import os
 import time
 from typing import Dict, Any, List, Optional, Tuple, Union
-from urllib.parse import urlparse, unquote, parse_qs
+from urllib.parse import urlparse, unquote, parse_qs, quote_plus
 
 try:
     import pandas as pd
@@ -64,16 +64,9 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                     "type": "string",
                     "title": "Connection Mode",
                     "input_type": "dropdown",
-                    "enum": ["connection_string", "host_port", "credential"],
-                    "default": "connection_string",
-                    "description": "Choose how to connect: full connection string (URI), standard host/port parameters, or stored credential.",
-                },
-                "connection_string": {
-                    "type": "string",
-                    "title": "Connection String (URI)",
-                    "input_type": "text",
-                    "default": "",
-                    "description": "Full PostgreSQL connection URI e.g. postgresql://user:password@localhost:5432/dbname",
+                    "enum": ["host_port", "connection_string", "credential"],
+                    "default": "host_port",
+                    "description": "Choose how to connect: standard host/port parameters, full connection string (URI), or stored credential.",
                 },
                 "host": {
                     "type": "string",
@@ -110,6 +103,13 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                     "default": "",
                     "description": "PostgreSQL user password.",
                 },
+                "connection_string": {
+                    "type": "string",
+                    "title": "Connection String (URI)",
+                    "input_type": "text",
+                    "default": "",
+                    "description": "Full PostgreSQL connection URI e.g. postgresql://user:password@localhost:5432/dbname",
+                },
                 "credential_id": {
                     "type": "string",
                     "title": "Connected PostgreSQL Credential",
@@ -143,16 +143,41 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                 "schema_name": {
                     "type": "string",
                     "title": "Schema Name",
-                    "input_type": "text",
+                    "input_type": "dropdown",
+                    "enum": [
+                        "public",
+                        "analytics",
+                        "staging",
+                        "reporting",
+                        "sales",
+                        "retail",
+                        "ecommerce",
+                        "raw_data",
+                        "information_schema"
+                    ],
                     "default": "public",
                     "description": "PostgreSQL schema name (e.g. 'public', 'analytics', 'staging').",
                 },
                 "table_name": {
                     "type": "string",
                     "title": "Table Name",
-                    "input_type": "text",
-                    "default": "customers",
-                    "description": "Table to read from the selected schema (e.g. 'customers', 'orders', 'sales_data').",
+                    "input_type": "dropdown",
+                    "enum": [
+                        "sales",
+                        "retail_sales",
+                        "customers",
+                        "orders",
+                        "transactions",
+                        "products",
+                        "users",
+                        "inventory",
+                        "invoices",
+                        "payments",
+                        "dim_customers",
+                        "fct_sales"
+                    ],
+                    "default": "sales",
+                    "description": "Table to read from the selected schema (e.g. 'sales', 'retail_sales', 'customers', 'orders').",
                 },
                 "select_all_columns": {
                     "type": "boolean",
@@ -162,11 +187,39 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                     "description": "If enabled, retrieves all columns ('*'). Disable to specify individual columns in 'Columns to Select'.",
                 },
                 "columns": {
-                    "type": "string",
+                    "type": "array",
+                    "items": {"type": "string"},
                     "title": "Columns to Select",
-                    "input_type": "text",
-                    "default": "",
-                    "description": "Comma-separated column names or list of columns to select when 'Select All Columns' is disabled (leave empty for all columns '*').",
+                    "input_type": "multi_select",
+                    "enum": [
+                        "invoice_id",
+                        "branch",
+                        "city",
+                        "customer_type",
+                        "gender",
+                        "product_line",
+                        "unit_price",
+                        "quantity",
+                        "tax_5",
+                        "total",
+                        "date",
+                        "time",
+                        "payment",
+                        "cogs",
+                        "gross_margin_percentage",
+                        "gross_income",
+                        "rating",
+                        "id",
+                        "customer_id",
+                        "amount",
+                        "currency",
+                        "status",
+                        "region",
+                        "created_at",
+                        "order_id",
+                        "user_id"
+                    ],
+                    "description": "Select columns to retrieve from the dropdown when 'Select All Columns' is disabled (leave empty or keep 'Select All Columns' enabled for all columns '*').",
                 },
                 "where_clause": {
                     "type": "string",
@@ -200,7 +253,7 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                     "type": "string",
                     "title": "SQL Query",
                     "input_type": "textarea",
-                    "default": "SELECT * FROM public.customers LIMIT 100",
+                    "default": "SELECT * FROM public.sales LIMIT 100",
                     "description": "Read-only SQL query to execute when Read Mode is 'query' (SELECT, WITH, SHOW, etc.).",
                 },
                 "simulation_mode": {
@@ -346,7 +399,7 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
     def _resolve_connection_params(self, config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
         """Resolves database credentials, connection strings, and parameters from config or context."""
         mode = str(
-            config.get("connection_mode", "connection_string" if config.get("connection_string") else "host_port")
+            config.get("connection_mode", "host_port" if (config.get("host") and not config.get("connection_string")) else "connection_string" if config.get("connection_string") else "host_port")
         ).strip().lower()
         credential_id = str(config.get("credential_id", "")).strip()
 
@@ -380,34 +433,70 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
         if not username:
             username = os.getenv("PGUSER", os.getenv("POSTGRES_USER", "postgres"))
 
-        # Synchronize parameters from connection_string if provided
-        if conn_str:
-            # Normalize postgres:// to postgresql://
-            if conn_str.startswith("postgres://"):
-                conn_str = "postgresql://" + conn_str.split("://", 1)[1]
-            try:
-                parsed = urlparse(conn_str)
-                if parsed.hostname:
-                    host = parsed.hostname
-                if parsed.port:
-                    port = parsed.port
-                if parsed.path and len(parsed.path) > 1:
-                    clean_path = parsed.path.lstrip("/").split("?")[0]
-                    if clean_path:
-                        database = clean_path
-                if parsed.username:
-                    username = unquote(parsed.username)
-                if parsed.password:
-                    password = unquote(parsed.password)
-                if parsed.query:
-                    qs = parse_qs(parsed.query)
-                    if "sslmode" in qs and qs["sslmode"]:
-                        ssl_mode = qs["sslmode"][0]
-            except Exception as parse_e:
-                logger.warning(f"Failed to parse connection_string URL: {parse_e}")
-        elif host and database:
-            auth_part = f"{username}:{password}@" if username else ""
-            conn_str = f"postgresql://{auth_part}{host}:{port}/{database}"
+        # Synchronize connection parameters
+        if mode == "host_port":
+            # Direct parameters mode: build connection string from explicit fields with URL-encoded password
+            quoted_user = quote_plus(str(username)) if username else ""
+            quoted_pass = quote_plus(str(password)) if password else ""
+            auth_part = f"{quoted_user}:{quoted_pass}@" if (quoted_user or quoted_pass) else ""
+            ssl_param = f"?sslmode={ssl_mode}" if ssl_mode else ""
+            conn_str = f"postgresql://{auth_part}{host}:{port}/{database}{ssl_param}"
+        elif mode == "connection_string":
+            if conn_str:
+                if conn_str.startswith("postgres://"):
+                    conn_str = "postgresql://" + conn_str.split("://", 1)[1]
+                try:
+                    parsed = urlparse(conn_str)
+                    # Check if conn_str hostname is localhost/127.0.0.1 but user specifically provided a remote host
+                    user_host = str(config.get("host", "")).strip()
+                    if user_host and user_host not in ("localhost", "127.0.0.1", "") and parsed.hostname in ("localhost", "127.0.0.1", None):
+                        host = user_host
+                        if config.get("database"):
+                            database = str(config.get("database")).strip()
+                        if config.get("username"):
+                            username = str(config.get("username")).strip()
+                        if config.get("password"):
+                            password = str(config.get("password")).strip()
+                        if config.get("port"):
+                            port = int(config.get("port", 5432))
+                        quoted_user = quote_plus(str(username)) if username else ""
+                        quoted_pass = quote_plus(str(password)) if password else ""
+                        auth_part = f"{quoted_user}:{quoted_pass}@" if (quoted_user or quoted_pass) else ""
+                        ssl_param = f"?sslmode={ssl_mode}" if ssl_mode else ""
+                        conn_str = f"postgresql://{auth_part}{host}:{port}/{database}{ssl_param}"
+                    else:
+                        if parsed.hostname:
+                            host = parsed.hostname
+                        if parsed.port:
+                            port = parsed.port
+                        if parsed.path and len(parsed.path) > 1:
+                            clean_path = parsed.path.lstrip("/").split("?")[0]
+                            if clean_path:
+                                database = clean_path
+                        if parsed.username:
+                            username = unquote(parsed.username)
+                        if parsed.password:
+                            password = unquote(parsed.password)
+                        if parsed.query:
+                            qs = parse_qs(parsed.query)
+                            if "sslmode" in qs and qs["sslmode"]:
+                                ssl_mode = qs["sslmode"][0]
+                except Exception as parse_e:
+                    logger.warning(f"Failed to parse connection_string URL: {parse_e}")
+            elif host and database:
+                quoted_user = quote_plus(str(username)) if username else ""
+                quoted_pass = quote_plus(str(password)) if password else ""
+                auth_part = f"{quoted_user}:{quoted_pass}@" if (quoted_user or quoted_pass) else ""
+                ssl_param = f"?sslmode={ssl_mode}" if ssl_mode else ""
+                conn_str = f"postgresql://{auth_part}{host}:{port}/{database}{ssl_param}"
+        else:
+            # Stored credential or fallback
+            if not conn_str and host and database:
+                quoted_user = quote_plus(str(username)) if username else ""
+                quoted_pass = quote_plus(str(password)) if password else ""
+                auth_part = f"{quoted_user}:{quoted_pass}@" if (quoted_user or quoted_pass) else ""
+                ssl_param = f"?sslmode={ssl_mode}" if ssl_mode else ""
+                conn_str = f"postgresql://{auth_part}{host}:{port}/{database}{ssl_param}"
 
         return {
             "mode": mode,
@@ -532,7 +621,13 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
         columns_retrieved: List[str] = []
 
         # Live Execution Attempt
-        if not simulation_mode and params["connection_string"]:
+        if not simulation_mode:
+            if not params.get("database"):
+                raise ValidationException("PostgreSQL 'Database Name' is required for live execution.")
+            if not params.get("host") and not params.get("connection_string"):
+                raise ValidationException("PostgreSQL 'Host' or 'Connection String' is required for live execution.")
+
+            last_error = None
             try:
                 import sqlalchemy
                 engine = sqlalchemy.create_engine(
@@ -546,13 +641,20 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                     records = [dict(zip(columns_retrieved, row)) for row in rows]
                     delivery_status = "LIVE"
                     status_msg = f"Retrieved {len(records)} live rows from PostgreSQL ({target_desc})."
-            except ImportError:
-                # Try raw psycopg2
+            except Exception as sql_e:
+                logger.warning(f"PostgreSQL SQLAlchemy live connection attempt failed: {sql_e}")
+                last_error = sql_e
+                # Fallback to direct psycopg2 kwargs connection (immune to URI parsing bugs)
                 try:
                     import psycopg2
                     import psycopg2.extras
                     conn = psycopg2.connect(
-                        dsn=params["connection_string"],
+                        host=params.get("host"),
+                        port=params.get("port", 5432),
+                        dbname=params.get("database"),
+                        user=params.get("username"),
+                        password=params.get("password"),
+                        sslmode=params.get("ssl_mode", "prefer"),
                         connect_timeout=int(config.get("timeout", 15)),
                     )
                     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -562,17 +664,21 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                         if records:
                             columns_retrieved = list(records[0].keys())
                         delivery_status = "LIVE"
-                        status_msg = f"Retrieved {len(records)} live rows from PostgreSQL via psycopg2."
+                        status_msg = f"Retrieved {len(records)} live rows from PostgreSQL via psycopg2 ({target_desc})."
                     conn.close()
+                    last_error = None
                 except Exception as raw_e:
-                    logger.warning(f"PostgreSQL raw connection attempt failed: {raw_e}")
-                    status_msg = f"PostgreSQL live connection failed ({raw_e}). Using benchmark simulation fallback."
-            except Exception as e:
-                logger.warning(f"PostgreSQL connection failed: {e}")
-                status_msg = f"PostgreSQL connection failed ({e}). Using benchmark simulation fallback."
+                    logger.warning(f"PostgreSQL psycopg2 direct connection attempt failed: {raw_e}")
+                    last_error = raw_e
 
-        # Fallback to realistic benchmark data
-        if not records:
+            # If live execution failed, raise ValidationException so user sees the real database error
+            if last_error is not None:
+                raise ValidationException(
+                    f"PostgreSQL connection to {params.get('host')}:{params.get('port')}/{params.get('database')} failed: {str(last_error)}"
+                )
+
+        # Simulation / Benchmark Data (ONLY when simulation_mode is True)
+        if simulation_mode:
             records = self._generate_benchmark_data(config)
             # If specific columns were requested, filter simulated records
             if select_all_columns is False and cols_list:
@@ -589,8 +695,8 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                 records = filtered
             if records:
                 columns_retrieved = list(records[0].keys())
-            if not status_msg:
-                status_msg = f"Loaded {len(records)} benchmark records for PostgreSQL table '{target_desc}'."
+            delivery_status = "SIMULATED"
+            status_msg = f"PostgreSQL benchmark simulation mode active. Generated {len(records)} test rows for table '{target_desc}'."
 
         df_out = pd.DataFrame(records) if pd is not None else records
         duration_ms = int((time.time() - start_time) * 1000)
@@ -645,7 +751,8 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
         is_live = False
         server_info = ""
 
-        if not config.get("simulation_mode") and params.get("connection_string"):
+        inspect_err = ""
+        if not config.get("simulation_mode") and (params.get("connection_string") or params.get("host")):
             try:
                 import sqlalchemy
                 engine = sqlalchemy.create_engine(
@@ -659,10 +766,16 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                         is_live = True
             except Exception as e:
                 logger.debug(f"PostgreSQL live inspection via SQLAlchemy failed: {e}")
+                inspect_err = str(e)
                 try:
                     import psycopg2
                     conn = psycopg2.connect(
-                        dsn=params["connection_string"],
+                        host=params.get("host"),
+                        port=params.get("port", 5432),
+                        dbname=params.get("database"),
+                        user=params.get("username"),
+                        password=params.get("password"),
+                        sslmode=params.get("ssl_mode", "prefer"),
                         connect_timeout=timeout,
                     )
                     with conn.cursor() as cur:
@@ -671,8 +784,10 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                         if res:
                             server_info = str(res[0])
                             is_live = True
+                            inspect_err = ""
                 except Exception as p_err:
                     logger.debug(f"PostgreSQL live inspection via psycopg2 failed: {p_err}")
+                    inspect_err = str(p_err)
 
         # 1. Action: test_connection
         if action == "test_connection":
@@ -693,7 +808,8 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                     "connected": False,
                     "status": "UNREACHABLE",
                     "database": params["database"],
-                    "message": "Could not establish connection to PostgreSQL server. Check host, port, credentials, and network.",
+                    "message": f"Could not establish connection to PostgreSQL server ({params.get('host')}:{params.get('port')}/{params.get('database')}). Error: {inspect_err or 'Connection timed out or host unreachable'}",
+                    "error": inspect_err,
                 }
 
         # 2. Action: schemas
@@ -727,7 +843,7 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                 conn.close()
 
             if not schemas:
-                schemas = ["public", "analytics", "staging", "reporting", "raw_data"]
+                schemas = ["public", "analytics", "staging", "reporting", "sales", "retail", "ecommerce", "raw_data", "information_schema"]
 
             return {
                 "success": True,
@@ -772,7 +888,7 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                 conn.close()
 
             if not tables:
-                tables = ["customers", "orders", "sales_data", "users", "transactions", "inventory", "products"]
+                tables = ["sales", "retail_sales", "customers", "orders", "transactions", "products", "users", "inventory", "invoices", "payments"]
 
             return {
                 "success": True,
@@ -832,20 +948,41 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                 conn.close()
 
             if not columns:
-                mock_config = {**config, "table_name": target_table}
-                mock_recs = self._generate_benchmark_data(mock_config)
-                if mock_recs:
-                    first = mock_recs[0]
-                    for k, v in first.items():
-                        dtype = "numeric" if isinstance(v, (int, float)) else "text"
-                        columns.append({"name": k, "type": dtype, "nullable": True})
-                else:
+                if target_table.lower() in ("sales", "retail_sales"):
                     columns = [
-                        {"name": "id", "type": "integer", "nullable": False},
-                        {"name": "name", "type": "character varying", "nullable": True},
-                        {"name": "status", "type": "character varying", "nullable": True},
-                        {"name": "created_at", "type": "timestamp with time zone", "nullable": True},
+                        {"name": "invoice_id", "type": "character varying(30)", "nullable": False},
+                        {"name": "branch", "type": "character varying(5)", "nullable": True},
+                        {"name": "city", "type": "character varying(30)", "nullable": True},
+                        {"name": "customer_type", "type": "character varying(30)", "nullable": True},
+                        {"name": "gender", "type": "character varying(10)", "nullable": True},
+                        {"name": "product_line", "type": "character varying(100)", "nullable": True},
+                        {"name": "unit_price", "type": "numeric(10,2)", "nullable": True},
+                        {"name": "quantity", "type": "integer", "nullable": True},
+                        {"name": "tax_5", "type": "numeric(10,4)", "nullable": True},
+                        {"name": "total", "type": "numeric(10,4)", "nullable": True},
+                        {"name": "date", "type": "date", "nullable": True},
+                        {"name": "time", "type": "time without time zone", "nullable": True},
+                        {"name": "payment", "type": "character varying(30)", "nullable": True},
+                        {"name": "cogs", "type": "numeric(10,2)", "nullable": True},
+                        {"name": "gross_margin_percentage", "type": "numeric(11,9)", "nullable": True},
+                        {"name": "gross_income", "type": "numeric(10,4)", "nullable": True},
+                        {"name": "rating", "type": "numeric(3,1)", "nullable": True},
                     ]
+                else:
+                    mock_config = {**config, "table_name": target_table}
+                    mock_recs = self._generate_benchmark_data(mock_config)
+                    if mock_recs:
+                        first = mock_recs[0]
+                        for k, v in first.items():
+                            dtype = "numeric" if isinstance(v, (int, float)) else "text"
+                            columns.append({"name": k, "type": dtype, "nullable": True})
+                    else:
+                        columns = [
+                            {"name": "id", "type": "integer", "nullable": False},
+                            {"name": "name", "type": "character varying", "nullable": True},
+                            {"name": "status", "type": "character varying", "nullable": True},
+                            {"name": "created_at", "type": "timestamp with time zone", "nullable": True},
+                        ]
 
             return {
                 "success": True,

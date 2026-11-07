@@ -623,3 +623,78 @@ def test_postgresql_connector_dynamic_inspection():
     col_names = [c["name"] for c in cols_res["columns"]]
     assert "id" in col_names or "name" in col_names or "created_at" in col_names
 
+
+
+def test_postgresql_connector_live_mode_failure_raises_validation_exception():
+    """Verify that live execution (simulation_mode=False) raises ValidationException on connection error instead of returning fake benchmark data."""
+    from backend.app.core.exceptions import ValidationException
+    recipe = PostgreSQLConnectorRecipe()
+    config = {
+        "connection_mode": "host_port",
+        "host": "192.0.2.1",  # RFC 5737 TEST-NET unreachable IP
+        "port": 5432,
+        "database": "walmart",
+        "username": "dbuser",
+        "password": "Classic@123",
+        "read_mode": "table",
+        "table_name": "sales",
+        "timeout": 1,
+        "simulation_mode": False,
+    }
+    with pytest.raises(ValidationException) as excinfo:
+        recipe.execute(inputs={}, config=config)
+    assert "PostgreSQL connection to" in str(excinfo.value)
+    assert "walmart" in str(excinfo.value)
+
+
+def test_postgresql_connector_host_override_and_password_encoding():
+    """Verify that when host is updated to a remote IP and password contains special chars like '@', connection parameters are properly synchronized and URL-encoded."""
+    recipe = PostgreSQLConnectorRecipe()
+    # 1. Connection string had 127.0.0.1, but user entered Host: 88.222.215.30
+    config_override = {
+        "connection_mode": "connection_string",
+        "connection_string": "postgresql://dbuser:Classic%40123@127.0.0.1:5432/walmart",
+        "host": "88.222.215.30",
+        "database": "walmart",
+        "username": "dbuser",
+        "password": "Classic@123",
+    }
+    params = recipe._resolve_connection_params(config_override)
+    assert params["host"] == "88.222.215.30"
+    assert params["database"] == "walmart"
+    assert "88.222.215.30" in params["connection_string"]
+    assert "Classic%40123" in params["connection_string"]
+
+    # 2. Host port mode with password containing '@'
+    config_host_port = {
+        "connection_mode": "host_port",
+        "host": "88.222.215.30",
+        "port": 5432,
+        "database": "walmart",
+        "username": "dbuser",
+        "password": "Classic@123",
+        "ssl_mode": "prefer",
+    }
+    hp_params = recipe._resolve_connection_params(config_host_port)
+    assert hp_params["host"] == "88.222.215.30"
+    assert hp_params["password"] == "Classic@123"
+    assert "Classic%40123@88.222.215.30:5432/walmart" in hp_params["connection_string"]
+
+
+def test_postgresql_connector_dropdown_schema_and_columns():
+    """Verify that schema_name, table_name, and columns are rendered with dropdowns / multi_select."""
+    recipe = PostgreSQLConnectorRecipe()
+    schema = recipe.get_schema()
+    props = schema["properties"]
+
+    assert props["schema_name"]["input_type"] == "dropdown"
+    assert "public" in props["schema_name"]["enum"]
+
+    assert props["table_name"]["input_type"] == "dropdown"
+    assert "sales" in props["table_name"]["enum"]
+    assert "retail_sales" in props["table_name"]["enum"]
+
+    assert props["columns"]["input_type"] == "multi_select"
+    assert "invoice_id" in props["columns"]["enum"]
+    assert "total" in props["columns"]["enum"]
+    assert props["select_all_columns"]["input_type"] == "checkbox"
