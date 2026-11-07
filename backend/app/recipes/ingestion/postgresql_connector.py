@@ -87,7 +87,7 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                     "title": "Database Name",
                     "input_type": "text",
                     "default": "postgres",
-                    "description": "Name of the PostgreSQL database.",
+                    "description": "Name of the target PostgreSQL database.",
                 },
                 "username": {
                     "type": "string",
@@ -138,88 +138,49 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                     "input_type": "dropdown",
                     "enum": ["table", "query"],
                     "default": "table",
-                    "description": "Read from a table (specifying schema, table, columns) or execute a custom SQL query.",
+                    "description": "Read from tables (specifying schema, tables, columns) or execute a custom SQL query.",
                 },
                 "schema_name": {
                     "type": "string",
                     "title": "Schema Name",
-                    "input_type": "dropdown",
-                    "enum": [
-                        "public",
-                        "analytics",
-                        "staging",
-                        "reporting",
-                        "sales",
-                        "retail",
-                        "ecommerce",
-                        "raw_data",
-                        "information_schema"
-                    ],
+                    "input_type": "text",
                     "default": "public",
-                    "description": "PostgreSQL schema name (e.g. 'public', 'analytics', 'staging').",
+                    "description": "PostgreSQL schema name (default 'public'). Discovered dynamically from the database upon connection.",
+                },
+                "select_all_tables": {
+                    "type": "boolean",
+                    "title": "Select All Tables in Schema (*)",
+                    "input_type": "checkbox",
+                    "default": False,
+                    "description": "If enabled or if no table is specified, retrieves all tables in the selected schema.",
+                },
+                "tables": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "title": "Table(s) to Read",
+                    "input_type": "tags",
+                    "description": "Specify one or multiple tables to read (e.g. ['sales', 'retail_sales']). Leave empty or enable 'Select All Tables' to read all tables.",
                 },
                 "table_name": {
                     "type": "string",
                     "title": "Table Name",
-                    "input_type": "dropdown",
-                    "enum": [
-                        "sales",
-                        "retail_sales",
-                        "customers",
-                        "orders",
-                        "transactions",
-                        "products",
-                        "users",
-                        "inventory",
-                        "invoices",
-                        "payments",
-                        "dim_customers",
-                        "fct_sales"
-                    ],
+                    "input_type": "text",
                     "default": "sales",
-                    "description": "Table to read from the selected schema (e.g. 'sales', 'retail_sales', 'customers', 'orders').",
+                    "description": "Single table to read (e.g. 'sales'). Ignored if 'Table(s) to Read' or 'Select All Tables' is specified.",
                 },
                 "select_all_columns": {
                     "type": "boolean",
                     "title": "Select All Columns (*)",
                     "input_type": "checkbox",
                     "default": True,
-                    "description": "If enabled, retrieves all columns ('*'). Disable to specify individual columns in 'Columns to Select'.",
+                    "description": "If enabled and no specific columns are entered in 'Columns to Select', retrieves all columns ('*').",
                 },
                 "columns": {
                     "type": "array",
                     "items": {"type": "string"},
                     "title": "Columns to Select",
-                    "input_type": "multi_select",
-                    "enum": [
-                        "invoice_id",
-                        "branch",
-                        "city",
-                        "customer_type",
-                        "gender",
-                        "product_line",
-                        "unit_price",
-                        "quantity",
-                        "tax_5",
-                        "total",
-                        "date",
-                        "time",
-                        "payment",
-                        "cogs",
-                        "gross_margin_percentage",
-                        "gross_income",
-                        "rating",
-                        "id",
-                        "customer_id",
-                        "amount",
-                        "currency",
-                        "status",
-                        "region",
-                        "created_at",
-                        "order_id",
-                        "user_id"
-                    ],
-                    "description": "Select columns to retrieve from the dropdown when 'Select All Columns' is disabled (leave empty or keep 'Select All Columns' enabled for all columns '*').",
+                    "input_type": "tags",
+                    "description": "Specify one or more column names to select (e.g. ['invoice_id', 'branch']). When specified, ONLY these columns are retrieved.",
                 },
                 "where_clause": {
                     "type": "string",
@@ -321,9 +282,16 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
 
         # Validate Read Mode Requirements
         if read_mode == "table":
+            select_all_tables = bool(config.get("select_all_tables", False))
             table_name = str(config.get("table_name", "")).strip()
-            if not table_name:
-                errors.append("Table name is required when read_mode is 'table'.")
+            tables = config.get("tables", [])
+            has_tables = bool(
+                (table_name and table_name != "*")
+                or (isinstance(tables, list) and len(tables) > 0)
+                or (isinstance(tables, str) and tables.strip() and tables.strip() != "*")
+            )
+            if not select_all_tables and not has_tables:
+                errors.append("Table name is required when read_mode is 'table' (or enable 'Select All Tables').")
             schema_name = str(config.get("schema_name", "public")).strip()
             if not schema_name:
                 errors.append("Schema name cannot be empty when read_mode is 'table'.")
@@ -557,70 +525,75 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
         simulation_mode = bool(config.get("simulation_mode", False))
         params = self._resolve_connection_params(config, context)
 
-        # Build execution SQL
-        select_all_columns = config.get("select_all_columns")
-        cols_raw = config.get("columns", "")
+        # 1. Resolve columns
+        cols_raw = config.get("columns", [])
         cols_list: List[str] = []
-
         if isinstance(cols_raw, list):
-            cols_list = [str(c).strip() for c in cols_raw if str(c).strip() and str(c).strip() != "*"]
+            cols_list = [str(c).strip().strip('"').strip("'") for c in cols_raw if str(c).strip() and str(c).strip() != "*"]
         elif isinstance(cols_raw, str) and cols_raw.strip():
-            cols_list = [c.strip() for c in cols_raw.split(",") if c.strip() and c.strip() != "*"]
+            cols_list = [c.strip().strip('"').strip("'") for c in cols_raw.split(",") if c.strip() and c.strip() != "*"]
 
-        if select_all_columns is None:
-            select_all_columns = False if cols_list else True
-
-        if read_mode == "table":
-            table_name = str(config.get("table_name", "customers")).strip()
-            schema_name = str(config.get("schema_name", "public")).strip() or "public"
-
-            # Parse dot notation e.g. "analytics.orders"
-            if "." in table_name:
-                parts = table_name.split(".", 1)
-                schema_name = parts[0].strip() or schema_name
-                table_name = parts[1].strip()
-
-            if select_all_columns is False and cols_list:
-                cols_str = ", ".join(f'"{c}"' if not c.startswith('"') else c for c in cols_list)
-            else:
-                cols_str = "*"
-
-            full_table = f'"{schema_name}"."{table_name}"'
-            target_desc = f"{schema_name}.{table_name}"
-
-            # WHERE clause
-            where_clause = str(config.get("where_clause", "")).strip()
-            where_sql = ""
-            if where_clause:
-                if where_clause.lower().startswith("where "):
-                    where_clause = where_clause[6:].strip()
-                where_sql = f" WHERE {where_clause}"
-
-            # ORDER BY clause
-            order_by = str(config.get("order_by", "")).strip()
-            order_sql = ""
-            if order_by:
-                if order_by.lower().startswith("order by "):
-                    order_by = order_by[9:].strip()
-                order_sql = f" ORDER BY {order_by}"
-
-            # OFFSET
-            offset = int(config.get("offset", 0))
-            offset_sql = f" OFFSET {offset}" if offset > 0 else ""
-
-            query = f"SELECT {cols_str} FROM {full_table}{where_sql}{order_sql} LIMIT {limit}{offset_sql}"
+        # If user explicitly specified one or more columns, ALWAYS query ONLY those columns!
+        if cols_list:
+            cols_str = ", ".join(f'"{c}"' if not c.startswith('"') else c for c in cols_list)
+            is_select_all_cols = False
         else:
-            query = str(config.get("query", "SELECT * FROM public.customers")).strip()
-            target_desc = "Custom Query"
-            if "limit" not in query.lower():
-                query = f"{query} LIMIT {limit}"
+            cols_str = "*"
+            is_select_all_cols = True
+
+        # 2. Resolve tables
+        schema_name = str(config.get("schema_name", "public")).strip() or "public"
+        select_all_tables = bool(config.get("select_all_tables", False))
+
+        target_tables: List[str] = []
+        raw_tables = config.get("tables")
+        if isinstance(raw_tables, list):
+            target_tables = [str(t).strip().strip('"').strip("'") for t in raw_tables if str(t).strip() and str(t).strip() != "*"]
+        elif isinstance(raw_tables, str) and raw_tables.strip():
+            target_tables = [t.strip().strip('"').strip("'") for t in raw_tables.split(",") if t.strip() and t.strip() != "*"]
+
+        single_tbl = str(config.get("table_name", "")).strip().strip('"').strip("'")
+        if single_tbl and single_tbl != "*":
+            if "," in single_tbl:
+                for t in single_tbl.split(","):
+                    clean_t = t.strip().strip('"').strip("'")
+                    if clean_t and clean_t not in target_tables:
+                        target_tables.append(clean_t)
+            elif single_tbl not in target_tables:
+                target_tables.append(single_tbl)
+
+        # Handle dot-delimited schema and table (e.g. "finance.invoices")
+        if len(target_tables) == 1 and "." in target_tables[0]:
+            parts = target_tables[0].split(".", 1)
+            schema_name = parts[0].strip() or schema_name
+            target_tables[0] = parts[1].strip()
+
+        # WHERE clause
+        where_clause = str(config.get("where_clause", "")).strip()
+        where_sql = ""
+        if where_clause:
+            if where_clause.lower().startswith("where "):
+                where_clause = where_clause[6:].strip()
+            where_sql = f" WHERE {where_clause}"
+
+        # ORDER BY clause
+        order_by = str(config.get("order_by", "")).strip()
+        order_sql = ""
+        if order_by:
+            if order_by.lower().startswith("order by "):
+                order_by = order_by[9:].strip()
+            order_sql = f" ORDER BY {order_by}"
+
+        # OFFSET
+        offset = int(config.get("offset", 0))
+        offset_sql = f" OFFSET {offset}" if offset > 0 else ""
 
         records: List[Dict[str, Any]] = []
         delivery_status = "SIMULATED"
         status_msg = ""
         columns_retrieved: List[str] = []
+        per_table_data: Dict[str, List[Dict[str, Any]]] = {}
 
-        # Live Execution Attempt
         if not simulation_mode:
             if not params.get("database"):
                 raise ValidationException("PostgreSQL 'Database Name' is required for live execution.")
@@ -635,14 +608,62 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                     connect_args={"connect_timeout": int(config.get("timeout", 15))},
                 )
                 with engine.connect() as conn:
-                    result = conn.execute(sqlalchemy.text(query))
-                    columns_retrieved = list(result.keys())
-                    rows = result.fetchall()
-                    records = [dict(zip(columns_retrieved, row)) for row in rows]
-                    delivery_status = "LIVE"
-                    status_msg = f"Retrieved {len(records)} live rows from PostgreSQL ({target_desc})."
+                    if read_mode == "table":
+                        # If select_all_tables or no table was provided, discover all tables in schema
+                        if select_all_tables or not target_tables:
+                            res_tables = conn.execute(
+                                sqlalchemy.text(
+                                    "SELECT table_name FROM information_schema.tables "
+                                    "WHERE table_schema = :schema AND table_type IN ('BASE TABLE', 'VIEW') "
+                                    "ORDER BY table_name;"
+                                ),
+                                {"schema": schema_name},
+                            )
+                            target_tables = [r[0] for r in res_tables.fetchall()]
+                            if not target_tables:
+                                raise ValidationException(
+                                    f"No tables found in schema '{schema_name}' for database '{params.get('database')}'."
+                                )
+
+                        is_multi = len(target_tables) > 1
+                        for tbl in target_tables:
+                            t_schema = schema_name
+                            t_name = tbl
+                            if "." in t_name:
+                                p = t_name.split(".", 1)
+                                t_schema = p[0].strip() or t_schema
+                                t_name = p[1].strip()
+
+                            q = f'SELECT {cols_str} FROM "{t_schema}"."{t_name}"{where_sql}{order_sql} LIMIT {limit}{offset_sql}'
+                            res = conn.execute(sqlalchemy.text(q))
+                            t_cols = list(res.keys())
+                            if not columns_retrieved:
+                                columns_retrieved = list(t_cols)
+                            rows = [dict(zip(t_cols, r)) for r in res.fetchall()]
+                            if is_multi:
+                                for r in rows:
+                                    r["_table"] = t_name
+                            per_table_data[t_name] = rows
+                            records.extend(rows)
+
+                        delivery_status = "LIVE"
+                        if is_multi:
+                            if "_table" not in columns_retrieved:
+                                columns_retrieved.insert(0, "_table")
+                            status_msg = f"Retrieved {len(records)} live rows across {len(target_tables)} tables ({', '.join(target_tables)}) from schema '{schema_name}'."
+                        else:
+                            status_msg = f"Retrieved {len(records)} live rows from PostgreSQL ({schema_name}.{target_tables[0]})."
+                    else:
+                        query = str(config.get("query", "SELECT * FROM public.sales")).strip()
+                        if "limit" not in query.lower():
+                            query = f"{query} LIMIT {limit}"
+                        res = conn.execute(sqlalchemy.text(query))
+                        columns_retrieved = list(res.keys())
+                        records = [dict(zip(columns_retrieved, r)) for r in res.fetchall()]
+                        delivery_status = "LIVE"
+                        status_msg = f"Retrieved {len(records)} live rows from custom query."
             except Exception as sql_e:
-                logger.warning(f"PostgreSQL SQLAlchemy live connection attempt failed: {sql_e}")
+                logger.warning(f"PostgreSQL SQLAlchemy live execution failed: {sql_e}")
                 last_error = sql_e
                 # Fallback to direct psycopg2 kwargs connection (immune to URI parsing bugs)
                 try:
@@ -657,21 +678,67 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                         sslmode=params.get("ssl_mode", "prefer"),
                         connect_timeout=int(config.get("timeout", 15)),
                     )
+                    records = []
+                    per_table_data = {}
+                    columns_retrieved = []
                     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                        cur.execute(query)
-                        rows = cur.fetchall()
-                        records = [dict(r) for r in rows]
-                        if records:
-                            columns_retrieved = list(records[0].keys())
-                        delivery_status = "LIVE"
-                        status_msg = f"Retrieved {len(records)} live rows from PostgreSQL via psycopg2 ({target_desc})."
+                        if read_mode == "table":
+                            if select_all_tables or not target_tables:
+                                cur.execute(
+                                    "SELECT table_name FROM information_schema.tables "
+                                    "WHERE table_schema = %s AND table_type IN ('BASE TABLE', 'VIEW') "
+                                    "ORDER BY table_name;",
+                                    (schema_name,),
+                                )
+                                target_tables = [r["table_name"] for r in cur.fetchall()]
+                                if not target_tables:
+                                    raise ValidationException(
+                                        f"No tables found in schema '{schema_name}' for database '{params.get('database')}'."
+                                    )
+
+                            is_multi = len(target_tables) > 1
+                            for tbl in target_tables:
+                                t_schema = schema_name
+                                t_name = tbl
+                                if "." in t_name:
+                                    p = t_name.split(".", 1)
+                                    t_schema = p[0].strip() or t_schema
+                                    t_name = p[1].strip()
+
+                                q = f'SELECT {cols_str} FROM "{t_schema}"."{t_name}"{where_sql}{order_sql} LIMIT {limit}{offset_sql}'
+                                cur.execute(q)
+                                rows = [dict(r) for r in cur.fetchall()]
+                                if rows and not columns_retrieved:
+                                    columns_retrieved = list(rows[0].keys())
+                                if is_multi:
+                                    for r in rows:
+                                        r["_table"] = t_name
+                                per_table_data[t_name] = rows
+                                records.extend(rows)
+
+                            delivery_status = "LIVE"
+                            if is_multi:
+                                if "_table" not in columns_retrieved:
+                                    columns_retrieved.insert(0, "_table")
+                                status_msg = f"Retrieved {len(records)} live rows across {len(target_tables)} tables via psycopg2 ({', '.join(target_tables)})."
+                            else:
+                                status_msg = f"Retrieved {len(records)} live rows from PostgreSQL via psycopg2 ({schema_name}.{target_tables[0]})."
+                        else:
+                            query = str(config.get("query", "SELECT * FROM public.sales")).strip()
+                            if "limit" not in query.lower():
+                                query = f"{query} LIMIT {limit}"
+                            cur.execute(query)
+                            records = [dict(r) for r in cur.fetchall()]
+                            if records:
+                                columns_retrieved = list(records[0].keys())
+                            delivery_status = "LIVE"
+                            status_msg = f"Retrieved {len(records)} live rows via psycopg2."
                     conn.close()
                     last_error = None
                 except Exception as raw_e:
-                    logger.warning(f"PostgreSQL psycopg2 direct connection attempt failed: {raw_e}")
+                    logger.warning(f"PostgreSQL psycopg2 direct execution failed: {raw_e}")
                     last_error = raw_e
 
-            # If live execution failed, raise ValidationException so user sees the real database error
             if last_error is not None:
                 raise ValidationException(
                     f"PostgreSQL connection to {params.get('host')}:{params.get('port')}/{params.get('database')} failed: {str(last_error)}"
@@ -679,33 +746,51 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
 
         # Simulation / Benchmark Data (ONLY when simulation_mode is True)
         if simulation_mode:
-            records = self._generate_benchmark_data(config)
-            # If specific columns were requested, filter simulated records
-            if select_all_columns is False and cols_list:
-                filtered = []
-                for r in records:
-                    item = {}
-                    for col in cols_list:
-                        clean_col = col.strip('"')
-                        if clean_col in r:
-                            item[clean_col] = r[clean_col]
-                        else:
-                            item[clean_col] = f"{clean_col}_val"
-                    filtered.append(item)
-                records = filtered
-            if records:
-                columns_retrieved = list(records[0].keys())
+            if not target_tables:
+                target_tables = ["sales"]
+            is_multi = len(target_tables) > 1
+            for tbl in target_tables:
+                sim_recs = self._generate_benchmark_data(config)
+                if cols_list:
+                    filtered = []
+                    for r in sim_recs:
+                        item = {}
+                        for c in cols_list:
+                            clean_c = c.strip('"')
+                            item[clean_c] = r.get(clean_c, f"{clean_c}_val")
+                        filtered.append(item)
+                    sim_recs = filtered
+                if is_multi:
+                    for r in sim_recs:
+                        r["_table"] = tbl
+                per_table_data[tbl] = sim_recs
+                records.extend(sim_recs)
+
+            if is_multi:
+                columns_retrieved = ["_table"] + (cols_list if cols_list else (list(records[0].keys()) if records else []))
+                target_desc = f"{schema_name} ({', '.join(target_tables)})"
+            else:
+                target_desc = f"{schema_name}.{target_tables[0]}"
+                columns_retrieved = cols_list if cols_list else (list(records[0].keys()) if records else [])
+
             delivery_status = "SIMULATED"
             status_msg = f"PostgreSQL benchmark simulation mode active. Generated {len(records)} test rows for table '{target_desc}'."
 
-        df_out = pd.DataFrame(records) if pd is not None else records
+        df_out = pd.DataFrame(records, columns=columns_retrieved if (records and columns_retrieved) else None) if pd is not None else records
         duration_ms = int((time.time() - start_time) * 1000)
+
+        per_table_dfs = {k: pd.DataFrame(v) for k, v in per_table_data.items()} if pd is not None else per_table_data
+        target_name = target_desc if 'target_desc' in locals() else (f"{schema_name}.{target_tables[0]}" if target_tables else "PostgreSQL")
 
         summary = {
             "title": "PostgreSQL Connector Summary",
             "message": status_msg,
             "status": delivery_status,
-            "target": target_desc,
+            "target": target_name,
+            "database": params.get("database"),
+            "schema": schema_name,
+            "tables_retrieved": target_tables,
+            "tables_count": len(target_tables),
             "records_retrieved": len(records),
             "columns_count": len(columns_retrieved),
             "columns": columns_retrieved,
@@ -714,6 +799,7 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
 
         metrics = {
             "records_retrieved": len(records),
+            "tables_count": len(target_tables),
             "columns_count": len(columns_retrieved),
             "duration_ms": duration_ms,
             "delivery_status": delivery_status,
@@ -722,6 +808,7 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
         return {
             "dataframe": df_out,
             "output": df_out,
+            "tables": per_table_dfs,
             "output_summary": summary,
             "metrics": metrics,
         }
