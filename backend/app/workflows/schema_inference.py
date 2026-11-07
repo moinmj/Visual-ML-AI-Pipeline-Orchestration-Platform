@@ -437,6 +437,30 @@ class WorkflowSchemaInferencer:
             elif recipe_id in ["cron_trigger", "webhook_trigger"]:
                 parent_cols = ["timestamp", "trigger_time", "payload"]
                 parent_details = [NodeColumnInfo(name=c, type="string") for c in parent_cols]
+            elif recipe_id in ["postgresql_connector", "postgres", "postgres_connector"]:
+                select_all = config.get("select_all_columns")
+                cols_raw = config.get("columns")
+                chosen_cols = []
+                if isinstance(cols_raw, list):
+                    chosen_cols = [str(c).strip() for c in cols_raw if str(c).strip() and str(c).strip() != "*"]
+                elif isinstance(cols_raw, str) and cols_raw.strip():
+                    chosen_cols = [c.strip() for c in cols_raw.split(",") if c.strip() and c.strip() != "*"]
+
+                if select_all is False and chosen_cols:
+                    parent_cols = chosen_cols
+                else:
+                    from backend.app.recipes.ingestion.postgresql_connector import PostgreSQLConnectorRecipe
+                    pg_recipe = PostgreSQLConnectorRecipe()
+                    mock_records = pg_recipe._generate_benchmark_data(config)
+                    parent_cols = list(mock_records[0].keys()) if mock_records else ["id", "name", "created_at"]
+
+                parent_details = [
+                    NodeColumnInfo(
+                        name=c,
+                        type="numeric" if any(w in c.lower() for w in ["id", "amount", "price", "count", "qty", "val", "num"]) else "string"
+                    )
+                    for c in parent_cols
+                ]
 
         # Feature selection / dropping / modeling transformations
         active_cols = list(parent_cols)

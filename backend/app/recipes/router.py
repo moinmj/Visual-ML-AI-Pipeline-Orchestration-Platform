@@ -220,3 +220,78 @@ async def run_recipe(
         columns=columns,
         total_rows=total_rows,
     )
+
+
+# ---------------------------------------------------------------------------
+# Recipe Dynamic Inspection endpoint (Databases, Schemas, Tables, Columns)
+# ---------------------------------------------------------------------------
+
+class RecipeInspectRequest(BaseModel):
+    action: str = Field(
+        default="test_connection",
+        description="Inspection action: 'test_connection', 'schemas', 'tables', 'columns'",
+        examples=["schemas"],
+    )
+    config: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Connection and connector configuration (e.g. connection_string, schema_name, table_name)",
+    )
+    schema_name: Optional[str] = Field(None, description="Schema name for 'tables' or 'columns' action")
+    table_name: Optional[str] = Field(None, description="Table name for 'columns' action")
+
+
+class RecipeInspectResponse(BaseModel):
+    recipe_id: str
+    action: str
+    success: bool
+    data: Dict[str, Any] = Field(default_factory=dict)
+    message: Optional[str] = None
+    error: Optional[str] = None
+
+
+@router.post(
+    "/{recipe_id}/inspect",
+    response_model=RecipeInspectResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def inspect_recipe(
+    recipe_id: str,
+    body: RecipeInspectRequest,
+    user: CurrentUser,
+):
+    """
+    **Inspect an external database or service connected to a recipe.**
+
+    Enables dynamic UI exploration:
+    - `action = "test_connection"`: Verifies database credentials and connectivity.
+    - `action = "schemas"`: Discovers all database schemas (e.g. 'public', 'analytics').
+    - `action = "tables"`: Discovers all tables and views within a schema.
+    - `action = "columns"`: Discovers column names, types, and nullability for a table.
+    """
+    from starlette.concurrency import run_in_threadpool
+
+    recipe = recipe_registry.get(recipe_id)
+    if not hasattr(recipe, "inspect"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Recipe '{recipe_id}' does not support dynamic inspection.",
+        )
+
+    config = {**body.config, "tenant_id": user.tenant_id}
+    res = await run_in_threadpool(
+        recipe.inspect,
+        action=body.action,
+        config=config,
+        schema_name=body.schema_name,
+        table_name=body.table_name,
+    )
+
+    return RecipeInspectResponse(
+        recipe_id=recipe_id,
+        action=body.action,
+        success=res.get("success", True),
+        data=res,
+        message=res.get("message"),
+        error=res.get("error"),
+    )
+
