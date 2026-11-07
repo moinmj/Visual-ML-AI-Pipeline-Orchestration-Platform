@@ -463,3 +463,163 @@ def test_mongodb_connector_in_dag_workflow_end_to_end():
     assert res_mongo.status == "SUCCESS"
     summary_mongo = res_mongo.output_summary.get("output_summary") or res_mongo.output_summary
     assert summary_mongo.get("title") == "MongoDB Connector Summary"
+
+
+def test_postgresql_connector_connection_string_parsing():
+    """Verify that full connection_string URI extracts host, port, database, user, password, and sslmode."""
+    recipe = PostgreSQLConnectorRecipe()
+    config = {
+        "connection_mode": "connection_string",
+        "connection_string": "postgresql://dbuser:SecretPass123@prod-db.internal:5433/sales_warehouse?sslmode=require",
+        "read_mode": "table",
+        "table_name": "orders",
+        "simulation_mode": True,
+    }
+    params = recipe._resolve_connection_params(config)
+    assert params["host"] == "prod-db.internal"
+    assert params["port"] == 5433
+    assert params["database"] == "sales_warehouse"
+    assert params["username"] == "dbuser"
+    assert params["password"] == "SecretPass123"
+    assert params["ssl_mode"] == "require"
+
+
+def test_postgresql_connector_schema_and_table_selection():
+    """Verify selecting a custom schema and table name formats proper SQL and metadata."""
+    recipe = PostgreSQLConnectorRecipe()
+    # 1. Explicit schema_name and table_name
+    config1 = {
+        "read_mode": "table",
+        "schema_name": "analytics",
+        "table_name": "monthly_revenue",
+        "simulation_mode": True,
+    }
+    res1 = recipe.execute(inputs={}, config=config1)
+    assert res1["output_summary"]["target"] == "analytics.monthly_revenue"
+
+    # 2. Dot-delimited table name e.g. "finance.invoices"
+    config2 = {
+        "read_mode": "table",
+        "schema_name": "public",
+        "table_name": "finance.invoices",
+        "simulation_mode": True,
+    }
+    res2 = recipe.execute(inputs={}, config=config2)
+    assert res2["output_summary"]["target"] == "finance.invoices"
+
+
+def test_postgresql_connector_select_all_columns_vs_specific_columns():
+    """Verify select_all_columns toggle: select all columns or select specific subset."""
+    recipe = PostgreSQLConnectorRecipe()
+
+    # 1. select_all_columns = True
+    config_all = {
+        "read_mode": "table",
+        "schema_name": "public",
+        "table_name": "sales",
+        "select_all_columns": True,
+        "limit": 10,
+        "simulation_mode": True,
+    }
+    res_all = recipe.execute(inputs={}, config=config_all)
+    df_all = res_all["dataframe"]
+    assert "amount" in df_all.columns
+    assert "transaction_id" in df_all.columns
+    assert "status" in df_all.columns
+    assert len(df_all.columns) >= 5
+
+    # 2. select_all_columns = False with list of columns
+    config_subset_list = {
+        "read_mode": "table",
+        "schema_name": "public",
+        "table_name": "sales",
+        "select_all_columns": False,
+        "columns": ["transaction_id", "amount"],
+        "limit": 10,
+        "simulation_mode": True,
+    }
+    res_subset = recipe.execute(inputs={}, config=config_subset_list)
+    df_subset = res_subset["dataframe"]
+    assert list(df_subset.columns) == ["transaction_id", "amount"]
+    assert len(df_subset) == 10
+
+    # 3. select_all_columns = False with comma-separated string
+    config_subset_str = {
+        "read_mode": "table",
+        "schema_name": "public",
+        "table_name": "sales",
+        "select_all_columns": False,
+        "columns": "customer_id, currency, status",
+        "limit": 5,
+        "simulation_mode": True,
+    }
+    res_str = recipe.execute(inputs={}, config=config_subset_str)
+    df_str = res_str["dataframe"]
+    assert list(df_str.columns) == ["customer_id", "currency", "status"]
+
+    # 4. Validation: select_all_columns is False but no columns given
+    errs = recipe.validate_config({
+        "read_mode": "table",
+        "table_name": "sales",
+        "select_all_columns": False,
+        "columns": "",
+    })
+    assert any("at least one column must be specified" in e for e in errs)
+
+
+def test_postgresql_connector_where_clause_and_security():
+    """Verify WHERE clause filters and SQL injection / destructive keyword protection."""
+    recipe = PostgreSQLConnectorRecipe()
+
+    # Valid WHERE and ORDER BY
+    val_config = {
+        "read_mode": "table",
+        "table_name": "sales",
+        "where_clause": "amount > 100 AND status = 'COMPLETED'",
+        "order_by": "created_at DESC",
+    }
+    assert len(recipe.validate_config(val_config)) == 0
+
+    # Destructive keyword in WHERE clause blocked
+    bad_where = {
+        "read_mode": "table",
+        "table_name": "sales",
+        "where_clause": "amount > 0; DROP TABLE sales;",
+    }
+    errs = recipe.validate_config(bad_where)
+    assert any("Disallowed DDL/DML keyword 'DROP'" in e for e in errs)
+
+
+def test_postgresql_connector_dynamic_inspection():
+    """Verify dynamic database inspection for connection, schemas, tables, and columns."""
+    recipe = PostgreSQLConnectorRecipe()
+    config = {
+        "connection_mode": "connection_string",
+        "connection_string": "postgresql://user:pass@localhost:5432/mock_db",
+        "simulation_mode": True,
+    }
+
+    # 1. Test Connection
+    test_res = recipe.inspect("test_connection", config)
+    assert "connected" in test_res
+    assert test_res["database"] == "mock_db"
+
+    # 2. Schemas inspection
+    schemas_res = recipe.inspect("schemas", config)
+    assert schemas_res["success"] is True
+    assert "public" in schemas_res["schemas"]
+    assert len(schemas_res["schemas"]) >= 3
+
+    # 3. Tables inspection in selected schema
+    tables_res = recipe.inspect("tables", config, schema_name="analytics")
+    assert tables_res["success"] is True
+    assert tables_res["schema"] == "analytics"
+    assert "customers" in tables_res["tables"] or "orders" in tables_res["tables"]
+
+    # 4. Columns inspection in selected table
+    cols_res = recipe.inspect("columns", config, schema_name="public", table_name="customers")
+    assert cols_res["success"] is True
+    assert cols_res["table"] == "customers"
+    col_names = [c["name"] for c in cols_res["columns"]]
+    assert "id" in col_names or "name" in col_names or "created_at" in col_names
+

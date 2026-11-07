@@ -3434,8 +3434,28 @@ if "Pipeline Whiteboard" in app_mode:
 
                         current_config[prop_name] = new_val
 
-                    # Inline Auto-Switch / Synchronization for Split Mode & Temporal Setting
+                    # Inline Database Inspection Tools for PostgreSQL Connector
                     r_id = getattr(recipe_obj, "recipe_id", None) or node_cfg.get("recipe_id", "")
+                    if r_id in ["postgresql_connector", "postgres"]:
+                        st.markdown("---")
+                        st.markdown("###### 🐘 PostgreSQL Live Tools")
+                        c_pg1, c_pg2 = st.columns(2)
+                        with c_pg1:
+                            if st.button("🔌 Test Connection", key=f"pg_test_{selected_node_id}"):
+                                t_res = recipe_obj.inspect("test_connection", current_config)
+                                if t_res.get("connected"):
+                                    st.success(f"✅ {t_res.get('message', 'Connected successfully')}")
+                                else:
+                                    st.warning(f"⚠️ {t_res.get('message', 'Unreachable')}")
+                        with c_pg2:
+                            if st.button("🔍 Discover Schemas", key=f"pg_disc_{selected_node_id}"):
+                                s_res = recipe_obj.inspect("schemas", current_config)
+                                t_res = recipe_obj.inspect("tables", current_config, schema_name=current_config.get("schema_name", "public"))
+                                s_list = s_res.get("schemas", [])
+                                t_list = t_res.get("tables", [])
+                                st.info(f"📂 **Schemas:** {', '.join(s_list[:6])}\n\n📋 **Tables in '{current_config.get('schema_name', 'public')}':** {', '.join(t_list[:8])}")
+
+                    # Inline Auto-Switch / Synchronization for Split Mode & Temporal Setting
                     if r_id == "train_test_split":
                         is_strat = bool(current_config.get("stratify", False))
                         is_ts = bool(current_config.get("time_series_mode", False))

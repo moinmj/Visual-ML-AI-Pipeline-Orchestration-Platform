@@ -258,3 +258,92 @@ def test_manual_data_entry_passthrough():
     res_config = recipe.execute(inputs={}, config={"dataframe": existing_df})
     assert res_config["dataframe"].equals(existing_df)
 
+
+
+def test_manual_data_entry_invalid_column_type_raises():
+    """Verify that specifying an invalid/unknown type (e.g. 'xyz') raises ValidationException."""
+    recipe = ManualDataEntryRecipe()
+    config = {
+        "data_format": "csv_text",
+        "data": "id,score\n1,95\n2,88",
+        "column_types": {"score": "xyz"},
+    }
+    with pytest.raises(ValidationException) as exc_info:
+        recipe.execute(inputs={}, config=config)
+    assert "Unsupported or invalid data type 'xyz'" in str(exc_info.value)
+    assert "Supported types are: int, float, str, bool, datetime" in str(exc_info.value)
+
+
+def test_manual_data_entry_missing_column_in_column_types_raises():
+    """Verify that specifying a column in column_types that does not exist raises ValidationException."""
+    recipe = ManualDataEntryRecipe()
+    config = {
+        "data_format": "csv_text",
+        "data": "id,score\n1,95\n2,88",
+        "column_types": {"non_existent_column": "int"},
+    }
+    with pytest.raises(ValidationException) as exc_info:
+        recipe.execute(inputs={}, config=config)
+    assert "Column 'non_existent_column' specified in explicit column types does not exist" in str(exc_info.value)
+
+
+def test_manual_data_entry_rename_columns_success():
+    """Verify that rename_columns properly renames columns and preserves values."""
+    recipe = ManualDataEntryRecipe()
+    csv_text = "city,temp,rainfall\nBerlin,18.5,45.2\nTokyo,26.0,80.1"
+    config = {
+        "data_format": "csv_text",
+        "data": csv_text,
+        "rename_columns": {
+            "temp": "temperature",
+            "rainfall": "precipitation_mm",
+        },
+    }
+    result = recipe.execute(inputs={}, config=config)
+    df = result["dataframe"]
+    assert list(df.columns) == ["city", "temperature", "precipitation_mm"]
+    assert df.iloc[0]["temperature"] == 18.5
+    assert df.iloc[1]["precipitation_mm"] == 80.1
+
+
+def test_manual_data_entry_rename_mapping_alias():
+    """Verify that rename_mapping key works as an alias for rename_columns."""
+    recipe = ManualDataEntryRecipe()
+    csv_text = "colA,colB\n1,2\n3,4"
+    config = {
+        "data_format": "csv_text",
+        "data": csv_text,
+        "rename_mapping": {"colA": "alpha", "colB": "beta"},
+    }
+    result = recipe.execute(inputs={}, config=config)
+    assert list(result["dataframe"].columns) == ["alpha", "beta"]
+
+
+def test_manual_data_entry_rename_nonexistent_column_raises():
+    """Verify that attempting to rename a column that doesn't exist raises ValidationException."""
+    recipe = ManualDataEntryRecipe()
+    config = {
+        "data_format": "csv_text",
+        "data": "id,name\n1,Alice",
+        "rename_columns": {"unknown_col": "new_name"},
+    }
+    with pytest.raises(ValidationException) as exc_info:
+        recipe.execute(inputs={}, config=config)
+    assert "Column 'unknown_col' specified in rename mapping does not exist" in str(exc_info.value)
+
+
+def test_manual_data_entry_rename_and_column_types_combined():
+    """Verify combining rename_columns and column_types works seamlessly."""
+    recipe = ManualDataEntryRecipe()
+    csv_text = "id,old_val\n1,123.45\n2,678.90"
+    config = {
+        "data_format": "csv_text",
+        "data": csv_text,
+        "rename_columns": {"old_val": "new_val"},
+        "column_types": {"old_val": "float"},
+    }
+    result = recipe.execute(inputs={}, config=config)
+    df = result["dataframe"]
+    assert "new_val" in df.columns
+    assert "old_val" not in df.columns
+    assert pd.api.types.is_float_dtype(df["new_val"])
