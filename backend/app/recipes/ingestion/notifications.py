@@ -65,7 +65,7 @@ class NotificationsRecipe(BaseRecipe):
                     "type": "string",
                     "title": "Webhook / Endpoint URL",
                     "default": "",
-                    "input_type": "url",
+                    "input_type": "text",
                     "description": (
                         "Destination webhook or HTTP endpoint URL "
                         "(for webhook, Slack, Teams, or Discord)."

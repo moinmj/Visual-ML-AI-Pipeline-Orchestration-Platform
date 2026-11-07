@@ -23,6 +23,11 @@ from backend.app.core.logging import logger
 _ENDPOINT_PAYLOAD_CACHE: Dict[str, Dict[str, Any]] = {}
 
 
+def _safe_cache_filename(key: str) -> str:
+    """Sanitizes composite keys (e.g. 'wf-id:slug') into OS-safe filenames (colon is forbidden on Windows)."""
+    return key.replace(":", "__").replace("/", "_").replace("\\", "_")
+
+
 def get_cached_endpoint_payload(endpoint_key: str) -> Optional[Dict[str, Any]]:
     """Retrieves cached API response payload by slug or composite key."""
     clean_key = endpoint_key.strip().lower()
@@ -32,7 +37,11 @@ def get_cached_endpoint_payload(endpoint_key: str) -> Optional[Dict[str, Any]]:
     # Check on-disk persistence fallback
     try:
         cache_dir = Path(settings.LOCAL_STORAGE_DIR) / "endpoints"
-        cache_file = cache_dir / f"{clean_key}.json"
+        safe_name = _safe_cache_filename(clean_key)
+        cache_file = cache_dir / f"{safe_name}.json"
+        if not cache_file.exists():
+            cache_file = cache_dir / f"{clean_key}.json"
+
         if cache_file.exists():
             with open(cache_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -52,7 +61,8 @@ def store_cached_endpoint_payload(endpoint_key: str, payload_data: Dict[str, Any
     try:
         cache_dir = Path(settings.LOCAL_STORAGE_DIR) / "endpoints"
         cache_dir.mkdir(parents=True, exist_ok=True)
-        cache_file = cache_dir / f"{clean_key}.json"
+        safe_name = _safe_cache_filename(clean_key)
+        cache_file = cache_dir / f"{safe_name}.json"
         with open(cache_file, "w", encoding="utf-8") as f:
             json.dump(payload_data, f, indent=2, default=str)
     except Exception as ex:
@@ -107,6 +117,18 @@ class ApiResponseEndpointRecipe(BaseRecipe):
                     "description": "Unique URL path identifier (e.g. 'flow-data' or 'customer-scores').",
                     "input_type": "text"
                 },
+                "http_method": {
+                    "type": "string",
+                    "title": "Allowed HTTP Method",
+                    "enum": [
+                        "Both (GET & POST)",
+                        "GET",
+                        "POST"
+                    ],
+                    "default": "Both (GET & POST)",
+                    "description": "Select which HTTP method is accepted by this endpoint: GET, POST, or both.",
+                    "input_type": "dropdown"
+                },
                 "response_format": {
                     "type": "string",
                     "title": "JSON Response Format",
@@ -159,6 +181,13 @@ class ApiResponseEndpointRecipe(BaseRecipe):
                     "description": "Access control requirement for external callers.",
                     "input_type": "dropdown"
                 },
+                "api_key": {
+                    "type": "string",
+                    "title": "API Secret Key",
+                    "default": "crt-sec-9a8b7c6d5e",
+                    "description": "Custom secret key required when Authentication Requirement is set to 'API Key'. Callers provide this via 'X-API-Key' header or '?api_key=' parameter.",
+                    "input_type": "text"
+                },
                 "cache_duration_seconds": {
                     "type": "integer",
                     "title": "Cache Duration (Seconds)",
@@ -203,6 +232,8 @@ class ApiResponseEndpointRecipe(BaseRecipe):
         status_code = int(config.get("http_status_code", 200))
         allow_cors = bool(config.get("allow_cors", True))
         auth_mode = str(config.get("auth_mode", "None (Public)"))
+        api_key = str(config.get("api_key", "crt-sec-9a8b7c6d5e")).strip()
+        http_method = str(config.get("http_method", "Both (GET & POST)")).strip()
         cache_duration = int(config.get("cache_duration_seconds", 300))
 
         # Apply record limit
@@ -240,10 +271,12 @@ class ApiResponseEndpointRecipe(BaseRecipe):
         # Full envelope for endpoint caching
         endpoint_envelope = {
             "endpoint_path": endpoint_path,
+            "http_method": http_method,
             "status_code": status_code,
             "format": response_format,
             "allow_cors": allow_cors,
             "auth_mode": auth_mode,
+            "api_key": api_key,
             "cache_duration_seconds": cache_duration,
             "updated_at": time.time(),
             "columns": list(df.columns),
@@ -275,7 +308,7 @@ class ApiResponseEndpointRecipe(BaseRecipe):
             {"Property": "API Endpoint URL", "Configuration / Value": api_v1_url, "Category": "Route"},
             {"Property": "Frontend Flow URL", "Configuration / Value": ui_flow_url, "Category": "Route"},
             {"Property": "Direct Flow Endpoint", "Configuration / Value": direct_flow_url, "Category": "Route"},
-            {"Property": "HTTP Methods", "Configuration / Value": "GET, POST", "Category": "Access"},
+            {"Property": "Allowed HTTP Method", "Configuration / Value": http_method, "Category": "Access"},
             {"Property": "Response Format", "Configuration / Value": response_format, "Category": "Payload"},
             {"Property": "HTTP Status Code", "Configuration / Value": str(status_code), "Category": "Payload"},
             {"Property": "Served Records", "Configuration / Value": f"{len(raw_records)} / {orig_rows}", "Category": "Payload"},
@@ -283,17 +316,26 @@ class ApiResponseEndpointRecipe(BaseRecipe):
             {"Property": "Auth Requirement", "Configuration / Value": auth_mode, "Category": "Access"},
             {"Property": "Cache Duration", "Configuration / Value": f"{cache_duration} seconds", "Category": "Caching"},
         ]
+        if auth_mode == "API Key":
+            spec_rows.append({"Property": "Required API Key", "Configuration / Value": api_key, "Category": "Access"})
+
         spec_df = pd.DataFrame(spec_rows)
 
         # Sample snippet for curl / frontend integration
-        curl_example = f"curl -X GET \"http://localhost:8000{api_v1_url}?limit=10\""
-        fetch_example = f"fetch('{api_v1_url}').then(r => r.json()).then(console.log);"
+        verb = "POST" if http_method == "POST" else "GET"
+        if auth_mode == "API Key":
+            curl_example = f"curl -X {verb} \"https://ml-crt.aiiotgeeks.com{api_v1_url}?api_key={api_key}\" -H \"X-API-Key: {api_key}\""
+            fetch_example = f"fetch('{api_v1_url}?api_key={api_key}', {{ method: '{verb}' }}).then(r => r.json()).then(console.log);"
+        else:
+            curl_example = f"curl -X {verb} \"https://ml-crt.aiiotgeeks.com{api_v1_url}?limit=10\""
+            fetch_example = f"fetch('{api_v1_url}', {{ method: '{verb}' }}).then(r => r.json()).then(console.log);"
 
         return {
             "dataframe": spec_df,
             "json_payload": data_payload,
             "metrics": {
                 "endpoint_path": endpoint_path,
+            "http_method": http_method,
                 "status_code": status_code,
                 "total_upstream_rows": orig_rows,
                 "served_rows": len(raw_records),
@@ -306,7 +348,7 @@ class ApiResponseEndpointRecipe(BaseRecipe):
                 "title": f"API Endpoint: /{endpoint_path}",
                 "endpoint_url": api_v1_url,
                 "frontend_flow_url": ui_flow_url,
-                "http_methods": "GET, POST",
+                "http_methods": http_method,
                 "curl_command": curl_example,
                 "javascript_fetch": fetch_example,
                 "preview_sample": raw_records[:3] if raw_records else []

@@ -1,5 +1,7 @@
 import pytest
 import pandas as pd
+from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock
 from fastapi.testclient import TestClient
 
 from backend.app.recipes.ingestion.api_response_endpoint import (
@@ -9,6 +11,18 @@ from backend.app.recipes.ingestion.api_response_endpoint import (
 )
 from backend.app.recipes.base.registry import recipe_registry
 from backend.app.main import app
+from backend.app.infrastructure.database.session import get_db
+
+@asynccontextmanager
+async def _dummy_lifespan(app):
+    yield
+
+app.router.lifespan_context = _dummy_lifespan
+
+async def _mock_get_db():
+    yield AsyncMock()
+
+app.dependency_overrides[get_db] = _mock_get_db
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -42,12 +56,14 @@ def test_api_endpoint_schema_properties():
 
     expected_keys = [
         "endpoint_path",
+        "http_method",
         "response_format",
         "record_limit",
         "include_metadata",
         "http_status_code",
         "allow_cors",
         "auth_mode",
+        "api_key",
         "cache_duration_seconds",
     ]
     for key in expected_keys:
@@ -55,7 +71,9 @@ def test_api_endpoint_schema_properties():
         assert "input_type" in props[key], f"Property '{key}' missing input_type"
 
     assert props["endpoint_path"]["input_type"] == "text"
+    assert props["http_method"]["input_type"] == "dropdown"
     assert props["response_format"]["input_type"] == "dropdown"
+    assert props["api_key"]["input_type"] == "text"
     assert props["record_limit"]["input_type"] == "number"
     assert props["allow_cors"]["input_type"] == "checkbox"
     assert props["auth_mode"]["input_type"] == "dropdown"
@@ -288,3 +306,112 @@ def test_http_endpoint_404_on_missing():
     r = client.get("/endpoints/non-existent-endpoint-slug-999")
     assert r.status_code == 404
     assert "not found" in r.json()["detail"].lower()
+
+
+def test_http_endpoint_method_restrictions():
+    """Verify HTTP method restriction: GET-only, POST-only, and Both."""
+    client = TestClient(app)
+
+    # 1. GET only
+    get_envelope = {
+        "endpoint_path": "get-only-endpoint",
+        "http_method": "GET",
+        "status_code": 200,
+        "format": "records",
+        "allow_cors": True,
+        "auth_mode": "None (Public)",
+        "cache_duration_seconds": 60,
+        "total_records": 1,
+        "data": [{"type": "get_only"}],
+    }
+    store_cached_endpoint_payload("get-only-endpoint", get_envelope)
+
+    r_get = client.get("/endpoints/get-only-endpoint")
+    assert r_get.status_code == 200
+    assert r_get.json()[0]["type"] == "get_only"
+
+    r_post = client.post("/endpoints/get-only-endpoint")
+    assert r_post.status_code == 405
+    assert "Method Not Allowed" in r_post.json()["detail"]
+
+    # 2. POST only
+    post_envelope = {
+        "endpoint_path": "post-only-endpoint",
+        "http_method": "POST",
+        "status_code": 200,
+        "format": "records",
+        "allow_cors": True,
+        "auth_mode": "None (Public)",
+        "cache_duration_seconds": 60,
+        "total_records": 1,
+        "data": [{"type": "post_only"}],
+    }
+    store_cached_endpoint_payload("post-only-endpoint", post_envelope)
+
+    r_get_fail = client.get("/endpoints/post-only-endpoint")
+    assert r_get_fail.status_code == 405
+    assert "Method Not Allowed" in r_get_fail.json()["detail"]
+
+    r_post_ok = client.post("/endpoints/post-only-endpoint")
+    assert r_post_ok.status_code == 200
+    assert r_post_ok.json()[0]["type"] == "post_only"
+
+    # 3. Both (GET & POST)
+    both_envelope = {
+        "endpoint_path": "both-methods-endpoint",
+        "http_method": "Both (GET & POST)",
+        "status_code": 200,
+        "format": "records",
+        "allow_cors": True,
+        "auth_mode": "None (Public)",
+        "cache_duration_seconds": 60,
+        "total_records": 1,
+        "data": [{"type": "both"}],
+    }
+    store_cached_endpoint_payload("both-methods-endpoint", both_envelope)
+
+    assert client.get("/endpoints/both-methods-endpoint").status_code == 200
+    assert client.post("/endpoints/both-methods-endpoint").status_code == 200
+
+
+def test_http_endpoint_custom_api_key_forbidden():
+    """Verify that when a custom api_key is configured, wrong keys yield 403 Forbidden."""
+    custom_envelope = {
+        "endpoint_path": "custom-secret-endpoint",
+        "http_method": "Both (GET & POST)",
+        "status_code": 200,
+        "format": "records",
+        "allow_cors": True,
+        "auth_mode": "API Key",
+        "api_key": "crt-sec-9a8b7c6d5e",
+        "cache_duration_seconds": 60,
+        "total_records": 1,
+        "data": [{"status": "confidential"}],
+    }
+    store_cached_endpoint_payload("custom-secret-endpoint", custom_envelope)
+
+    client = TestClient(app)
+
+    # 1. Missing key -> 401
+    r_no_key = client.get("/endpoints/custom-secret-endpoint")
+    assert r_no_key.status_code == 401
+
+    # 2. Wrong key in header -> 403 Forbidden
+    r_wrong_header = client.get("/endpoints/custom-secret-endpoint", headers={"X-API-Key": "incorrect-secret"})
+    assert r_wrong_header.status_code == 403
+    assert "invalid" in r_wrong_header.json()["detail"].lower()
+
+    # 3. Wrong key in param -> 403 Forbidden
+    r_wrong_param = client.get("/endpoints/custom-secret-endpoint?api_key=bad-key")
+    assert r_wrong_param.status_code == 403
+    assert "invalid" in r_wrong_param.json()["detail"].lower()
+
+    # 4. Correct key in header -> 200 OK
+    r_ok_header = client.get("/endpoints/custom-secret-endpoint", headers={"X-API-Key": "crt-sec-9a8b7c6d5e"})
+    assert r_ok_header.status_code == 200
+    assert r_ok_header.json()[0]["status"] == "confidential"
+
+    # 5. Correct key in param -> 200 OK
+    r_ok_param = client.get("/endpoints/custom-secret-endpoint?api_key=crt-sec-9a8b7c6d5e")
+    assert r_ok_param.status_code == 200
+    assert r_ok_param.json()[0]["status"] == "confidential"

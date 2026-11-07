@@ -244,9 +244,18 @@ async def autowire_nodes(payload: AutoWireRequest):
         "catboost_trainer": 4.0,
         "random_forest_trainer": 4.0,
         "logistic_regression_trainer": 4.0,
+        "neural_network_trainer": 4.0,
         "isolation_forest": 4.0,
         "prophet_forecaster": 4.0,
         "arima_forecaster": 4.0,
+        "survival_model": 4.0,
+        "recommendation_engine": 4.0,
+
+        # Tuning, Ensembling & Post-Processing (Meta-Estimators)
+        "hyperparameter_tuner": 4.1,
+        "automl_search": 4.15,
+        "ensemble_stacker": 4.2,
+        "model_calibration": 4.3,
 
         # Evaluation
         "model_evaluator": 5.0,
@@ -324,6 +333,12 @@ async def autowire_nodes(payload: AutoWireRequest):
             return 3.0
         elif any(k in label for k in ["imbalance", "smote", "resample", "oversample", "undersample"]):
             return 3.5
+        elif any(k in label for k in ["calibrat", "platt", "isotonic"]):
+            return 4.3
+        elif any(k in label for k in ["stack", "ensemble"]):
+            return 4.2
+        elif any(k in label for k in ["tuner", "hyperparameter", "optuna", "grid_search", "automl"]):
+            return 4.1
         elif any(k in label for k in ["xgb", "lightgbm", "catboost", "model", "train", "forest", "linear", "logistic"]):
             return 4.0
         elif any(k in label for k in ["eval", "metric", "performance"]):

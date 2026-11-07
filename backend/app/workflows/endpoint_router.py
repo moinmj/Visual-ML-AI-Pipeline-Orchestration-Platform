@@ -32,7 +32,7 @@ from backend.app.recipes.ingestion.api_response_endpoint import (
 endpoint_router = APIRouter(tags=["Flow API Endpoints"])
 
 
-async def _check_endpoint_auth(request: Request, auth_mode: str) -> None:
+async def _check_endpoint_auth(request: Request, auth_mode: str, expected_api_key: Optional[str] = None) -> None:
     """
     Validates authentication against the configured requirement of the node.
     - 'None (Public)': open to all clients.
@@ -55,6 +55,11 @@ async def _check_endpoint_auth(request: Request, auth_mode: str) -> None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Authentication required: Provide a valid API key via 'X-API-Key' header or '?api_key=' parameter.",
+            )
+        if expected_api_key and expected_api_key.strip() and api_key.strip() != expected_api_key.strip():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Forbidden: The provided API key is invalid.",
             )
         return
 
@@ -225,9 +230,27 @@ async def _resolve_endpoint_response(
             ),
         )
 
+    # Step 2.5: Validate HTTP method (GET vs POST)
+    allowed_method = str(cached.get("http_method", "Both (GET & POST)")).strip().upper()
+    req_method = request.method.upper()
+    if req_method not in ("OPTIONS", "HEAD"):
+        if allowed_method == "GET" and req_method != "GET":
+            raise HTTPException(
+                status_code=status.HTTP_405_METHOD_NOT_ALLOWED,
+                detail=f"Method Not Allowed: Endpoint is configured to accept GET requests only, but received {req_method}.",
+                headers={"Allow": "GET"},
+            )
+        elif allowed_method == "POST" and req_method != "POST":
+            raise HTTPException(
+                status_code=status.HTTP_405_METHOD_NOT_ALLOWED,
+                detail=f"Method Not Allowed: Endpoint is configured to accept POST requests only, but received {req_method}.",
+                headers={"Allow": "POST"},
+            )
+
     # Step 3: Validate authentication
     auth_mode = cached.get("auth_mode", "None (Public)")
-    await _check_endpoint_auth(request, auth_mode)
+    expected_api_key = cached.get("api_key")
+    await _check_endpoint_auth(request, auth_mode, expected_api_key=expected_api_key)
 
     # Step 4: Extract and format payload
     raw_data = cached.get("data")
