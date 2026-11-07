@@ -79,6 +79,16 @@ class ManualDataEntryRecipe(BaseRecipe):
                     "input_type": "checkbox",
                     "description": "Automatically infer numeric, boolean, and datetime data types.",
                 },
+                "rename_columns": {
+                    "type": "object",
+                    "title": "Rename Columns Mapping",
+                    "default": {},
+                    "input_type": "key_value",
+                    "description": (
+                        "Optional mapping of current column names to new column names "
+                        "(e.g. {'old_col': 'new_col'})."
+                    ),
+                },
                 "column_types": {
                     "type": "object",
                     "title": "Explicit Column Types",
@@ -121,25 +131,34 @@ class ManualDataEntryRecipe(BaseRecipe):
         config: Dict[str, Any],
         context: Optional[Any] = None,
     ) -> Dict[str, Any]:
-        # 1. Passthrough if DataFrame is already provided
-        if "dataframe" in inputs and isinstance(inputs["dataframe"], pd.DataFrame):
-            df = inputs["dataframe"]
-            return {
-                "dataframe": df,
-                "output": df,
-                "row_count": len(df),
-                "column_count": len(df.columns),
-                "columns": list(df.columns),
-            }
-        if "dataframe" in config and isinstance(config["dataframe"], pd.DataFrame):
-            df = config["dataframe"]
-            return {
-                "dataframe": df,
-                "output": df,
-                "row_count": len(df),
-                "column_count": len(df.columns),
-                "columns": list(df.columns),
-            }
+        # 1. Passthrough if DataFrame is already provided and no transformations requested
+        column_types = config.get("column_types", {}) or {}
+        rename_columns = (
+            config.get("rename_columns")
+            or config.get("rename_mapping")
+            or {}
+        )
+        has_transform = bool(column_types or rename_columns)
+
+        if not has_transform:
+            if "dataframe" in inputs and isinstance(inputs["dataframe"], pd.DataFrame):
+                df = inputs["dataframe"]
+                return {
+                    "dataframe": df,
+                    "output": df,
+                    "row_count": len(df),
+                    "column_count": len(df.columns),
+                    "columns": list(df.columns),
+                }
+            if "dataframe" in config and isinstance(config["dataframe"], pd.DataFrame):
+                df = config["dataframe"]
+                return {
+                    "dataframe": df,
+                    "output": df,
+                    "row_count": len(df),
+                    "column_count": len(df.columns),
+                    "columns": list(df.columns),
+                }
 
         # 2. Extract configuration
         data_format = config.get("data_format", "json_records")
@@ -156,7 +175,6 @@ class ManualDataEntryRecipe(BaseRecipe):
         delimiter = config.get("delimiter", ",") or ","
         has_header = config.get("has_header", True)
         infer_types = config.get("infer_types", True)
-        column_types = config.get("column_types", {}) or {}
         strip_whitespace = config.get("strip_whitespace", True)
         null_tokens = config.get(
             "null_values", ["", "null", "NULL", "None", "NaN", "nan", "NA", "N/A"]
@@ -164,18 +182,98 @@ class ManualDataEntryRecipe(BaseRecipe):
         null_tokens_set = set(null_tokens) if isinstance(null_tokens, list) else set()
         coerce_errors = config.get("coerce_errors", True)
 
-        # 3. Parse input into DataFrame
-        df = self._parse_data(
-            raw_data=raw_data,
-            data_format=data_format,
-            delimiter=delimiter,
-            has_header=has_header,
-        )
+        # 3. Validate configuration dictionaries & types upfront
+        if not isinstance(column_types, dict):
+            raise ValidationException(
+                "Explicit column types ('column_types') must be a dictionary/object of column_name: target_type."
+            )
+        if not isinstance(rename_columns, dict):
+            raise ValidationException(
+                "Rename columns mapping ('rename_columns') must be a dictionary/object of old_name: new_name."
+            )
 
-        # 4. Handle empty DataFrame edge case
+        supported_type_aliases = {
+            "int", "integer", "int64", "int32",
+            "float", "float64", "number", "double",
+            "bool", "boolean",
+            "datetime", "date", "timestamp",
+            "str", "string", "text",
+        }
+
+        for col_name, target_type in column_types.items():
+            t_str = str(target_type).strip().lower()
+            if t_str not in supported_type_aliases:
+                raise ValidationException(
+                    f"Unsupported or invalid data type '{target_type}' for column '{col_name}'. "
+                    f"Supported types are: int, float, str, bool, datetime."
+                )
+
+        # 4. Parse input into DataFrame
+        if "dataframe" in inputs and isinstance(inputs["dataframe"], pd.DataFrame):
+            df = inputs["dataframe"].copy()
+        elif "dataframe" in config and isinstance(config["dataframe"], pd.DataFrame):
+            df = config["dataframe"].copy()
+        else:
+            df = self._parse_data(
+                raw_data=raw_data,
+                data_format=data_format,
+                delimiter=delimiter,
+                has_header=has_header,
+            )
+
+        # 5. Clean column names
+        if strip_whitespace:
+            df.columns = [str(c).strip() for c in df.columns]
+
+        # 6. Handle empty DataFrame edge case with explicit column types
         if df.empty and not df.columns.any() and column_types:
-            df = pd.DataFrame(columns=list(column_types.keys()))
+            df = pd.DataFrame(columns=[str(c).strip() if strip_whitespace else str(c) for c in column_types.keys()])
 
+        # 7. Apply column rename mapping
+        if rename_columns:
+            if len(df.columns) == 0:
+                raise ValidationException("Cannot apply rename mapping on an empty dataset with no columns.")
+
+            rename_map = {}
+            for old_col, new_col in rename_columns.items():
+                old_clean = str(old_col).strip() if strip_whitespace else str(old_col)
+                new_clean = str(new_col).strip() if strip_whitespace else str(new_col)
+                if not new_clean:
+                    raise ValidationException(
+                        f"Replacement name for column '{old_col}' in rename mapping cannot be empty."
+                    )
+                if old_clean not in df.columns:
+                    raise ValidationException(
+                        f"Column '{old_col}' specified in rename mapping does not exist in dataset. "
+                        f"Available columns: {list(df.columns)}"
+                    )
+                rename_map[old_clean] = new_clean
+
+            df = df.rename(columns=rename_map)
+
+            # Prevent duplicate column names
+            if len(df.columns) != len(set(df.columns)):
+                raise ValidationException(
+                    f"Rename mapping resulted in duplicate column names: {list(df.columns)}"
+                )
+
+        # 8. Validate column names in column_types
+        resolved_column_types: Dict[str, str] = {}
+        for col_name, target_type in column_types.items():
+            col_clean = str(col_name).strip() if strip_whitespace else str(col_name)
+            if rename_columns and col_clean in rename_columns:
+                target_col = str(rename_columns[col_clean]).strip() if strip_whitespace else str(rename_columns[col_clean])
+            else:
+                target_col = col_clean
+
+            if len(df.columns) > 0 and target_col not in df.columns:
+                raise ValidationException(
+                    f"Column '{col_name}' specified in explicit column types does not exist in dataset. "
+                    f"Available columns: {list(df.columns)}"
+                )
+            resolved_column_types[target_col] = str(target_type).strip().lower()
+
+        # 9. Handle empty DataFrame after header/rename processing
         if df.empty:
             return {
                 "dataframe": df,
@@ -185,11 +283,7 @@ class ManualDataEntryRecipe(BaseRecipe):
                 "columns": list(df.columns),
             }
 
-        # 5. Clean column names
-        if strip_whitespace:
-            df.columns = [str(c).strip() for c in df.columns]
-
-        # 6. Apply null token replacement and string stripping
+        # 10. Apply null token replacement and string stripping
         for col in df.columns:
             if df[col].dtype == object or pd.api.types.is_string_dtype(df[col]):
                 if strip_whitespace:
@@ -201,11 +295,10 @@ class ManualDataEntryRecipe(BaseRecipe):
                         lambda x: np.nan if (isinstance(x, str) and x in null_tokens_set) or x is None else x
                     )
 
-        # 7. Explicit column casting
-        for col, target_type in column_types.items():
+        # 11. Explicit column casting
+        for col, t_str in resolved_column_types.items():
             if col not in df.columns:
                 continue
-            t_str = str(target_type).strip().lower()
             try:
                 if t_str in ("int", "integer", "int64", "int32"):
                     df[col] = pd.to_numeric(
@@ -223,15 +316,22 @@ class ManualDataEntryRecipe(BaseRecipe):
                     )
                 elif t_str in ("str", "string", "text"):
                     df[col] = df[col].astype("string")
+                else:
+                    raise ValidationException(
+                        f"Unsupported or invalid data type '{t_str}' for column '{col}'. "
+                        f"Supported types are: int, float, str, bool, datetime."
+                    )
+            except ValidationException:
+                raise
             except Exception as e:
                 raise ValidationException(
-                    f"Failed to cast column '{col}' to type '{target_type}': {str(e)}"
+                    f"Failed to cast column '{col}' to type '{t_str}': {str(e)}"
                 )
 
-        # 8. Auto type inference for remaining columns
+        # 12. Auto type inference for remaining columns
         if infer_types:
             for col in df.columns:
-                if col in column_types:
+                if col in resolved_column_types:
                     continue
                 # Try numeric conversion
                 if df[col].dtype == object:
