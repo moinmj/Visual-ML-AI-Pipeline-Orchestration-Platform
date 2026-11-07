@@ -270,6 +270,7 @@ class ModelCalibrationRecipe(BaseRecipe):
             logger.warning(warn_msg)
             return {
                 "model": model,
+                "task_type": inputs.get("task_type", "classification"),
                 "metrics": {
                     "calibration_method": "passthrough",
                     "status": "SKIPPED_INSUFFICIENT_SAMPLES",
@@ -442,6 +443,7 @@ class ModelCalibrationRecipe(BaseRecipe):
         return {
             "model": calibrator,
             "calibrated_model": calibrator,
+            "task_type": inputs.get("task_type", "classification"),
             "metrics": metrics,
             "report": "\n".join(report_lines)
         }

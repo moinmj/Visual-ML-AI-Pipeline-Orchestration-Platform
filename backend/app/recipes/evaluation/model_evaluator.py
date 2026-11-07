@@ -110,7 +110,15 @@ class ModelEvaluatorRecipe(BaseRecipe):
         if model is None:
             raise ValueError("ModelEvaluator expects a trained 'model' in inputs. Please connect a Model Trainer node before this Evaluator.")
 
-        task_type = inputs.get("task_type") or (context.get("task_type") if isinstance(context, dict) else "classification") or "classification"
+        task_type = inputs.get("task_type") or (context.get("task_type") if isinstance(context, dict) else None)
+        from sklearn.base import is_classifier, is_regressor
+        if not task_type:
+            if is_regressor(model) or getattr(model, "_estimator_type", None) == "regressor":
+                task_type = "regression"
+            else:
+                task_type = "classification"
+        elif task_type == "classification" and (is_regressor(model) or getattr(model, "_estimator_type", None) == "regressor"):
+            task_type = "regression"
         report_type = config.get("report_type", "Comprehensive (All Metrics + Confusion Matrix)")
         avg_strat = config.get("average_strategy", "weighted")
         decision_threshold = float(config.get("decision_threshold", 0.5))
@@ -291,6 +299,21 @@ class ModelEvaluatorRecipe(BaseRecipe):
         N = len(y_test)
         is_small_sample = bool(N < min_sample_threshold)
 
+        # Auto-detect if y_test is integer-like floats (e.g. [0.0, 1.0, 2.0]) and cast to int
+        try:
+            y_arr = np.asarray(y_test)
+            if np.issubdtype(y_arr.dtype, np.floating):
+                valid_mask = ~np.isnan(y_arr)
+                if valid_mask.any() and np.all(np.equal(np.mod(y_arr[valid_mask], 1), 0)):
+                    y_test = y_arr[valid_mask].astype(int) if not valid_mask.all() else y_arr.astype(int)
+                elif task_type == "classification":
+                    # y_test has real decimal numbers. If predictions are also floating continuous, auto-switch to regression!
+                    pred_arr = np.asarray(predictions)
+                    if np.issubdtype(pred_arr.dtype, np.floating) and not np.all(np.equal(np.mod(pred_arr, 1), 0)):
+                        task_type = "regression"
+        except Exception:
+            pass
+
         if task_type == "classification":
             # Align y_test types with predictions if needed
             try:
@@ -342,12 +365,21 @@ class ModelEvaluatorRecipe(BaseRecipe):
                 except Exception:
                     pass
 
-            acc = float(round(accuracy_score(y_test, predictions), 4))
-            bal_acc = float(round(balanced_accuracy_score(y_test, predictions), 4))
-            prec = float(round(precision_score(y_test, predictions, average=avg_strat, zero_division=0), 4))
-            rec = float(round(recall_score(y_test, predictions, average=avg_strat, zero_division=0), 4))
-            f1 = float(round(f1_score(y_test, predictions, average=avg_strat, zero_division=0), 4))
-            cm = confusion_matrix(y_test, predictions).tolist()
+            try:
+                acc = float(round(accuracy_score(y_test, predictions), 4))
+                bal_acc = float(round(balanced_accuracy_score(y_test, predictions), 4))
+                prec = float(round(precision_score(y_test, predictions, average=avg_strat, zero_division=0), 4))
+                rec = float(round(recall_score(y_test, predictions, average=avg_strat, zero_division=0), 4))
+                f1 = float(round(f1_score(y_test, predictions, average=avg_strat, zero_division=0), 4))
+                cm = confusion_matrix(y_test, predictions).tolist()
+            except ValueError as val_err:
+                if "continuous and multiclass" in str(val_err) or "multiclass and continuous" in str(val_err):
+                    raise ValueError(
+                        f"Classification metrics cannot be computed: the target column contains continuous numerical values (decimals/floats). "
+                        f"If you are predicting continuous numbers (e.g. price, sales, quantity), change 'ML Task Type' to 'regression' in CatBoost Trainer (and remove Model Calibration). "
+                        f"If this is a classification problem, make sure the target column contains discrete classes (e.g. 0/1 or categorical text), and was not scaled by an upstream feature scaler."
+                    )
+                raise
 
             try:
                 clf_rep = classification_report(y_test, predictions, output_dict=True, zero_division=0)
