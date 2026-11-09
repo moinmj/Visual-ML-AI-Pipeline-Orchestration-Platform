@@ -175,6 +175,67 @@ def delete_file_from_ozone(ozone_key: str, tenant_id: Optional[int] = None) -> b
         return False
 
 
+def ozone_is_configured() -> bool:
+    """True when every setting needed to talk to the Ozone S3 gateway is present."""
+    return all(getattr(settings, k, None) for k in ("OZONE_ENDPOINT", "OZONE_ACCESS_KEY", "OZONE_SECRET_KEY", "OZONE_BUCKET"))
+
+
+def read_ozone_object_head(ozone_key: str, tenant_id: int, max_bytes: int = 1024 * 1024) -> Optional[dict]:
+    """
+    Reads the first `max_bytes` of an object (plus its total size and last-modified time)
+    without downloading the whole file - enough to read a CSV header.
+    Takes the FULL key; it must be inside the tenant's folder or PermissionError is raised.
+    Returns None when the object does not exist, otherwise:
+        {"head_bytes": bytes, "size_bytes": int, "last_modified": datetime | None}
+    The size is the TOTAL object size, so size_bytes <= len(head_bytes) means head_bytes is the whole file.
+    """
+    if not is_in_tenant_prefix(ozone_key, tenant_id):
+        raise PermissionError(f"Key '{ozone_key}' is outside this tenant's folder")
+    bucket = settings.OZONE_BUCKET
+    s3 = get_s3_client()
+    try:
+        response = s3.get_object(Bucket=bucket, Key=ozone_key, Range=f"bytes=0-{max_bytes - 1}")
+    except ClientError as e:
+        code = str(e.response.get("Error", {}).get("Code", ""))
+        if code in ("NoSuchKey", "NotFound", "404"):
+            return None
+        if code in ("InvalidRange", "416"):
+            # A zero-byte object cannot satisfy a range request: it exists, it is just empty.
+            return {"head_bytes": b"", "size_bytes": 0, "last_modified": None}
+        from backend.app.core.exceptions import StorageException
+        logger.error(f"[Ozone] Could not read '{ozone_key}' from bucket '{bucket}': {e}")
+        raise StorageException(
+            f"Could not read the file from the datalake (Ozone): {e}",
+            details={"bucket": bucket, "key": ozone_key},
+        )
+    except BotoCoreError as e:
+        from backend.app.core.exceptions import StorageException
+        logger.error(f"[Ozone] Could not read '{ozone_key}' from bucket '{bucket}': {e}")
+        raise StorageException(
+            f"Could not read the file from the datalake (Ozone): {e}",
+            details={"bucket": bucket, "key": ozone_key},
+        )
+
+    body = response["Body"]
+    try:
+        head_bytes = body.read(max_bytes)  # bounded even if the gateway ignores the Range header
+    finally:
+        try:
+            body.close()
+        except Exception:
+            pass
+
+    size = None
+    content_range = response.get("ContentRange")  # e.g. "bytes 0-1048575/5000000"
+    if content_range and "/" in content_range:
+        total = content_range.rsplit("/", 1)[-1].strip()
+        if total.isdigit():
+            size = int(total)
+    if size is None:
+        size = int(response.get("ContentLength", len(head_bytes)))
+    return {"head_bytes": head_bytes, "size_bytes": size, "last_modified": response.get("LastModified")}
+
+
 MAX_SCANNED_KEYS = 50000  # safety net: one browse call never walks more keys than this
 
 

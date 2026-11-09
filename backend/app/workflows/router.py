@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Body, Query, Response, Request, WebSocket, WebSocketDisconnect, UploadFile, File, Form
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
+from fastapi.concurrency import run_in_threadpool
 import asyncio
 import time
 import json as _json
@@ -2774,6 +2775,10 @@ async def _get_execution_node_dataframe(
                     pass
         return None
 
+    # Snapshots only hold a short preview (a few rows). They are kept as a last resort and
+    # only used if the full table cannot be found in memory or on disk (steps 1-3).
+    snapshot_fallback: Optional[pd.DataFrame] = None
+
     # 1. In-memory recent executions cache
     recent_res = _RECENT_EXECUTION_RESULTS.get(execution_id)
     if recent_res:
@@ -2782,9 +2787,8 @@ async def _get_execution_node_dataframe(
         if df is not None:
             return df
         snaps = getattr(recent_res, "step_snapshots", {}) if not isinstance(recent_res, dict) else recent_res.get("step_snapshots", {})
-        df_snap = _extract_from_snapshots(snaps)
-        if df_snap is not None:
-            return df_snap
+        if snapshot_fallback is None:
+            snapshot_fallback = _extract_from_snapshots(snaps)
 
     # 2. In-memory job manager
     job = job_manager.get_job(execution_id)
@@ -2796,9 +2800,8 @@ async def _get_execution_node_dataframe(
             if df is not None:
                 return df
             snaps = getattr(res, "step_snapshots", {}) if not isinstance(res, dict) else res.get("step_snapshots", {})
-            df_snap = _extract_from_snapshots(snaps)
-            if df_snap is not None:
-                return df_snap
+            if snapshot_fallback is None:
+                snapshot_fallback = _extract_from_snapshots(snaps)
 
     # 3. Parquet files on disk (check active tenant folder, cross-tenant fallbacks, and test_sessions)
     candidates = [
@@ -2818,6 +2821,13 @@ async def _get_execution_node_dataframe(
                 return pd.read_parquet(p_abs)
             except Exception:
                 pass
+
+    if snapshot_fallback is not None:
+        logger.warning(
+            f"Full table for node '{node_id}' of execution '{execution_id}' was not found; "
+            f"returning the {len(snapshot_fallback)}-row snapshot preview instead."
+        )
+        return snapshot_fallback
 
     # 4. Check NodeStepExecutor session metadata & outputs
     try:
@@ -3483,6 +3493,71 @@ async def export_node_data_to_csv(
             "Content-Disposition": f"attachment; filename={filename}"
         }
     )
+
+
+@router.post("/{execution_id}/nodes/{node_id}/save-to-ozone")
+async def save_node_data_to_ozone(
+    execution_id: str,
+    node_id: str,
+    limit: Optional[int] = Query(None, ge=1, description="Optional max rows to save (same as export-csv)"),
+    user: TokenData = Depends(require_export_access),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Saves the output table of an executed node to Ozone as a CSV file - the same data the
+    "Export CSV" button downloads, but stored in the datalake instead of the browser.
+
+    Stored at `<OZONE_PREFIX>/t<tenant_id>/<OZONE_EXPORT_FOLDER>/<execution_id>/<node_id>.csv`
+    (default: `ml-workflow/t<tenant_id>/outputs/workflow_exports/...`). Saving the same node of
+    the same run again overwrites that file. Returns the Ozone path, row count and column names.
+    If Ozone cannot be reached the call fails with 502; it never falls back to local disk.
+    """
+    from backend.app.workflows import node_export
+
+    df = await _get_execution_node_dataframe(db=db, execution_id=execution_id, node_id=node_id)
+    if df is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Tabular output for node '{node_id}' in execution '{execution_id}' not found."
+        )
+    if limit is not None:
+        df = df.head(limit)
+
+    # boto3 is blocking: run the upload in a worker thread so the event loop stays free.
+    saved = await run_in_threadpool(node_export.save_node_csv, df, execution_id, node_id, user.tenant_id)
+    logger.info(
+        f"Saved node output to Ozone: user='{user.sub}' tenant={user.tenant_id} "
+        f"execution={execution_id} node={node_id} rows={saved['row_count']} path={saved['ozone_path']}"
+    )
+    return {
+        "status": "SUCCESS",
+        "message": f"Saved the output of node '{node_id}' to Ozone.",
+        "execution_id": execution_id,
+        "node_id": node_id,
+        **saved,
+    }
+
+
+@router.get("/{execution_id}/nodes/{node_id}/saved-output")
+async def get_saved_node_output(
+    execution_id: str,
+    node_id: str,
+    user: TokenData = Depends(require_export_access),
+):
+    """
+    Returns where a node's output was saved in Ozone (`ozone_path`, `bucket`, `key`) and the
+    column names of that file (read from its CSV header). 404 if this node of this run
+    has not been saved with `save-to-ozone`.
+    """
+    from backend.app.workflows import node_export
+
+    info = await run_in_threadpool(node_export.get_saved_node_export, execution_id, node_id, user.tenant_id)
+    if info is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Node '{node_id}' of execution '{execution_id}' has not been saved to Ozone yet."
+        )
+    return {"execution_id": execution_id, "node_id": node_id, **info}
 
 
 # -------------------------------------------------------------
