@@ -64,6 +64,18 @@ class SMSSenderRecipe(BaseRecipe):
                     "provider": "sms",
                     "description": "Optional stored SMS credential or leave blank to use platform defaults (.env)."
                 },
+                "account_sid": {
+                    "type": "string",
+                    "title": "Twilio Account SID (Manual Override)",
+                    "input_type": "text",
+                    "description": "Optional override (defaults to TWILIO_ACCOUNT_SID from .env if empty)."
+                },
+                "auth_token": {
+                    "type": "string",
+                    "title": "Twilio Auth Token (Manual Override)",
+                    "input_type": "password",
+                    "description": "Optional override (defaults to TWILIO_AUTH_TOKEN from .env if empty)."
+                },
                 "recipients": {
                     "type": "string",
                     "title": "Recipient Phone Numbers",
@@ -156,6 +168,22 @@ class SMSSenderRecipe(BaseRecipe):
         twilio_sid = settings.TWILIO_ACCOUNT_SID or os.getenv("TWILIO_ACCOUNT_SID")
         twilio_token = settings.TWILIO_AUTH_TOKEN or os.getenv("TWILIO_AUTH_TOKEN")
         twilio_from = sender_id or settings.TWILIO_PHONE_NUMBER or os.getenv("TWILIO_PHONE_NUMBER") or "+18557962090"
+
+        if credential_id and context and isinstance(context, dict):
+            creds_store = context.get("credentials", {})
+            if credential_id in creds_store:
+                cred = creds_store[credential_id]
+                c_data = cred.get("data", cred) if isinstance(cred, dict) else {}
+                twilio_sid = c_data.get("account_sid") or c_data.get("sid") or twilio_sid
+                twilio_token = c_data.get("auth_token") or c_data.get("token") or twilio_token
+                twilio_from = sender_id or c_data.get("from_number") or c_data.get("phone_number") or twilio_from
+
+        if config.get("account_sid"):
+            twilio_sid = str(config.get("account_sid")).strip()
+        if config.get("auth_token"):
+            twilio_token = str(config.get("auth_token")).strip()
+        if config.get("from_number"):
+            twilio_from = str(config.get("from_number")).strip()
 
         delivery_status = "SIMULATED"
         status_msg = f"SMS simulated for {len(recipients_list)} recipient(s) (No live Twilio dispatch)."
