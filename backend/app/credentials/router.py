@@ -35,6 +35,39 @@ def _generate_oauth_state(tenant_id: Optional[int], user_id: Optional[str]) -> s
     return urllib.parse.quote(json.dumps(state_dict))
 
 
+def _resolve_base_url(req: Optional[Request]) -> str:
+    """
+    Resolves the external public base URL for OAuth callbacks, honoring
+    reverse proxy headers (X-Forwarded-Proto, X-Forwarded-Host, X-Forwarded-Ssl)
+    and strictly enforcing HTTPS on non-localhost domains (required by Discord & Teams).
+    """
+    if req is None:
+        return "https://ml-crt.aiiotgeeks.com"
+
+    # Extract host
+    host = req.headers.get("x-forwarded-host") or req.headers.get("host")
+    if not host and hasattr(req, "scope") and isinstance(req.scope, dict):
+        server = req.scope.get("server")
+        if server and isinstance(server, (list, tuple)) and len(server) >= 2:
+            host = f"{server[0]}:{server[1]}" if server[1] not in (80, 443) else str(server[0])
+    if not host:
+        host = "ml-crt.aiiotgeeks.com"
+    host = str(host).split(",")[0].strip()
+
+    # Extract scheme
+    proto = req.headers.get("x-forwarded-proto") or req.headers.get("x-forwarded-ssl")
+    if not proto and hasattr(req, "scope") and isinstance(req.scope, dict):
+        proto = req.scope.get("scheme", "http")
+    proto = str(proto or "http").split(",")[0].strip().lower()
+    scheme = "https" if proto in ["https", "on"] else proto
+
+    # Production domains must use HTTPS (Discord and Teams OAuth strictly reject non-HTTPS URLs)
+    if not any(loc in host.lower() for loc in ["localhost", "127.0.0.1", "0.0.0.0"]):
+        scheme = "https"
+
+    return f"{scheme}://{host}".rstrip("/")
+
+
 def _verify_oauth_state(state_str: str) -> Dict[str, Any]:
     """Validates and unpacks the signed OAuth state parameter."""
     try:
@@ -103,7 +136,7 @@ async def authorize_discord(
         redirect_uri = settings.DISCORD_REDIRECT_URI
     else:
         # Default to platform API callback
-        base_url = str(request.base_url).rstrip("/")
+        base_url = _resolve_base_url(request)
         redirect_uri = f"{base_url}{settings.API_V1_STR}/oauth/discord/callback"
 
     state = _generate_oauth_state(tenant_id=user.tenant_id, user_id=user.sub)
@@ -165,8 +198,8 @@ async def discord_oauth_callback(
     client_id = settings.DISCORD_CLIENT_ID or os.getenv("DISCORD_CLIENT_ID")
     client_secret = settings.DISCORD_CLIENT_SECRET or os.getenv("DISCORD_CLIENT_SECRET")
     redirect_uri = settings.DISCORD_REDIRECT_URI
-    if not redirect_uri and request:
-        base_url = str(request.base_url).rstrip("/")
+    if not redirect_uri:
+        base_url = _resolve_base_url(request)
         redirect_uri = f"{base_url}{settings.API_V1_STR}/oauth/discord/callback"
 
     token_data = {}
@@ -344,7 +377,7 @@ async def authorize_msteams(
     if settings.TEAMS_REDIRECT_URI:
         redirect_uri = settings.TEAMS_REDIRECT_URI
     else:
-        base_url = str(request.base_url).rstrip("/")
+        base_url = _resolve_base_url(request)
         redirect_uri = f"{base_url}{settings.API_V1_STR}/oauth/msteams/callback"
 
     state = _generate_oauth_state(tenant_id=user.tenant_id, user_id=user.sub)
@@ -420,8 +453,8 @@ async def msteams_oauth_callback(
     )
 
     redirect_uri = settings.TEAMS_REDIRECT_URI
-    if not redirect_uri and request:
-        base_url = str(request.base_url).rstrip("/")
+    if not redirect_uri:
+        base_url = _resolve_base_url(request)
         redirect_uri = f"{base_url}{settings.API_V1_STR}/oauth/msteams/callback"
 
     token_data = {}
