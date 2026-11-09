@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     # Lets a "Tenant Admin" list the WHOLE bucket (landing/, files/, warehouse/, every tenant's folder)
     # with GET /datasets/ozone/browse?scope=bucket. OFF by default because it shows other tenants' file names.
     OZONE_ALLOW_BUCKET_BROWSE: bool = False
+    # Folder (relative to the tenant folder, i.e. ml-workflow/t<tenant_id>/) where "Save to Ozone" puts the
+    # result table of a workflow node: <OZONE_EXPORT_FOLDER>/<execution_id>/<node_id>.csv
+    OZONE_EXPORT_FOLDER: str = "outputs/workflow_exports"
 
     # MLflow Settings
     MLFLOW_TRACKING_URI: str = "sqlite:///./data/mlflow.db"
