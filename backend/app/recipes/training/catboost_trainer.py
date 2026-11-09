@@ -84,9 +84,9 @@ class CatBoostTrainerRecipe(BaseRecipe):
         
         # Clean NaNs in categorical features
         for c in cat_features:
-            X_train[c] = X_train[c].fillna("missing").astype(str)
+            X_train[c] = X_train[c].astype(object).fillna("missing").astype(str)
             if X_test is not None and c in X_test.columns:
-                X_test[c] = X_test[c].fillna("missing").astype(str)
+                X_test[c] = X_test[c].astype(object).fillna("missing").astype(str)
 
         # Clean NaNs in numeric features
         num_features = [c for c in X_train.columns if c not in cat_features]
