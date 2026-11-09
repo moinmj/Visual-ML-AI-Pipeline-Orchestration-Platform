@@ -162,7 +162,30 @@ class SalesforceConnectorRecipe(BaseRecipe):
             "required": ["resource"]
         }
 
-    def _generate_benchmark_data(self, resource: str, limit: int) -> List[Dict[str, Any]]:
+    @staticmethod
+    def _apply_soql_filter(df: Any, expr: str) -> Any:
+        """Converts basic SOQL WHERE clause to pandas query syntax and filters the DataFrame."""
+        if pd is None or not isinstance(df, pd.DataFrame) or df.empty or not expr or not expr.strip():
+            return df
+        import re
+        clean = expr.strip()
+        # Replace <> with !=
+        clean = re.sub(r'<>', '!=', clean)
+        # Replace = with == (avoid replacing >=, <=, !=, ==)
+        clean = re.sub(r'(?<![><!=])=(?!=)', '==', clean)
+        # Normalize boolean and null keywords
+        clean = re.sub(r'\btrue\b', 'True', clean, flags=re.IGNORECASE)
+        clean = re.sub(r'\bfalse\b', 'False', clean, flags=re.IGNORECASE)
+        clean = re.sub(r'\bnull\b', 'None', clean, flags=re.IGNORECASE)
+        clean = re.sub(r'\band\b', 'and', clean, flags=re.IGNORECASE)
+        clean = re.sub(r'\bor\b', 'or', clean, flags=re.IGNORECASE)
+        try:
+            return df.query(clean)
+        except Exception as e:
+            logger.debug(f"Could not apply SOQL filter '{expr}' to DataFrame: {e}")
+            return df
+
+    def _generate_benchmark_data(self, resource: str, limit: int, soql_filter: str = "") -> List[Dict[str, Any]]:
         """Generates realistic enterprise CRM benchmark records for offline testing."""
         companies = [
             ("Acme Corporation", "Technology", "San Francisco", "USA", 12500000, 420),
@@ -202,7 +225,7 @@ class SalesforceConnectorRecipe(BaseRecipe):
         ]
 
         records = []
-        limit_to_use = max(1, min(limit, 200))
+        limit_to_use = max(limit * 4, 300) if soql_filter else max(1, min(limit, 200))
 
         if resource == "Leads":
             for i in range(limit_to_use):
@@ -295,6 +318,15 @@ class SalesforceConnectorRecipe(BaseRecipe):
                     "CreatedDate": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
                 })
 
+        if soql_filter and records:
+            if pd is not None:
+                df = pd.DataFrame(records)
+                filtered = self._apply_soql_filter(df, soql_filter)
+                if not filtered.empty:
+                    records = filtered.iloc[:limit].to_dict(orient="records")
+        else:
+            records = records[:limit]
+
         return records
 
     def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
@@ -379,13 +411,21 @@ class SalesforceConnectorRecipe(BaseRecipe):
 
         # If live call was not attempted or returned empty, populate with realistic benchmark dataset
         if not records:
-            records = self._generate_benchmark_data(resource, limit)
+            records = self._generate_benchmark_data(resource, limit, soql_filter)
             if not status_msg:
-                status_msg = f"Generated {len(records)} realistic Salesforce {resource} records (Simulation Mode)."
+                if soql_filter:
+                    status_msg = f"Generated {len(records)} realistic Salesforce {resource} records matching filter '{soql_filter}' (Simulation Mode)."
+                else:
+                    status_msg = f"Generated {len(records)} realistic Salesforce {resource} records (Simulation Mode)."
 
         # Convert to Pandas DataFrame
         if pd is not None:
             df_out = pd.DataFrame(records)
+            if soql_filter and not df_out.empty:
+                df_out = self._apply_soql_filter(df_out, soql_filter)
+                if len(df_out) > limit:
+                    df_out = df_out.iloc[:limit]
+                records = df_out.to_dict(orient="records")
         else:
             df_out = records
 
