@@ -1,3 +1,6 @@
+from sqlalchemy.ext.asyncio import AsyncSession
+from backend.app.infrastructure.database.session import get_db
+from backend.app.credentials.service import CredentialService
 import json
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from backend.app.core.security import TokenData, get_current_user
@@ -229,15 +232,19 @@ async def run_recipe(
 class RecipeInspectRequest(BaseModel):
     action: str = Field(
         default="test_connection",
-        description="Inspection action: 'test_connection', 'schemas', 'tables', 'columns'",
+        description="Inspection action: 'test_connection', 'databases', 'schemas', 'tables', 'columns'",
         examples=["schemas"],
     )
     config: Dict[str, Any] = Field(
         default_factory=dict,
-        description="Connection and connector configuration (e.g. connection_string, schema_name, table_name)",
+        description="Connection and connector configuration (e.g. host, port, database, username, password, connection_string, credential_id)",
     )
+    database_name: Optional[str] = Field(None, description="Target database name for 'databases', 'schemas', 'tables', or 'columns'")
     schema_name: Optional[str] = Field(None, description="Schema name for 'tables' or 'columns' action")
     table_name: Optional[str] = Field(None, description="Table name for 'columns' action")
+    custom_query: Optional[str] = Field(None, description="Optional custom query for test query execution")
+    save_credential: Optional[bool] = Field(False, description="If true and connection succeeds, automatically stores as a saved credential for this tenant")
+    credential_name: Optional[str] = Field(None, description="User-friendly name if save_credential is true")
 
 
 class RecipeInspectResponse(BaseModel):
@@ -247,6 +254,7 @@ class RecipeInspectResponse(BaseModel):
     data: Dict[str, Any] = Field(default_factory=dict)
     message: Optional[str] = None
     error: Optional[str] = None
+    saved_credential_id: Optional[str] = None
 
 
 @router.post(
@@ -258,15 +266,18 @@ async def inspect_recipe(
     recipe_id: str,
     body: RecipeInspectRequest,
     user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
 ):
     """
     **Inspect an external database or service connected to a recipe.**
 
-    Enables dynamic UI exploration:
+    Enables real-time dynamic UI exploration across all database & warehouse connectors:
     - `action = "test_connection"`: Verifies database credentials and connectivity.
+    - `action = "databases"`: Discovers all databases available on the host.
     - `action = "schemas"`: Discovers all database schemas (e.g. 'public', 'analytics').
     - `action = "tables"`: Discovers all tables and views within a schema.
     - `action = "columns"`: Discovers column names, types, and nullability for a table.
+    - `save_credential = true`: Automatically stores validated connection credentials for the tenant.
     """
     from starlette.concurrency import run_in_threadpool
 
@@ -277,7 +288,24 @@ async def inspect_recipe(
             detail=f"Recipe '{recipe_id}' does not support dynamic inspection.",
         )
 
-    config = {**body.config, "tenant_id": user.tenant_id}
+    config = dict(body.config or {})
+    config["tenant_id"] = user.tenant_id
+
+    # Resolve stored credential if credential_id is supplied
+    cred_id = str(config.get("credential_id", "")).strip()
+    if cred_id:
+        try:
+            stored_data = await CredentialService.get_credential_data(db=db, credential_id=cred_id, tenant_id=user.tenant_id)
+            if stored_data and isinstance(stored_data, dict):
+                config = {**stored_data, **config}
+        except Exception as cred_err:
+            logger.warning(f"Failed to resolve credential '{cred_id}': {cred_err}")
+
+    if body.database_name and not config.get("database"):
+        config["database"] = body.database_name
+    if body.custom_query and not config.get("query"):
+        config["query"] = body.custom_query
+
     res = await run_in_threadpool(
         recipe.inspect,
         action=body.action,
@@ -286,6 +314,31 @@ async def inspect_recipe(
         table_name=body.table_name,
     )
 
+    saved_cred_id = None
+    if body.save_credential and res.get("success", False):
+        try:
+            provider = recipe_id.replace("_connector", "").lower()
+            default_name = body.credential_name or f"{recipe.name} ({config.get('host', config.get('database', 'Connection'))})"
+            safe_meta = {
+                k: config[k]
+                for k in ("host", "port", "database", "username", "account", "warehouse", "ssl_mode")
+                if k in config and config[k]
+            }
+            cred = await CredentialService.create_credential(
+                db=db,
+                provider=provider,
+                name=default_name,
+                data=config,
+                tenant_id=user.tenant_id,
+                user_id=getattr(user, 'user_id', getattr(user, 'sub', None)),
+                metadata_info=safe_meta,
+                auth_type="database",
+            )
+            saved_cred_id = cred.id
+            res["saved_credential_id"] = cred.id
+        except Exception as save_err:
+            logger.warning(f"Failed to auto-save credential in inspect: {save_err}")
+
     return RecipeInspectResponse(
         recipe_id=recipe_id,
         action=body.action,
@@ -293,5 +346,6 @@ async def inspect_recipe(
         data=res,
         message=res.get("message"),
         error=res.get("error"),
+        saved_credential_id=saved_cred_id,
     )
 
