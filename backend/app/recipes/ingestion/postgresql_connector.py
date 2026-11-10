@@ -90,13 +90,6 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                     "default": 5432,
                     "description": "PostgreSQL server port (default 5432).",
                 },
-                "database": {
-                    "type": "string",
-                    "title": "Database Name",
-                    "input_type": "text",
-                    "default": "postgres",
-                    "description": "Name of the target PostgreSQL database.",
-                },
                 "username": {
                     "type": "string",
                     "title": "Username",
@@ -144,6 +137,13 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                     "description": "Read from tables (specifying schema, tables, columns) or execute a custom SQL query.",
                 },
                 # Table Mode Fields
+                "database": {
+                    "type": "string",
+                    "title": "Database Name",
+                    "input_type": "text",
+                    "default": "postgres",
+                    "description": "Name of the target PostgreSQL database. Discovered dynamically from the server or entered manually.",
+                },
                 "schema_name": {
                     "type": "string",
                     "title": "Schema Name",

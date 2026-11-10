@@ -743,13 +743,13 @@ def test_postgresql_connector_property_hierarchy():
     recipe = PostgreSQLConnectorRecipe()
     props = list(recipe.get_schema()["properties"].keys())
 
-    # 1. Connection group: credential_id right next to connection_mode
+    # 1. Connection group: credentials establish connection to server
     assert props.index("connection_mode") < props.index("credential_id") < props.index("host")
-    assert props.index("host") < props.index("port") < props.index("database") < props.index("username") < props.index("password")
+    assert props.index("host") < props.index("port") < props.index("username") < props.index("password")
     assert props.index("password") < props.index("connection_string") < props.index("ssl_mode") < props.index("timeout")
 
-    # 2. Read mode and table hierarchy
-    assert props.index("timeout") < props.index("read_mode") < props.index("schema_name")
+    # 2. Read mode and cascading discovery hierarchy: Database -> Schema -> Tables -> Columns
+    assert props.index("timeout") < props.index("read_mode") < props.index("database") < props.index("schema_name")
     assert props.index("schema_name") < props.index("select_all_tables") < props.index("tables") < props.index("table_name")
     assert props.index("table_name") < props.index("select_all_columns") < props.index("columns")
     assert props.index("columns") < props.index("where_clause") < props.index("order_by") < props.index("query")
