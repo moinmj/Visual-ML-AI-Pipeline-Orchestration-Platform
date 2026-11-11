@@ -92,7 +92,8 @@ class BigQueryConnectorRecipe(BaseRecipe):
                     "type": "string",
                     "title": "Table Name",
                     "input_type": "text",
-                    "default": "events_daily",
+                    "default": "",
+                    "placeholder": "e.g. events_daily",
                     "description": "Target BigQuery table or view name (used in 'table' mode)."
                 },
                 "columns": {
@@ -104,10 +105,11 @@ class BigQueryConnectorRecipe(BaseRecipe):
                 },
                 "query": {
                     "type": "string",
-                    "title": "BigQuery Standard SQL Query",
+                    "title": "Custom SQL Query",
                     "input_type": "textarea",
-                    "default": "SELECT * FROM `my-gcp-project.analytics_data.events_daily` LIMIT 100",
-                    "description": "Custom BigQuery Standard SQL query. Destructive DDL/DML statements are prohibited."
+                    "default": "",
+                    "placeholder": "e.g. SELECT * FROM `my-gcp-project.analytics_data.events_daily` LIMIT 100",
+                    "description": "Custom BigQuery Standard SQL query. Only used when Read Mode is 'query'. Destructive DDL/DML statements are prohibited."
                 },
                 "credentials_json": {
                     "type": "string",
@@ -297,6 +299,8 @@ class BigQueryConnectorRecipe(BaseRecipe):
                     query_sql = f"SELECT {cols} FROM `{project_id}.{dataset_id}.{table_id}` LIMIT {limit}"
                 else:
                     query_sql = str(config.get("query", "")).strip()
+                    if not query_sql:
+                        raise ValidationException("SQL Query is required when Read Mode is set to 'query'.")
                     if limit and "limit" not in query_sql.lower():
                         query_sql = f"{query_sql} LIMIT {limit}"
 
