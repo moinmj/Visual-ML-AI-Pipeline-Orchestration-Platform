@@ -19,6 +19,7 @@ except ImportError:
 from backend.app.recipes.base.recipe import BaseRecipe, RecipePort
 from backend.app.core.logging import logger
 from backend.app.core.config import settings
+from backend.app.core.exceptions import ValidationException
 
 
 class RedshiftConnectorRecipe(BaseRecipe):
@@ -313,18 +314,18 @@ class RedshiftConnectorRecipe(BaseRecipe):
 
                 delivery_status = "LIVE"
                 status_msg = f"Retrieved {len(records)} live rows from Amazon Redshift ({schema_name}.{table_name})."
-            except ImportError:
-                status_msg = "Neither psycopg2 nor redshift_connector driver installed. Using benchmark simulation fallback."
-                logger.info(status_msg)
             except Exception as e:
                 logger.warning(f"Redshift connection failed: {e}")
-                status_msg = f"Redshift connection failed ({e}). Using benchmark simulation fallback."
+                last_error = e
 
-        # Fallback to realistic benchmark data
-        if not records:
+            if last_error is not None:
+                raise ValidationException(f"Amazon Redshift connection to {host}:{port}/{database} failed: {str(last_error)}")
+
+        # Simulation Mode (ONLY when simulation_mode is True)
+        if simulation_mode:
             records = self._generate_benchmark_data(config)
-            if not status_msg:
-                status_msg = f"Loaded {len(records)} benchmark records for Redshift table '{schema_name}.{table_name}'."
+            delivery_status = "SIMULATED"
+            status_msg = f"Loaded {len(records)} benchmark records for Redshift table '{schema_name}.{table_name}'."
 
         df_out = pd.DataFrame(records) if pd is not None else records
         duration_ms = int((time.time() - start_time) * 1000)

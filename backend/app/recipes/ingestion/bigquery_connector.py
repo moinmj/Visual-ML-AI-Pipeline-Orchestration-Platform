@@ -20,6 +20,7 @@ except ImportError:
 from backend.app.recipes.base.recipe import BaseRecipe, RecipePort
 from backend.app.core.logging import logger
 from backend.app.core.config import settings
+from backend.app.core.exceptions import ValidationException
 
 
 class BigQueryConnectorRecipe(BaseRecipe):
@@ -310,18 +311,18 @@ class BigQueryConnectorRecipe(BaseRecipe):
 
                 delivery_status = "LIVE"
                 status_msg = f"Retrieved {len(records)} live rows from Google BigQuery ({project_id}.{dataset_id}.{table_id})."
-            except ImportError:
-                status_msg = "google-cloud-bigquery driver not installed. Using benchmark simulation fallback."
-                logger.info(status_msg)
             except Exception as e:
                 logger.warning(f"BigQuery connection failed: {e}")
-                status_msg = f"BigQuery connection failed ({e}). Using benchmark simulation fallback."
+                last_error = e
 
-        # Fallback to realistic benchmark data
-        if not records:
+            if last_error is not None:
+                raise ValidationException(f"Google BigQuery execution failed: {str(last_error)}")
+
+        # Simulation Mode (ONLY when simulation_mode is True)
+        if simulation_mode:
             records = self._generate_benchmark_data(config)
-            if not status_msg:
-                status_msg = f"Loaded {len(records)} benchmark records for BigQuery dataset '{project_id}.{dataset_id}'."
+            delivery_status = "SIMULATED"
+            status_msg = f"Loaded {len(records)} benchmark records for BigQuery dataset '{project_id}.{dataset_id}'."
 
         df_out = pd.DataFrame(records) if pd is not None else records
         duration_ms = int((time.time() - start_time) * 1000)

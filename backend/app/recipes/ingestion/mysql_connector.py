@@ -2,14 +2,17 @@
 MySQL Connector Recipe (Ingestion & Orchestration -> Database & Warehouse Connectors).
 
 Reads tables or query results from a MySQL / MariaDB database into the pipeline as a DataFrame.
-Supports host/port, connection string, or saved credentials, read-only query validation,
-charset encoding, benchmark simulation fallback, and code generation.
+Supports host/port, connection string, or saved credentials, database selection,
+multi-table and single table selection, column subset selection, WHERE filters, ORDER BY,
+charset encoding, real-time dynamic database inspection (test connection, databases, tables, columns),
+benchmark simulation fallback, and code generation.
 """
 
 import re
 import os
 import time
 from typing import Dict, Any, List, Optional
+from urllib.parse import urlparse, unquote, parse_qs, quote_plus
 
 try:
     import pandas as pd
@@ -19,12 +22,13 @@ except ImportError:
 from backend.app.recipes.base.recipe import BaseRecipe, RecipePort
 from backend.app.core.logging import logger
 from backend.app.core.config import settings
+from backend.app.core.exceptions import ValidationException
 
 
 class MySQLConnectorRecipe(BaseRecipe):
     recipe_id = "mysql_connector"
     name = "MySQL Connector"
-    version = "1.0.0"
+    version = "1.1.0"
     category = "ingestion"
     group = "Ingestion & Orchestration"
     subgroup = "Database & Warehouse Connectors"
@@ -56,6 +60,7 @@ class MySQLConnectorRecipe(BaseRecipe):
         return {
             "type": "object",
             "properties": {
+                # ── 1. Connection Mode & Server Credentials ──
                 "connection_mode": {
                     "type": "string",
                     "title": "Connection Mode",
@@ -64,12 +69,19 @@ class MySQLConnectorRecipe(BaseRecipe):
                     "default": "host_port",
                     "description": "Choose connection method: standard host/port parameters, connection URI, or stored credential."
                 },
+                "credential_id": {
+                    "type": "string",
+                    "title": "Connected MySQL Credential",
+                    "input_type": "credential_dropdown",
+                    "provider": "mysql",
+                    "description": "Select a stored MySQL credential from platform settings."
+                },
                 "host": {
                     "type": "string",
                     "title": "Host",
                     "input_type": "text",
                     "default": "localhost",
-                    "description": "MySQL / MariaDB server hostname or IP address."
+                    "description": "MySQL / MariaDB server hostname or IP address (used in 'host_port' mode)."
                 },
                 "port": {
                     "type": "integer",
@@ -78,19 +90,12 @@ class MySQLConnectorRecipe(BaseRecipe):
                     "default": 3306,
                     "description": "MySQL server port (default 3306)."
                 },
-                "database": {
-                    "type": "string",
-                    "title": "Database Name",
-                    "input_type": "text",
-                    "default": "shop_db",
-                    "description": "Name of the MySQL schema / database."
-                },
                 "username": {
                     "type": "string",
                     "title": "Username",
                     "input_type": "text",
                     "default": "root",
-                    "description": "MySQL username."
+                    "description": "MySQL user role."
                 },
                 "password": {
                     "type": "string",
@@ -104,50 +109,7 @@ class MySQLConnectorRecipe(BaseRecipe):
                     "title": "Connection String (URI)",
                     "input_type": "text",
                     "default": "",
-                    "description": "Full MySQL connection URI e.g. mysql+pymysql://user:pass@localhost:3306/dbname"
-                },
-                "credential_id": {
-                    "type": "string",
-                    "title": "Connected MySQL Credential",
-                    "input_type": "credential_dropdown",
-                    "provider": "mysql",
-                    "description": "Select a stored MySQL credential from platform settings."
-                },
-                "read_mode": {
-                    "type": "string",
-                    "title": "Read Mode",
-                    "input_type": "dropdown",
-                    "enum": ["table", "query"],
-                    "default": "table",
-                    "description": "Read an entire table or execute a custom SQL query."
-                },
-                "table_name": {
-                    "type": "string",
-                    "title": "Table Name",
-                    "input_type": "text",
-                    "default": "orders",
-                    "description": "Table to read (e.g. 'orders', 'inventory', 'customers')."
-                },
-                "columns": {
-                    "type": "string",
-                    "title": "Columns to Select",
-                    "input_type": "text",
-                    "default": "",
-                    "description": "Comma-separated column names to select (leave blank for all columns '*')."
-                },
-                "query": {
-                    "type": "string",
-                    "title": "SQL Query",
-                    "input_type": "textarea",
-                    "default": "SELECT * FROM orders WHERE status = 'COMPLETED' LIMIT 100",
-                    "description": "Read-only SQL query to execute (SELECT, WITH, SHOW, etc.)."
-                },
-                "limit": {
-                    "type": "integer",
-                    "title": "Row Limit",
-                    "input_type": "number",
-                    "default": 1000,
-                    "description": "Maximum number of rows to retrieve (1 to 100000)."
+                    "description": "Full MySQL connection URI e.g. mysql+pymysql://user:password@localhost:3306/dbname"
                 },
                 "charset": {
                     "type": "string",
@@ -163,6 +125,95 @@ class MySQLConnectorRecipe(BaseRecipe):
                     "input_type": "number",
                     "default": 15,
                     "description": "Connection and query timeout in seconds."
+                },
+
+                # ── 2. Read Mode & Cascading Data Exploration ──
+                "read_mode": {
+                    "type": "string",
+                    "title": "Read Mode",
+                    "input_type": "dropdown",
+                    "enum": ["table", "query"],
+                    "default": "table",
+                    "description": "Read from tables (specifying database, tables, columns) or execute a custom SQL query."
+                },
+                "database": {
+                    "type": "string",
+                    "title": "Database Name",
+                    "input_type": "text",
+                    "default": "shop_db",
+                    "description": "Name of the target MySQL database / schema. Discovered dynamically from the server or entered manually."
+                },
+                "select_all_tables": {
+                    "type": "boolean",
+                    "title": "Select All Tables in Database (*)",
+                    "input_type": "checkbox",
+                    "default": False,
+                    "description": "If enabled or if no table is specified, retrieves all tables in the selected database."
+                },
+                "tables": {
+                    "type": "array",
+                    "title": "Table(s) to Read",
+                    "input_type": "tag_input",
+                    "items": {"type": "string"},
+                    "default": [],
+                    "description": "Specify one or multiple tables to read (e.g. ['Businesses', 'BookingServices']). Leave empty or enable 'Select All Tables' to read all tables."
+                },
+                "table_name": {
+                    "type": "string",
+                    "title": "Table Name",
+                    "input_type": "text",
+                    "default": "orders",
+                    "description": "Single table to read (e.g. 'Businesses', 'orders'). Ignored if 'Table(s) to Read' or 'Select All Tables' is specified."
+                },
+                "select_all_columns": {
+                    "type": "boolean",
+                    "title": "Select All Columns (*)",
+                    "input_type": "checkbox",
+                    "default": True,
+                    "description": "If enabled and no specific columns are entered in 'Columns to Select', retrieves all columns ('*')."
+                },
+                "columns": {
+                    "type": "array",
+                    "title": "Columns to Select",
+                    "input_type": "tag_input",
+                    "items": {"type": "string"},
+                    "default": [],
+                    "description": "Specify one or more column names to select (e.g. ['Id', 'Name']). When specified, ONLY these columns are retrieved."
+                },
+                "where_clause": {
+                    "type": "string",
+                    "title": "Filter Condition (WHERE)",
+                    "input_type": "text",
+                    "default": "",
+                    "description": "Optional SQL WHERE filter expression without 'WHERE' keyword (e.g. status = 'COMPLETED' AND amount > 0)."
+                },
+                "order_by": {
+                    "type": "string",
+                    "title": "Sort Order (ORDER BY)",
+                    "input_type": "text",
+                    "default": "",
+                    "description": "Optional SQL sort expression without 'ORDER BY' keyword (e.g. created_at DESC)."
+                },
+                "query": {
+                    "type": "string",
+                    "title": "SQL Query",
+                    "input_type": "textarea",
+                    "default": "SELECT * FROM orders WHERE status = 'COMPLETED' LIMIT 100",
+                    "description": "Read-only SQL query to execute (SELECT, WITH, SHOW, etc.)."
+                },
+                "limit": {
+                    "type": "integer",
+                    "title": "Row Limit",
+                    "input_type": "number",
+                    "default": 1000,
+                    "description": "Maximum number of rows to retrieve (1 to 100000)."
+                },
+                "offset": {
+                    "type": "integer",
+                    "title": "Row Offset",
+                    "input_type": "number",
+                    "default": 0,
+                    "description": "Number of initial rows to skip for pagination."
                 },
                 "simulation_mode": {
                     "type": "boolean",
@@ -214,8 +265,10 @@ class MySQLConnectorRecipe(BaseRecipe):
         # Validate Read Mode Requirements
         if read_mode == "table":
             table_name = str(config.get("table_name", "")).strip()
-            if not table_name:
-                errors.append("Table name is required when read_mode is 'table'.")
+            tables = config.get("tables", [])
+            select_all_tables = bool(config.get("select_all_tables", False))
+            if not table_name and not tables and not select_all_tables:
+                errors.append("Table name is required when read_mode is 'table' (or specify 'Table(s) to Read' or enable 'Select All Tables').")
         elif read_mode == "query":
             q = (config.get("query") or "").strip()
             if not q:
@@ -272,14 +325,38 @@ class MySQLConnectorRecipe(BaseRecipe):
                 password = c_data.get("password") or password
                 conn_str = c_data.get("connection_string") or c_data.get("url") or conn_str
 
-        # Environment variable overrides
+        # Environment variable overrides if not set
         if not password:
             password = os.getenv("MYSQL_PASSWORD", os.getenv("MYSQL_ROOT_PASSWORD", ""))
         if not username:
             username = os.getenv("MYSQL_USER", "root")
 
-        if not conn_str and host and database:
-            auth_part = f"{username}:{password}@" if username else ""
+        # Parse connection string if supplied
+        if mode == "connection_string" or (conn_str and not host):
+            try:
+                parsed = urlparse(conn_str)
+                if parsed.hostname:
+                    host = parsed.hostname
+                if parsed.port:
+                    port = parsed.port
+                if parsed.path:
+                    clean_path = parsed.path.lstrip("/").split("?")[0]
+                    if clean_path:
+                        database = clean_path
+                if parsed.username:
+                    username = unquote(parsed.username)
+                if parsed.password:
+                    password = unquote(parsed.password)
+                if parsed.query:
+                    qs = parse_qs(parsed.query)
+                    if "charset" in qs and qs["charset"]:
+                        charset = qs["charset"][0]
+            except Exception as parse_e:
+                logger.warning(f"Failed to parse MySQL connection_string: {parse_e}")
+        elif host and database:
+            quoted_user = quote_plus(str(username)) if username else ""
+            quoted_pass = quote_plus(str(password)) if password else ""
+            auth_part = f"{quoted_user}:{quoted_pass}@" if (quoted_user or quoted_pass) else ""
             conn_str = f"mysql+pymysql://{auth_part}{host}:{port}/{database}?charset={charset}"
 
         return {
@@ -302,7 +379,16 @@ class MySQLConnectorRecipe(BaseRecipe):
         payment_methods = ["CREDIT_CARD", "PAYPAL", "WIRE", "APPLE_PAY", "INVOICE"]
 
         for i in range(1, limit + 1):
-            if "prod" in table_name or "item" in table_name or "invent" in table_name:
+            if "business" in table_name or "company" in table_name:
+                records.append({
+                    "id": i,
+                    "owner_id": 250 + i,
+                    "name": f"Enterprise Business #{i}",
+                    "description": f"Verified business operations entity {i}",
+                    "business_type_id": 1,
+                    "address": f"{100 + i} Commercial Ave, Suite {i}"
+                })
+            elif "prod" in table_name or "item" in table_name or "invent" in table_name:
                 records.append({
                     "sku": f"SKU-{1000 + i}",
                     "product_name": f"Enterprise Gear Part #{i}",
@@ -328,40 +414,66 @@ class MySQLConnectorRecipe(BaseRecipe):
         start_time = time.time()
         read_mode = str(config.get("read_mode", "table")).strip().lower()
         limit = max(1, min(int(config.get("limit", 1000)), 100000))
+        offset_val = max(0, int(config.get("offset", 0)))
         simulation_mode = bool(config.get("simulation_mode", False))
         params = self._resolve_connection_params(config, context)
 
-        if read_mode == "table":
-            table_name = str(config.get("table_name", "orders")).strip()
-            cols_raw = config.get("columns", "")
-            if isinstance(cols_raw, list):
-                cols = ", ".join(cols_raw) if cols_raw else "*"
-            elif isinstance(cols_raw, str) and cols_raw.strip():
-                cols = cols_raw.strip()
-            else:
-                cols = "*"
-            query = f"SELECT {cols} FROM `{table_name}` LIMIT {limit}"
-            target_desc = table_name
+        # 1. Resolve columns
+        cols_raw = config.get("columns", [])
+        cols_list: List[str] = []
+        if isinstance(cols_raw, list):
+            cols_list = [str(c).strip().strip('`') for c in cols_raw if str(c).strip() and str(c).strip() != "*"]
+        elif isinstance(cols_raw, str) and cols_raw.strip():
+            cols_list = [c.strip().strip('`') for c in cols_raw.split(",") if c.strip() and c.strip() != "*"]
+
+        if cols_list:
+            cols_str = ", ".join(f"`{c}`" if not c.startswith("`") else c for c in cols_list)
         else:
-            query = str(config.get("query", "SELECT * FROM orders")).strip()
-            target_desc = "Custom Query"
-            if "limit" not in query.lower():
-                query = f"{query} LIMIT {limit}"
+            cols_str = "*"
+
+        # 2. Resolve tables
+        database = str(config.get("database", "shop_db")).strip() or "shop_db"
+        select_all_tables = bool(config.get("select_all_tables", False))
+
+        target_tables: List[str] = []
+        raw_tables = config.get("tables")
+        if isinstance(raw_tables, list):
+            target_tables = [str(t).strip().strip('`') for t in raw_tables if str(t).strip() and str(t).strip() != "*"]
+        elif isinstance(raw_tables, str) and raw_tables.strip():
+            target_tables = [t.strip().strip('`') for t in raw_tables.split(",") if t.strip() and t.strip() != "*"]
+
+        single_tbl = str(config.get("table_name", "")).strip().strip('`')
+        if single_tbl and single_tbl != "*":
+            if "," in single_tbl:
+                for t in single_tbl.split(","):
+                    clean_t = t.strip().strip('`')
+                    if clean_t and clean_t not in target_tables:
+                        target_tables.append(clean_t)
+            elif single_tbl not in target_tables:
+                target_tables.append(single_tbl)
+
+        # 3. Filters, Sorting, and Pagination
+        where_raw = str(config.get("where_clause", "")).strip()
+        where_sql = f" WHERE {where_raw}" if where_raw else ""
+        order_raw = str(config.get("order_by", "")).strip()
+        order_sql = f" ORDER BY {order_raw}" if order_raw else ""
+        offset_sql = f" OFFSET {offset_val}" if offset_val > 0 else ""
 
         records: List[Dict[str, Any]] = []
         delivery_status = "SIMULATED"
         status_msg = ""
         columns_retrieved: List[str] = []
+        target_desc = ""
 
         # Live Execution Attempt
         if not simulation_mode:
-            # 1. Try PyMySQL
+            last_error = None
             try:
                 import pymysql
                 import pymysql.cursors
                 conn = pymysql.connect(
                     host=params["host"],
-                    port=params["port"],
+                    port=int(params["port"]),
                     user=params["username"],
                     password=params["password"],
                     database=params["database"],
@@ -370,44 +482,93 @@ class MySQLConnectorRecipe(BaseRecipe):
                     connect_timeout=int(config.get("timeout", 15))
                 )
                 with conn.cursor() as cur:
-                    cur.execute(query)
-                    records = cur.fetchall()
-                    if records:
-                        columns_retrieved = list(records[0].keys())
-                    delivery_status = "LIVE"
-                    status_msg = f"Retrieved {len(records)} live rows from MySQL (`{target_desc}`)."
-                conn.close()
-            except ImportError:
-                # 2. Try SQLAlchemy
-                try:
-                    import sqlalchemy
-                    engine = sqlalchemy.create_engine(
-                        params["connection_string"],
-                        connect_args={"connect_timeout": int(config.get("timeout", 15))}
-                    )
-                    with engine.connect() as conn:
-                        res = conn.execute(sqlalchemy.text(query))
-                        columns_retrieved = list(res.keys())
-                        rows = res.fetchall()
-                        records = [dict(zip(columns_retrieved, row)) for row in rows]
+                    if read_mode == "table":
+                        if select_all_tables or not target_tables:
+                            cur.execute(
+                                "SELECT table_name FROM information_schema.tables "
+                                "WHERE table_schema = %s AND table_type IN ('BASE TABLE', 'VIEW') "
+                                "ORDER BY table_name;",
+                                (database,)
+                            )
+                            rows = cur.fetchall()
+                            target_tables = [list(r.values())[0] if isinstance(r, dict) else r[0] for r in rows]
+                            if not target_tables:
+                                raise ValidationException(f"No tables found in MySQL database '{database}'.")
+
+                        is_multi = len(target_tables) > 1
+                        for tbl in target_tables:
+                            q = f"SELECT {cols_str} FROM `{tbl}`{where_sql}{order_sql} LIMIT {limit}{offset_sql}"
+                            cur.execute(q)
+                            rows = cur.fetchall()
+                            if rows and not columns_retrieved:
+                                columns_retrieved = list(rows[0].keys())
+                            if is_multi:
+                                for r in rows:
+                                    r["_table"] = tbl
+                            records.extend(rows)
+
                         delivery_status = "LIVE"
-                        status_msg = f"Retrieved {len(records)} live rows from MySQL via SQLAlchemy."
-                except Exception as sqla_e:
-                    logger.warning(f"MySQL SQLAlchemy attempt failed: {sqla_e}")
-                    status_msg = f"MySQL connection failed ({sqla_e}). Using benchmark simulation fallback."
+                        if is_multi:
+                            if "_table" not in columns_retrieved:
+                                columns_retrieved.insert(0, "_table")
+                            target_desc = f"{database} ({', '.join(target_tables)})"
+                            status_msg = f"Retrieved {len(records)} live rows across {len(target_tables)} tables from MySQL ({target_desc})."
+                        else:
+                            target_desc = f"{database}.{target_tables[0]}"
+                            status_msg = f"Retrieved {len(records)} live rows from MySQL ({target_desc})."
+                    else:
+                        query = str(config.get("query", f"SELECT * FROM `{target_tables[0] if target_tables else 'orders'}`")).strip()
+                        target_desc = "Custom Query"
+                        if "limit" not in query.lower():
+                            query = f"{query} LIMIT {limit}"
+                        cur.execute(query)
+                        rows = cur.fetchall()
+                        if rows:
+                            columns_retrieved = list(rows[0].keys())
+                        records = rows
+                        delivery_status = "LIVE"
+                        status_msg = f"Retrieved {len(records)} live rows from MySQL custom query."
+                conn.close()
+                last_error = None
             except Exception as ex:
-                logger.warning(f"MySQL connection failed: {ex}")
-                status_msg = f"MySQL connection failed ({ex}). Using benchmark simulation fallback."
+                logger.warning(f"MySQL live execution failed: {ex}")
+                last_error = ex
 
-        # Fallback to benchmark data
-        if not records:
-            records = self._generate_benchmark_data(config)
-            if records:
-                columns_retrieved = list(records[0].keys())
-            if not status_msg:
-                status_msg = f"Loaded {len(records)} benchmark records for MySQL table '{target_desc}'."
+            # STRICT ERROR ENFORCEMENT: Never show fake data when live execution is requested!
+            if last_error is not None:
+                raise ValidationException(
+                    f"MySQL connection to {params.get('host')}:{params.get('port')}/{params.get('database')} failed: {str(last_error)}"
+                )
 
-        df_out = pd.DataFrame(records) if pd is not None else records
+        # Simulation Mode (ONLY when explicitly enabled)
+        if simulation_mode:
+            if not target_tables:
+                target_tables = ["orders"]
+            is_multi = len(target_tables) > 1
+            for tbl in target_tables:
+                sim_recs = self._generate_benchmark_data(config)
+                if cols_list:
+                    filtered = []
+                    for r in sim_recs:
+                        item = {c: r.get(c, f"{c}_val") for c in cols_list}
+                        filtered.append(item)
+                    sim_recs = filtered
+                if is_multi:
+                    for r in sim_recs:
+                        r["_table"] = tbl
+                records.extend(sim_recs)
+
+            if is_multi:
+                columns_retrieved = ["_table"] + (cols_list if cols_list else (list(records[0].keys()) if records else []))
+                target_desc = f"{database} ({', '.join(target_tables)})"
+            else:
+                target_desc = f"{database}.{target_tables[0]}"
+                columns_retrieved = cols_list if cols_list else (list(records[0].keys()) if records else [])
+
+            delivery_status = "SIMULATED"
+            status_msg = f"MySQL benchmark simulation mode active. Generated {len(records)} test rows for table '{target_desc}'."
+
+        df_out = pd.DataFrame(records, columns=columns_retrieved if (records and columns_retrieved) else None) if pd is not None else records
         duration_ms = int((time.time() - start_time) * 1000)
 
         summary = {
@@ -450,11 +611,10 @@ class MySQLConnectorRecipe(BaseRecipe):
             sql_stmt = query
 
         return (
-            f"# Recipe: MySQL Connector\n"
-            f"# ID: {self.recipe_id}\n"
-            f"import os\n"
+            f"# MySQL Ingestion Pipeline Code\n"
+            f"import pymysql\n"
             f"import pandas as pd\n"
-            f"import pymysql\n\n"
+            f"import os\n\n"
             f"conn = pymysql.connect(\n"
             f"    host=os.getenv('MYSQL_HOST', '{host}'),\n"
             f"    port=int(os.getenv('MYSQL_PORT', {port})),\n"
@@ -468,7 +628,6 @@ class MySQLConnectorRecipe(BaseRecipe):
             f"conn.close()\n"
             f"print(f'Retrieved {{len(df)}} rows from MySQL.')\n"
         )
-
 
     def inspect(
         self,
@@ -498,10 +657,12 @@ class MySQLConnectorRecipe(BaseRecipe):
         if not simulation_mode and (params.get("connection_string") or params.get("host")):
             try:
                 import pymysql
+                import pymysql.cursors
+                target_db = params.get("database") or None
                 conn = pymysql.connect(
                     host=params.get("host", "localhost"),
                     port=int(params.get("port", 3306)),
-                    database=params.get("database", "shop_db"),
+                    database=target_db,
                     user=params.get("username", "root"),
                     password=params.get("password", ""),
                     charset=params.get("charset", "utf8mb4"),
@@ -546,7 +707,7 @@ class MySQLConnectorRecipe(BaseRecipe):
                     "connected": False,
                     "status": "UNREACHABLE",
                     "database": params.get("database"),
-                    "message": f"Could not establish connection to MySQL ({params.get('host')}:{params.get('port')}). Error: {inspect_err or 'Server unreachable'}",
+                    "message": f"Could not establish connection to MySQL server ({params.get('host')}:{params.get('port')}). Error: {inspect_err or 'Server unreachable'}",
                     "error": inspect_err,
                 }
 
@@ -577,7 +738,7 @@ class MySQLConnectorRecipe(BaseRecipe):
                 conn.close()
 
             if not databases and simulation_mode:
-                databases = ["shop_db", "inventory_db", "users_db"]
+                databases = ["ProjectX", "shop_db", "inventory_db", "users_db"]
 
             return {
                 "success": True,
@@ -614,7 +775,7 @@ class MySQLConnectorRecipe(BaseRecipe):
                 conn.close()
 
             if not tables and simulation_mode:
-                tables = ["orders", "order_items", "products", "customers", "inventory"]
+                tables = ["Businesses", "BookingServices", "orders", "customers", "inventory"]
 
             return {
                 "success": True,
@@ -665,13 +826,23 @@ class MySQLConnectorRecipe(BaseRecipe):
                 conn.close()
 
             if not columns and simulation_mode:
-                columns = [
-                    {"name": "order_id", "type": "int", "nullable": False, "primary_key": True},
-                    {"name": "customer_id", "type": "int", "nullable": False, "primary_key": False},
-                    {"name": "amount", "type": "decimal(10,2)", "nullable": False, "primary_key": False},
-                    {"name": "status", "type": "varchar(50)", "nullable": False, "primary_key": False},
-                    {"name": "created_at", "type": "datetime", "nullable": False, "primary_key": False},
-                ]
+                if "business" in target_table.lower():
+                    columns = [
+                        {"name": "Id", "type": "int", "nullable": False, "primary_key": True},
+                        {"name": "Owner_Id", "type": "int", "nullable": False, "primary_key": False},
+                        {"name": "Name", "type": "varchar(255)", "nullable": False, "primary_key": False},
+                        {"name": "Description", "type": "text", "nullable": True, "primary_key": False},
+                        {"name": "Business_typeId", "type": "int", "nullable": False, "primary_key": False},
+                        {"name": "Address", "type": "varchar(255)", "nullable": True, "primary_key": False},
+                    ]
+                else:
+                    columns = [
+                        {"name": "order_id", "type": "int", "nullable": False, "primary_key": True},
+                        {"name": "customer_id", "type": "int", "nullable": False, "primary_key": False},
+                        {"name": "amount", "type": "decimal(10,2)", "nullable": False, "primary_key": False},
+                        {"name": "status", "type": "varchar(50)", "nullable": False, "primary_key": False},
+                        {"name": "created_at", "type": "datetime", "nullable": False, "primary_key": False},
+                    ]
 
             return {
                 "success": True,

@@ -937,3 +937,84 @@ def test_request_and_response_pydantic_models():
     )
     assert inspect_resp.success is True
     assert inspect_resp.saved_credential_id == "cred-uuid-123"
+
+
+def test_mysql_connector_property_hierarchy():
+    """Verify that properties in MySQL parameters_schema are arranged in clean cascading hierarchy."""
+    recipe = MySQLConnectorRecipe()
+    props = list(recipe.get_schema()["properties"].keys())
+
+    # 1. Connection credentials
+    assert props.index("connection_mode") < props.index("credential_id") < props.index("host")
+    assert props.index("host") < props.index("port") < props.index("username") < props.index("password")
+    assert props.index("password") < props.index("connection_string") < props.index("charset") < props.index("timeout")
+
+    # 2. Cascading data discovery: Database -> Tables -> Columns
+    assert props.index("timeout") < props.index("read_mode") < props.index("database")
+    assert props.index("database") < props.index("select_all_tables") < props.index("tables") < props.index("table_name")
+    assert props.index("table_name") < props.index("select_all_columns") < props.index("columns")
+    assert props.index("columns") < props.index("where_clause") < props.index("order_by") < props.index("query")
+
+    # 3. Limits & pagination
+    assert props.index("query") < props.index("limit") < props.index("offset") < props.index("simulation_mode")
+
+
+def test_mysql_connector_error_when_unreachable_and_not_simulated():
+    """Verify that when simulation_mode is False and DB is unreachable, execute raises ValidationException and inspect returns error."""
+    from backend.app.core.exceptions import ValidationException
+
+    recipe = MySQLConnectorRecipe()
+    config = {
+        "simulation_mode": False,
+        "host": "192.0.2.1",  # Dummy test IP
+        "port": 3306,
+        "database": "ProjectX",
+        "username": "MyUser",
+        "password": "wrongpassword",
+        "table_name": "Businesses",
+        "timeout": 1,
+    }
+
+    # 1. Execute must strictly raise ValidationException with server error, NOT fake data!
+    with pytest.raises(ValidationException) as exc_info:
+        recipe.execute(inputs={}, config=config)
+    assert "MySQL connection to" in str(exc_info.value)
+
+    # 2. Inspect test_connection must return UNREACHABLE
+    res_test = recipe.inspect("test_connection", config)
+    assert res_test["success"] is False
+    assert res_test["connected"] is False
+    assert res_test["status"] == "UNREACHABLE"
+    assert "error" in res_test
+
+    # 3. Inspect databases must return error, NOT fake databases
+    res_db = recipe.inspect("databases", config)
+    assert res_db["success"] is False
+    assert res_db["databases"] == []
+
+    # 4. Inspect tables must return error, NOT fake tables
+    res_tbl = recipe.inspect("tables", config, schema_name="ProjectX")
+    assert res_tbl["success"] is False
+    assert res_tbl["tables"] == []
+
+    # 5. Inspect columns must return error, NOT fake columns
+    res_col = recipe.inspect("columns", config, schema_name="ProjectX", table_name="Businesses")
+    assert res_col["success"] is False
+    assert res_col["columns"] == []
+
+
+def test_snowflake_and_mongodb_connector_error_when_unreachable():
+    """Verify that Snowflake and MongoDB raise ValidationException when live connection fails."""
+    from backend.app.recipes.ingestion.snowflake_connector import SnowflakeConnectorRecipe
+    from backend.app.recipes.ingestion.mongodb_connector import MongoDBConnectorRecipe
+    from backend.app.core.exceptions import ValidationException
+
+    # Snowflake live failure
+    sf_recipe = SnowflakeConnectorRecipe()
+    with pytest.raises(ValidationException):
+        sf_recipe.execute(inputs={}, config={"simulation_mode": False, "account": "invalid", "user": "test", "password": "x"})
+
+    # MongoDB live failure
+    mongo_recipe = MongoDBConnectorRecipe()
+    with pytest.raises(ValidationException):
+        mongo_recipe.execute(inputs={}, config={"simulation_mode": False, "host": "192.0.2.1", "port": 27017, "timeout": 1})
