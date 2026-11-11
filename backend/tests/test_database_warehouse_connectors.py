@@ -735,3 +735,205 @@ def test_postgresql_connector_schema_and_multi_table_and_column_isolation():
     }
     res_all_tbls = recipe.execute(inputs={}, config=cfg_all_tables)
     assert res_all_tbls["output_summary"]["tables_count"] >= 1
+
+
+
+def test_postgresql_connector_property_hierarchy():
+    """Verify that properties in parameters_schema are arranged in a clean, logical hierarchy."""
+    recipe = PostgreSQLConnectorRecipe()
+    props = list(recipe.get_schema()["properties"].keys())
+
+    # 1. Connection group: credentials establish connection to server
+    assert props.index("connection_mode") < props.index("credential_id") < props.index("host")
+    assert props.index("host") < props.index("port") < props.index("username") < props.index("password")
+    assert props.index("password") < props.index("connection_string") < props.index("ssl_mode") < props.index("timeout")
+
+    # 2. Read mode and cascading discovery hierarchy: Database -> Schema -> Tables -> Columns
+    assert props.index("timeout") < props.index("read_mode") < props.index("database") < props.index("schema_name")
+    assert props.index("schema_name") < props.index("select_all_tables") < props.index("tables") < props.index("table_name")
+    assert props.index("table_name") < props.index("select_all_columns") < props.index("columns")
+    assert props.index("columns") < props.index("where_clause") < props.index("order_by") < props.index("query")
+
+    # 3. Limits & pagination at bottom
+    assert props.index("query") < props.index("limit") < props.index("offset") < props.index("simulation_mode")
+
+
+def test_postgresql_connector_inspect_databases_and_columns_metadata():
+    """Verify inspection for databases action and rich column metadata including primary_key."""
+    recipe = PostgreSQLConnectorRecipe()
+    config = {"simulation_mode": True, "database": "walmart"}
+
+    # 1. Databases action
+    res_db = recipe.inspect("databases", config)
+    assert res_db["success"] is True
+    assert "databases" in res_db
+    assert len(res_db["databases"]) >= 2
+    assert "walmart" in res_db["databases"] or "postgres" in res_db["databases"]
+
+    # 2. Rich columns metadata with primary_key
+    res_cols = recipe.inspect("columns", config, schema_name="public", table_name="sales")
+    assert res_cols["success"] is True
+    assert "columns" in res_cols
+    assert len(res_cols["columns"]) > 0
+    for col in res_cols["columns"]:
+        assert "name" in col
+        assert "type" in col
+        assert "nullable" in col
+        assert "primary_key" in col
+        assert isinstance(col["primary_key"], bool)
+
+    pk_cols = [c for c in res_cols["columns"] if c["primary_key"]]
+    assert len(pk_cols) >= 1
+    assert pk_cols[0]["name"] == "invoice_id"
+
+
+def test_mysql_connector_inspection():
+    """Verify that MySQL connector provides real-time dynamic inspection."""
+    from backend.app.recipes.ingestion.mysql_connector import MySQLConnectorRecipe
+    recipe = MySQLConnectorRecipe()
+    config = {"simulation_mode": True, "database": "shop_db"}
+
+    # 1. Test Connection
+    res_conn = recipe.inspect("test_connection", config)
+    assert res_conn["success"] is True
+    assert "connected" in res_conn
+
+    # 2. Databases / Schemas
+    res_db = recipe.inspect("databases", config)
+    assert res_db["success"] is True
+    assert "shop_db" in res_db["databases"]
+
+    # 3. Tables
+    res_tbl = recipe.inspect("tables", config, schema_name="shop_db")
+    assert res_tbl["success"] is True
+    assert "orders" in res_tbl["tables"] or "customers" in res_tbl["tables"]
+
+    # 4. Columns
+    res_col = recipe.inspect("columns", config, schema_name="shop_db", table_name="orders")
+    assert res_col["success"] is True
+    assert len(res_col["columns"]) > 0
+    assert any(c["name"] == "order_id" for c in res_col["columns"])
+    pk_col = next(c for c in res_col["columns"] if c["name"] == "order_id")
+    assert pk_col["primary_key"] is True
+
+
+def test_postgresql_connector_error_when_unreachable_and_not_simulated():
+    """Verify that when simulation_mode is False and DB is unreachable, inspect returns an explicit error."""
+    recipe = PostgreSQLConnectorRecipe()
+    config = {
+        "simulation_mode": False,
+        "host": "192.0.2.1",  # TEST-NET-1 (RFC 5737 unreachable dummy IP)
+        "port": 5432,
+        "database": "walmart",
+        "username": "dbuser",
+        "password": "wrongpassword",
+        "timeout": 1,
+    }
+
+    # Test connection action
+    res_test = recipe.inspect("test_connection", config)
+    assert res_test["success"] is False
+    assert res_test["connected"] is False
+    assert res_test["status"] == "UNREACHABLE"
+    assert "error" in res_test
+
+    # Databases action
+    res_db = recipe.inspect("databases", config)
+    assert res_db["success"] is False
+    assert res_db["source"] == "ERROR"
+    assert res_db["databases"] == []
+
+    # Tables action
+    res_tbl = recipe.inspect("tables", config, schema_name="public")
+    assert res_tbl["success"] is False
+    assert res_tbl["source"] == "ERROR"
+    assert res_tbl["tables"] == []
+
+    # Columns action
+    res_col = recipe.inspect("columns", config, schema_name="public", table_name="sales")
+    assert res_col["success"] is False
+    assert res_col["source"] == "ERROR"
+    assert res_col["columns"] == []
+
+
+def test_credential_encryption_and_serialization():
+    """Verify credential encryption/decryption roundtrip and Credential model to_dict()."""
+    import uuid
+    from datetime import datetime, timezone
+    from backend.app.credentials.service import encrypt_payload, decrypt_payload
+    from backend.app.credentials.models import Credential
+
+    raw_payload = {
+        "host": "88.222.215.30",
+        "port": 5432,
+        "database": "walmart",
+        "username": "dbuser",
+        "password": "Classic@123",
+    }
+    encrypted = encrypt_payload(raw_payload)
+    assert isinstance(encrypted, str)
+    assert encrypted != ""
+
+    decrypted = decrypt_payload(encrypted)
+    assert decrypted["host"] == "88.222.215.30"
+    assert decrypted["password"] == "Classic@123"
+
+    # Test model
+    now = datetime.now(timezone.utc)
+    cred = Credential(
+        id=str(uuid.uuid4()),
+        tenant_id=1,
+        user_id="user-123",
+        provider="postgresql",
+        name="Walmart Production",
+        auth_type="database",
+        encrypted_data=encrypted,
+        metadata_info={"host": "88.222.215.30", "database": "walmart"},
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    data = cred.to_dict()
+    assert data["provider"] == "postgresql"
+    assert data["name"] == "Walmart Production"
+    assert data["metadata_info"]["database"] == "walmart"
+    assert "password" not in data["metadata_info"]  # metadata_info must never leak password
+
+
+def test_request_and_response_pydantic_models():
+    """Verify CreateCredentialRequest, RecipeInspectRequest, and RecipeInspectResponse."""
+    from backend.app.credentials.router import CreateCredentialRequest
+    from backend.app.recipes.router import RecipeInspectRequest, RecipeInspectResponse
+
+    # Credential request
+    cred_req = CreateCredentialRequest(
+        provider="postgresql",
+        name="Test DB",
+        data={"host": "88.222.215.30", "database": "walmart"},
+        auth_type="database",
+    )
+    assert cred_req.provider == "postgresql"
+    assert cred_req.data["host"] == "88.222.215.30"
+
+    # Recipe inspect request
+    inspect_req = RecipeInspectRequest(
+        action="tables",
+        schema_name="public",
+        database_name="walmart",
+        save_credential=True,
+        credential_name="Saved DB",
+        config={"host": "88.222.215.30"},
+    )
+    assert inspect_req.action == "tables"
+    assert inspect_req.save_credential is True
+
+    # Recipe inspect response
+    inspect_resp = RecipeInspectResponse(
+        recipe_id="postgresql_connector",
+        action="tables",
+        success=True,
+        data={"tables": ["sales", "customers"]},
+        saved_credential_id="cred-uuid-123",
+    )
+    assert inspect_resp.success is True
+    assert inspect_resp.saved_credential_id == "cred-uuid-123"

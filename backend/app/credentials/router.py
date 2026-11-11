@@ -7,6 +7,7 @@ import time
 import urllib.parse
 import urllib.request
 from typing import Optional, List, Dict, Any
+from pydantic import BaseModel, Field
 
 from fastapi import APIRouter, Depends, Query, Request, HTTPException, status
 from fastapi.responses import HTMLResponse
@@ -97,6 +98,56 @@ async def list_credentials(
     """Lists all connected credentials and OAuth accounts for the caller's tenant."""
     creds = await CredentialService.list_credentials(db=db, tenant_id=user.tenant_id, provider=provider)
     return [c.to_dict() for c in creds]
+
+
+class CreateCredentialRequest(BaseModel):
+    provider: str = Field(..., description="Provider identifier e.g. postgresql, mysql, snowflake, discord")
+    name: str = Field(..., description="User-friendly name e.g. 'Walmart Analytics DB'")
+    data: Dict[str, Any] = Field(..., description="Credential payload to encrypt (e.g. host, port, database, username, password, connection_string)")
+    auth_type: str = Field(default="database", description="Authentication type e.g. database, basic, oauth2, api_key")
+    metadata_info: Optional[Dict[str, Any]] = Field(default=None, description="Public display metadata safe for frontend dropdowns")
+
+
+@router.post("/credentials", status_code=status.HTTP_201_CREATED)
+async def create_credential(
+    body: CreateCredentialRequest,
+    user: TokenData = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Saves a new encrypted credential (database connection, API key, service account)
+    scoped to the caller's tenant.
+    """
+    safe_metadata = dict(body.metadata_info or {})
+    if not safe_metadata:
+        for k in ("host", "port", "database", "username", "account", "warehouse", "ssl_mode"):
+            if k in body.data and body.data[k]:
+                safe_metadata[k] = body.data[k]
+
+    cred = await CredentialService.create_credential(
+        db=db,
+        provider=body.provider,
+        name=body.name,
+        data=body.data,
+        tenant_id=user.tenant_id,
+        user_id=getattr(user, 'user_id', getattr(user, 'sub', None)),
+        metadata_info=safe_metadata,
+        auth_type=body.auth_type,
+    )
+    return cred.to_dict()
+
+
+@router.get("/credentials/{credential_id}")
+async def get_credential(
+    credential_id: str,
+    user: TokenData = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Retrieves safe metadata for a stored credential."""
+    cred = await CredentialService.get_credential(db=db, credential_id=credential_id, tenant_id=user.tenant_id)
+    if not cred:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credential not found or access denied")
+    return cred.to_dict()
 
 
 @router.delete("/credentials/{credential_id}")

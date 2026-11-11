@@ -468,3 +468,222 @@ class MySQLConnectorRecipe(BaseRecipe):
             f"conn.close()\n"
             f"print(f'Retrieved {{len(df)}} rows from MySQL.')\n"
         )
+
+
+    def inspect(
+        self,
+        action: str,
+        config: Dict[str, Any],
+        context: Optional[Any] = None,
+        schema_name: Optional[str] = None,
+        table_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Introspects the connected MySQL / MariaDB database in real-time:
+        - 'test_connection': verifies connectivity and server version
+        - 'databases': list of accessible databases (schemas)
+        - 'tables': list of tables/views in a database
+        - 'columns': list of columns with types, nullability, and primary keys
+        """
+        action = str(action or "test_connection").strip().lower()
+        params = self._resolve_connection_params(config, context)
+        timeout = int(config.get("timeout", 10))
+        simulation_mode = bool(config.get("simulation_mode", False))
+
+        is_live = False
+        server_info = ""
+        inspect_err = ""
+        conn = None
+
+        if not simulation_mode and (params.get("connection_string") or params.get("host")):
+            try:
+                import pymysql
+                conn = pymysql.connect(
+                    host=params.get("host", "localhost"),
+                    port=int(params.get("port", 3306)),
+                    database=params.get("database", "shop_db"),
+                    user=params.get("username", "root"),
+                    password=params.get("password", ""),
+                    charset=params.get("charset", "utf8mb4"),
+                    connect_timeout=timeout,
+                    cursorclass=pymysql.cursors.DictCursor,
+                )
+                with conn.cursor() as cur:
+                    cur.execute("SELECT VERSION();")
+                    row = cur.fetchone()
+                    if row:
+                        server_info = list(row.values())[0] if isinstance(row, dict) else str(row[0])
+                        is_live = True
+            except Exception as e:
+                inspect_err = str(e)
+                logger.debug(f"MySQL inspect connection failed: {e}")
+
+        # 1. Action: test_connection
+        if action == "test_connection":
+            if is_live:
+                if conn:
+                    conn.close()
+                return {
+                    "success": True,
+                    "connected": True,
+                    "status": "LIVE",
+                    "server_version": server_info,
+                    "database": params.get("database"),
+                    "message": f"Successfully connected to MySQL server '{params.get('host')}:{params.get('port')}'.",
+                }
+            elif simulation_mode:
+                return {
+                    "success": True,
+                    "connected": True,
+                    "status": "SIMULATED",
+                    "server_version": "8.0.35-MySQL Community Server [SIMULATION]",
+                    "database": params.get("database"),
+                    "message": "MySQL simulation mode connection active.",
+                }
+            else:
+                return {
+                    "success": False,
+                    "connected": False,
+                    "status": "UNREACHABLE",
+                    "database": params.get("database"),
+                    "message": f"Could not establish connection to MySQL ({params.get('host')}:{params.get('port')}). Error: {inspect_err or 'Server unreachable'}",
+                    "error": inspect_err,
+                }
+
+        # 2. Action: databases / schemas
+        if action in ("databases", "get_databases", "list_databases", "schemas", "get_schemas"):
+            if not is_live and not simulation_mode:
+                return {
+                    "success": False,
+                    "databases": [],
+                    "count": 0,
+                    "error": inspect_err or "Connection could not be established.",
+                    "message": f"Failed to connect to MySQL: {inspect_err or 'Host unreachable'}",
+                    "source": "ERROR",
+                }
+
+            databases = []
+            if is_live and conn:
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute("SHOW DATABASES;")
+                        rows = cur.fetchall()
+                        databases = [list(r.values())[0] if isinstance(r, dict) else r[0] for r in rows]
+                        databases = [db for db in databases if db not in ('information_schema', 'mysql', 'performance_schema', 'sys')]
+                except Exception as ex:
+                    logger.warning(f"Failed to query MySQL databases: {ex}")
+
+            if conn:
+                conn.close()
+
+            if not databases and simulation_mode:
+                databases = ["shop_db", "inventory_db", "users_db"]
+
+            return {
+                "success": True,
+                "databases": databases,
+                "schemas": databases,
+                "count": len(databases),
+                "source": "LIVE" if is_live else "SIMULATED",
+            }
+
+        # 3. Action: tables
+        if action in ("tables", "get_tables", "list_tables"):
+            if not is_live and not simulation_mode:
+                return {
+                    "success": False,
+                    "tables": [],
+                    "count": 0,
+                    "error": inspect_err or "Connection could not be established.",
+                    "message": f"Failed to connect to MySQL: {inspect_err or 'Host unreachable'}",
+                    "source": "ERROR",
+                }
+
+            target_db = schema_name or config.get("database") or "shop_db"
+            tables = []
+            if is_live and conn:
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = %s AND table_type IN ('BASE TABLE', 'VIEW') ORDER BY table_name;", (target_db,))
+                        rows = cur.fetchall()
+                        tables = [list(r.values())[0] if isinstance(r, dict) else r[0] for r in rows]
+                except Exception as ex:
+                    logger.warning(f"Failed to query MySQL tables: {ex}")
+
+            if conn:
+                conn.close()
+
+            if not tables and simulation_mode:
+                tables = ["orders", "order_items", "products", "customers", "inventory"]
+
+            return {
+                "success": True,
+                "database": target_db,
+                "tables": tables,
+                "count": len(tables),
+                "source": "LIVE" if is_live else "SIMULATED",
+            }
+
+        # 4. Action: columns
+        if action in ("columns", "get_columns", "list_columns"):
+            if not is_live and not simulation_mode:
+                return {
+                    "success": False,
+                    "columns": [],
+                    "count": 0,
+                    "error": inspect_err or "Connection could not be established.",
+                    "message": f"Failed to connect to MySQL: {inspect_err or 'Host unreachable'}",
+                    "source": "ERROR",
+                }
+
+            target_db = schema_name or config.get("database") or "shop_db"
+            target_table = table_name or config.get("table_name") or "orders"
+            columns = []
+            if is_live and conn:
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "SELECT column_name, data_type, is_nullable, column_key "
+                            "FROM information_schema.columns "
+                            "WHERE table_schema = %s AND table_name = %s "
+                            "ORDER BY ordinal_position;",
+                            (target_db, target_table)
+                        )
+                        rows = cur.fetchall()
+                        for r in rows:
+                            vals = list(r.values()) if isinstance(r, dict) else r
+                            columns.append({
+                                "name": vals[0],
+                                "type": vals[1],
+                                "nullable": (vals[2] == "YES"),
+                                "primary_key": (vals[3] == "PRI")
+                            })
+                except Exception as ex:
+                    logger.warning(f"Failed to query MySQL columns: {ex}")
+
+            if conn:
+                conn.close()
+
+            if not columns and simulation_mode:
+                columns = [
+                    {"name": "order_id", "type": "int", "nullable": False, "primary_key": True},
+                    {"name": "customer_id", "type": "int", "nullable": False, "primary_key": False},
+                    {"name": "amount", "type": "decimal(10,2)", "nullable": False, "primary_key": False},
+                    {"name": "status", "type": "varchar(50)", "nullable": False, "primary_key": False},
+                    {"name": "created_at", "type": "datetime", "nullable": False, "primary_key": False},
+                ]
+
+            return {
+                "success": True,
+                "database": target_db,
+                "table": target_table,
+                "columns": columns,
+                "count": len(columns),
+                "source": "LIVE" if is_live else "SIMULATED",
+            }
+
+        return {
+            "success": False,
+            "error": f"Unknown inspection action '{action}'. Supported: 'test_connection', 'databases', 'schemas', 'tables', 'columns'.",
+            "message": f"Unknown inspection action '{action}'.",
+        }

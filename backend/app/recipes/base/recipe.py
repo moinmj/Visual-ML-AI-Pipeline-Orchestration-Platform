@@ -219,3 +219,21 @@ class BaseRecipe(ABC):
             outputs=self.get_outputs(),
             parameters_schema=schema
         )
+
+    def inspect(
+        self,
+        action: str,
+        config: Dict[str, Any],
+        context: Optional[Any] = None,
+        schema_name: Optional[str] = None,
+        table_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Introspects external resources (databases, tables, columns, APIs).
+        Override in connector recipes to provide live and simulated metadata exploration.
+        """
+        return {
+            "success": False,
+            "error": f"Recipe '{self.recipe_id}' does not support live introspection.",
+            "message": f"Recipe '{self.recipe_id}' does not support live introspection.",
+        }
