@@ -21,6 +21,7 @@ except ImportError:
 from backend.app.recipes.base.recipe import BaseRecipe, RecipePort
 from backend.app.core.logging import logger
 from backend.app.core.config import settings
+from backend.app.core.exceptions import ValidationException
 
 
 class MongoDBConnectorRecipe(BaseRecipe):
@@ -444,19 +445,19 @@ class MongoDBConnectorRecipe(BaseRecipe):
 
                 delivery_status = "LIVE"
                 status_msg = f"Retrieved {len(records)} live documents from MongoDB collection '{database_name}.{collection_name}'."
-            except ImportError:
-                status_msg = "PyMongo driver not installed. Using benchmark simulation fallback."
-                logger.info(status_msg)
             except Exception as e:
                 logger.warning(f"MongoDB connection failed: {e}")
-                status_msg = f"MongoDB connection failed ({e}). Using benchmark simulation fallback."
+                last_error = e
 
-        # Fallback to realistic benchmark data
-        if not records:
+            if last_error is not None:
+                raise ValidationException(f"MongoDB connection to '{database_name}.{collection_name}' failed: {str(last_error)}")
+
+        # Simulation Mode (ONLY when simulation_mode is True)
+        if simulation_mode:
             raw_benchmark = self._generate_benchmark_data(config)
             records = [self._serialize_bson_document(doc, convert_objectid=convert_objectid) for doc in raw_benchmark]
-            if not status_msg:
-                status_msg = f"Loaded {len(records)} benchmark documents for MongoDB collection '{database_name}.{collection_name}'."
+            delivery_status = "SIMULATED"
+            status_msg = f"Loaded {len(records)} benchmark documents for MongoDB collection '{database_name}.{collection_name}'."
 
         # Flatten nested documents via json_normalize if requested
         if pd is not None and records:
@@ -523,3 +524,98 @@ class MongoDBConnectorRecipe(BaseRecipe):
             f"df = pd.json_normalize(docs) if {flatten} else pd.DataFrame(docs)\n"
             f"print(f'Retrieved {{len(df)}} documents from MongoDB.')\n"
         )
+
+    def inspect(
+        self,
+        action: str,
+        config: Dict[str, Any],
+        context: Optional[Any] = None,
+        schema_name: Optional[str] = None,
+        table_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Introspects connected MongoDB server in real-time."""
+        action = str(action or "test_connection").strip().lower()
+        params = self._resolve_connection_params(config, context)
+        simulation_mode = bool(config.get("simulation_mode", False))
+
+        is_live = False
+        server_info = ""
+        inspect_err = ""
+        client = None
+
+        if not simulation_mode and (params.get("connection_string") or params.get("host")):
+            try:
+                import pymongo
+                auth_conn_str = params.get("connection_string") or f"mongodb://{params.get('host')}:{params.get('port')}"
+                client = pymongo.MongoClient(auth_conn_str, serverSelectionTimeoutMS=int(config.get("timeout", 10)) * 1000)
+                info = client.server_info()
+                if info:
+                    server_info = f"MongoDB v{info.get('version', 'unknown')}"
+                    is_live = True
+            except Exception as ex:
+                inspect_err = str(ex)
+                logger.debug(f"MongoDB inspect connection failed: {ex}")
+
+        if action == "test_connection":
+            if is_live:
+                if client: client.close()
+                return {"success": True, "connected": True, "status": "LIVE", "server_version": server_info, "database": params.get("database"), "message": "Successfully connected to MongoDB."}
+            elif simulation_mode:
+                return {"success": True, "connected": True, "status": "SIMULATED", "server_version": "MongoDB v7.0.5 [SIMULATION]", "database": params.get("database"), "message": "MongoDB simulation mode active."}
+            else:
+                return {"success": False, "connected": False, "status": "UNREACHABLE", "error": inspect_err, "message": f"Could not connect to MongoDB: {inspect_err or 'Unreachable'}"}
+
+        if action in ("databases", "get_databases"):
+            if not is_live and not simulation_mode:
+                return {"success": False, "databases": [], "error": inspect_err or "Connection could not be established."}
+            dbs = []
+            if is_live and client:
+                try:
+                    dbs = [d for d in client.list_database_names() if d not in ('admin', 'local', 'config')]
+                    client.close()
+                except Exception as e:
+                    logger.warning(f"MongoDB list_database_names failed: {e}")
+            if not dbs and simulation_mode:
+                dbs = ["analytics_db", "production_db", "staging_db"]
+            return {"success": True, "databases": dbs, "count": len(dbs), "source": "LIVE" if is_live else "SIMULATED"}
+
+        if action in ("tables", "get_tables", "collections", "get_collections"):
+            if not is_live and not simulation_mode:
+                return {"success": False, "tables": [], "collections": [], "error": inspect_err or "Connection could not be established."}
+            target_db = schema_name or config.get("database", "production_db")
+            colls = []
+            if is_live and client:
+                try:
+                    colls = client[target_db].list_collection_names()
+                    client.close()
+                except Exception as e:
+                    logger.warning(f"MongoDB list_collection_names failed: {e}")
+            if not colls and simulation_mode:
+                colls = ["users", "events", "transactions", "devices"]
+            return {"success": True, "tables": colls, "collections": colls, "count": len(colls), "database": target_db, "source": "LIVE" if is_live else "SIMULATED"}
+
+        if action in ("columns", "get_columns", "fields", "get_fields"):
+            if not is_live and not simulation_mode:
+                return {"success": False, "columns": [], "error": inspect_err or "Connection could not be established."}
+            target_db = schema_name or config.get("database", "production_db")
+            target_coll = table_name or config.get("collection", "users")
+            fields = []
+            if is_live and client:
+                try:
+                    sample = client[target_db][target_coll].find_one()
+                    if sample:
+                        for k, v in sample.items():
+                            fields.append({"name": k, "type": type(v).__name__, "nullable": True, "primary_key": (k == "_id")})
+                    client.close()
+                except Exception as e:
+                    logger.warning(f"MongoDB sample schema failed: {e}")
+            if not fields and simulation_mode:
+                fields = [
+                    {"name": "_id", "type": "ObjectId", "nullable": False, "primary_key": True},
+                    {"name": "user_id", "type": "str", "nullable": False, "primary_key": False},
+                    {"name": "status", "type": "str", "nullable": True, "primary_key": False},
+                    {"name": "created_at", "type": "datetime", "nullable": True, "primary_key": False},
+                ]
+            return {"success": True, "columns": fields, "count": len(fields), "collection": target_coll, "source": "LIVE" if is_live else "SIMULATED"}
+
+        return {"success": False, "error": f"Unknown action '{action}'."}

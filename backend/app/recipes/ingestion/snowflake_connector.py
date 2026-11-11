@@ -19,6 +19,7 @@ except ImportError:
 from backend.app.recipes.base.recipe import BaseRecipe, RecipePort
 from backend.app.core.logging import logger
 from backend.app.core.config import settings
+from backend.app.core.exceptions import ValidationException
 
 
 class SnowflakeConnectorRecipe(BaseRecipe):
@@ -316,7 +317,8 @@ class SnowflakeConnectorRecipe(BaseRecipe):
         status_msg = ""
 
         # Live Execution Attempt
-        if not simulation_mode and account and params["user"]:
+        if not simulation_mode:
+            last_error = None
             try:
                 import snowflake.connector
                 conn_kwargs = {
@@ -348,18 +350,18 @@ class SnowflakeConnectorRecipe(BaseRecipe):
 
                 delivery_status = "LIVE"
                 status_msg = f"Retrieved {len(records)} live rows from Snowflake {database}.{schema}.{table_name}."
-            except ImportError:
-                status_msg = "snowflake-connector-python driver not installed. Using benchmark simulation fallback."
-                logger.info(status_msg)
             except Exception as e:
                 logger.warning(f"Snowflake connection failed: {e}")
-                status_msg = f"Snowflake connection failed ({e}). Using benchmark simulation fallback."
+                last_error = e
 
-        # Fallback to realistic benchmark data
-        if not records:
+            if last_error is not None:
+                raise ValidationException(f"Snowflake connection to {account}/{database}.{schema} failed: {str(last_error)}")
+
+        # Simulation Mode (ONLY when simulation_mode is True)
+        if simulation_mode:
             records = self._generate_benchmark_data(config)
-            if not status_msg:
-                status_msg = f"Loaded {len(records)} benchmark records for Snowflake warehouse '{warehouse}' ({database}.{schema})."
+            delivery_status = "SIMULATED"
+            status_msg = f"Loaded {len(records)} benchmark records for Snowflake warehouse '{warehouse}' ({database}.{schema})."
 
         df_out = pd.DataFrame(records) if pd is not None else records
         duration_ms = int((time.time() - start_time) * 1000)
@@ -427,3 +429,115 @@ class SnowflakeConnectorRecipe(BaseRecipe):
             f"conn.close()\n"
             f"print(f'Retrieved {{len(df)}} rows from Snowflake warehouse {warehouse}.')\n"
         )
+
+    def inspect(
+        self,
+        action: str,
+        config: Dict[str, Any],
+        context: Optional[Any] = None,
+        schema_name: Optional[str] = None,
+        table_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Introspects connected Snowflake warehouse in real-time."""
+        action = str(action or "test_connection").strip().lower()
+        params = self._resolve_connection_params(config, context)
+        simulation_mode = bool(config.get("simulation_mode", False))
+
+        is_live = False
+        server_info = ""
+        inspect_err = ""
+        conn = None
+
+        if not simulation_mode and params.get("account") and params.get("user"):
+            try:
+                import snowflake.connector
+                conn = snowflake.connector.connect(
+                    account=params["account"],
+                    user=params["user"],
+                    password=params["password"],
+                    warehouse=params["warehouse"],
+                    database=params["database"],
+                    schema=params["schema"],
+                    role=params["role"],
+                    login_timeout=int(config.get("timeout", 10)),
+                )
+                cur = conn.cursor()
+                cur.execute("SELECT CURRENT_VERSION();")
+                row = cur.fetchone()
+                if row:
+                    server_info = str(row[0])
+                    is_live = True
+                cur.close()
+            except Exception as ex:
+                inspect_err = str(ex)
+                logger.debug(f"Snowflake inspect connection failed: {ex}")
+
+        if action == "test_connection":
+            if is_live:
+                if conn: conn.close()
+                return {"success": True, "connected": True, "status": "LIVE", "server_version": server_info, "database": params.get("database"), "message": "Successfully connected to Snowflake."}
+            elif simulation_mode:
+                return {"success": True, "connected": True, "status": "SIMULATED", "server_version": "Snowflake 8.12.0 [SIMULATION]", "database": params.get("database"), "message": "Snowflake simulation mode active."}
+            else:
+                return {"success": False, "connected": False, "status": "UNREACHABLE", "error": inspect_err, "message": f"Could not connect to Snowflake: {inspect_err or 'Unreachable'}"}
+
+        if action in ("databases", "get_databases"):
+            if not is_live and not simulation_mode:
+                return {"success": False, "databases": [], "error": inspect_err or "Connection could not be established."}
+            dbs = []
+            if is_live and conn:
+                try:
+                    cur = conn.cursor()
+                    cur.execute("SHOW DATABASES;")
+                    dbs = [row[1] for row in cur.fetchall()]
+                    cur.close()
+                    conn.close()
+                except Exception as e:
+                    logger.warning(f"Snowflake SHOW DATABASES failed: {e}")
+            if not dbs and simulation_mode:
+                dbs = ["ANALYTICS", "PRODUCTION", "STAGING", "DEMO_DB"]
+            return {"success": True, "databases": dbs, "count": len(dbs), "source": "LIVE" if is_live else "SIMULATED"}
+
+        if action in ("tables", "get_tables"):
+            if not is_live and not simulation_mode:
+                return {"success": False, "tables": [], "error": inspect_err or "Connection could not be established."}
+            target_schema = schema_name or params.get("schema") or "PUBLIC"
+            tbls = []
+            if is_live and conn:
+                try:
+                    cur = conn.cursor()
+                    cur.execute(f"SHOW TABLES IN SCHEMA {target_schema};")
+                    tbls = [row[1] for row in cur.fetchall()]
+                    cur.close()
+                    conn.close()
+                except Exception as e:
+                    logger.warning(f"Snowflake SHOW TABLES failed: {e}")
+            if not tbls and simulation_mode:
+                tbls = ["FCT_ORDERS", "DIM_CUSTOMERS", "FCT_SALES", "DIM_PRODUCTS"]
+            return {"success": True, "tables": tbls, "count": len(tbls), "schema": target_schema, "source": "LIVE" if is_live else "SIMULATED"}
+
+        if action in ("columns", "get_columns"):
+            if not is_live and not simulation_mode:
+                return {"success": False, "columns": [], "error": inspect_err or "Connection could not be established."}
+            target_tbl = table_name or config.get("table_name", "FCT_ORDERS")
+            cols = []
+            if is_live and conn:
+                try:
+                    cur = conn.cursor()
+                    cur.execute(f"SHOW COLUMNS IN TABLE {target_tbl};")
+                    for row in cur.fetchall():
+                        cols.append({"name": row[2], "type": row[3], "nullable": True, "primary_key": False})
+                    cur.close()
+                    conn.close()
+                except Exception as e:
+                    logger.warning(f"Snowflake SHOW COLUMNS failed: {e}")
+            if not cols and simulation_mode:
+                cols = [
+                    {"name": "ORDER_ID", "type": "NUMBER", "nullable": False, "primary_key": True},
+                    {"name": "CUSTOMER_ID", "type": "VARCHAR", "nullable": False, "primary_key": False},
+                    {"name": "NET_AMOUNT", "type": "FLOAT", "nullable": False, "primary_key": False},
+                    {"name": "CREATED_AT", "type": "TIMESTAMP_NTZ", "nullable": True, "primary_key": False},
+                ]
+            return {"success": True, "columns": cols, "count": len(cols), "table": target_tbl, "source": "LIVE" if is_live else "SIMULATED"}
+
+        return {"success": False, "error": f"Unknown action '{action}'."}
