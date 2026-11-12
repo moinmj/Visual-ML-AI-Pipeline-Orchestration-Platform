@@ -34,16 +34,7 @@ class BigQueryConnectorRecipe(BaseRecipe):
     input_types = ["dataframe"]
     output_types = ["dataframe"]
 
-    inputs = [
-        RecipePort(
-            id="input",
-            label="Trigger / Input Dataset",
-            type="dataframe",
-            required=False,
-            max_connections=1,
-            description="Optional upstream dataset for batch IDs or execution trigger"
-        )
-    ]
+    inputs: List[RecipePort] = []
 
     outputs = [
         RecipePort(
@@ -57,36 +48,105 @@ class BigQueryConnectorRecipe(BaseRecipe):
     def get_schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
+            "sections": [
+                {"id": "connection", "title": "Connection Configuration", "description": "Configure GCP authentication and project"},
+                {"id": "query_selection", "title": "Query & Table Selection", "description": "Choose datasets, tables, or Standard SQL"},
+                {"id": "runtime_limits", "title": "Limits & Performance", "description": "Row limits and safety billing guardrails"}
+            ],
             "properties": {
+                # ── 1. Auth Mode & GCP Credentials ──
                 "connection_mode": {
                     "type": "string",
                     "title": "Auth Mode",
                     "input_type": "dropdown",
                     "enum": ["service_account_json", "credentials_file", "adc", "credential"],
                     "default": "service_account_json",
+                    "section": "connection",
                     "description": "Method of authentication: Service Account JSON key string, credentials file path, ADC, or stored credential."
+                },
+                "credential_id": {
+                    "type": "string",
+                    "title": "Connected GCP Credential",
+                    "input_type": "credential_dropdown",
+                    "provider": "bigquery",
+                    "section": "connection",
+                    "description": "Select a stored GCP/BigQuery credential from platform settings.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "credential"
+                    }
                 },
                 "project_id": {
                     "type": "string",
                     "title": "GCP Project ID",
                     "input_type": "text",
-                    "default": "my-gcp-project",
+                    "default": "",
+                    "placeholder": "e.g. my-gcp-project-123",
+                    "section": "connection",
                     "description": "Google Cloud Project ID."
                 },
-                "dataset_id": {
+                "credentials_json": {
                     "type": "string",
-                    "title": "Dataset ID",
-                    "input_type": "text",
-                    "default": "analytics_data",
-                    "description": "Target BigQuery dataset name."
+                    "title": "Service Account JSON Key",
+                    "input_type": "textarea",
+                    "default": "",
+                    "placeholder": "{\"type\": \"service_account\", \"project_id\": \"...\"}",
+                    "section": "connection",
+                    "description": "Raw JSON string content of the Google Cloud Service Account key file.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "service_account_json"
+                    }
                 },
+                "credentials_file_path": {
+                    "type": "string",
+                    "title": "Key File Path",
+                    "input_type": "text",
+                    "default": "",
+                    "placeholder": "e.g. /etc/secrets/gcp-sa-key.json",
+                    "section": "connection",
+                    "description": "Local server file path to the service account JSON key (or set GOOGLE_APPLICATION_CREDENTIALS).",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "credentials_file"
+                    }
+                },
+                "location": {
+                    "type": "string",
+                    "title": "Dataset Location",
+                    "input_type": "text",
+                    "default": "US",
+                    "placeholder": "US",
+                    "section": "connection",
+                    "description": "Geographic location of the dataset (e.g. 'US', 'EU', 'asia-south1')."
+                },
+                "timeout": {
+                    "type": "integer",
+                    "title": "Timeout (seconds)",
+                    "input_type": "number",
+                    "default": 30,
+                    "section": "connection",
+                    "description": "Query execution timeout in seconds."
+                },
+
+                # ── 2. Read Mode & Target Selection ──
                 "read_mode": {
                     "type": "string",
                     "title": "Read Mode",
                     "input_type": "dropdown",
                     "enum": ["table", "query"],
                     "default": "table",
+                    "section": "query_selection",
                     "description": "Read an entire table/view or run a custom read-only Standard SQL query."
+                },
+                "dataset_id": {
+                    "type": "string",
+                    "title": "Dataset ID",
+                    "input_type": "text",
+                    "default": "",
+                    "placeholder": "e.g. analytics_data or production",
+                    "section": "query_selection",
+                    "description": "Target BigQuery dataset name."
                 },
                 "table_id": {
                     "type": "string",
@@ -94,14 +154,25 @@ class BigQueryConnectorRecipe(BaseRecipe):
                     "input_type": "text",
                     "default": "",
                     "placeholder": "e.g. events_daily",
-                    "description": "Target BigQuery table or view name (used in 'table' mode)."
+                    "section": "query_selection",
+                    "description": "Target BigQuery table or view name (used in 'table' mode).",
+                    "visible_when": {
+                        "field": "read_mode",
+                        "equals": "table"
+                    }
                 },
                 "columns": {
                     "type": "string",
                     "title": "Selected Columns",
                     "input_type": "text",
                     "default": "*",
-                    "description": "Comma-separated columns to select (e.g. 'event_date, user_id, event_name'). Leave '*' for all."
+                    "placeholder": "e.g. event_date, user_id, event_name or *",
+                    "section": "query_selection",
+                    "description": "Comma-separated columns to select (e.g. 'event_date, user_id, event_name'). Leave '*' for all.",
+                    "visible_when": {
+                        "field": "read_mode",
+                        "equals": "table"
+                    }
                 },
                 "query": {
                     "type": "string",
@@ -109,55 +180,37 @@ class BigQueryConnectorRecipe(BaseRecipe):
                     "input_type": "textarea",
                     "default": "",
                     "placeholder": "e.g. SELECT * FROM `my-gcp-project.analytics_data.events_daily` LIMIT 100",
-                    "description": "Custom BigQuery Standard SQL query. Only used when Read Mode is 'query'. Destructive DDL/DML statements are prohibited."
+                    "section": "query_selection",
+                    "description": "Custom BigQuery Standard SQL query. Only used when Read Mode is 'query'. Destructive DDL/DML statements are prohibited.",
+                    "visible_when": {
+                        "field": "read_mode",
+                        "equals": "query"
+                    }
                 },
-                "credentials_json": {
-                    "type": "string",
-                    "title": "Service Account JSON Key",
-                    "input_type": "textarea",
-                    "default": "",
-                    "description": "Raw JSON string content of the Google Cloud Service Account key file."
-                },
-                "credentials_file_path": {
-                    "type": "string",
-                    "title": "Key File Path",
-                    "input_type": "text",
-                    "default": "",
-                    "description": "Local server file path to the service account JSON key (or set GOOGLE_APPLICATION_CREDENTIALS)."
-                },
-                "location": {
-                    "type": "string",
-                    "title": "Dataset Location",
-                    "input_type": "text",
-                    "default": "US",
-                    "description": "Geographic location of the dataset (e.g. 'US', 'EU', 'asia-south1')."
+
+                # ── 3. Limits & Guardrails ──
+                "limit": {
+                    "type": "integer",
+                    "title": "Row Limit",
+                    "input_type": "number",
+                    "default": 1000,
+                    "section": "runtime_limits",
+                    "description": "Maximum number of rows to retrieve (1 to 1,000,000)."
                 },
                 "maximum_bytes_billed": {
                     "type": "integer",
                     "title": "Maximum Bytes Billed (Guardrail)",
                     "input_type": "number",
                     "default": 1073741824,
+                    "section": "runtime_limits",
                     "description": "Maximum bytes scanned allowed for query safety (default 1 GB = 1073741824 bytes)."
-                },
-                "limit": {
-                    "type": "integer",
-                    "title": "Row Limit",
-                    "input_type": "number",
-                    "default": 1000,
-                    "description": "Maximum number of rows to retrieve (1 to 1,000,000)."
-                },
-                "credential_id": {
-                    "type": "string",
-                    "title": "Connected GCP Credential",
-                    "input_type": "credential_dropdown",
-                    "provider": "bigquery",
-                    "description": "Select a stored GCP/BigQuery credential from platform settings."
                 },
                 "simulation_mode": {
                     "type": "boolean",
                     "title": "Simulation / Demo Mode",
                     "input_type": "checkbox",
                     "default": False,
+                    "section": "runtime_limits",
                     "description": "When enabled or when google-cloud-bigquery is offline, generates realistic BigQuery analytical benchmark data."
                 }
             },

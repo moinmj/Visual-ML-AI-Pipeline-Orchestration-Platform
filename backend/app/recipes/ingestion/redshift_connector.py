@@ -33,16 +33,7 @@ class RedshiftConnectorRecipe(BaseRecipe):
     input_types = ["dataframe"]
     output_types = ["dataframe"]
 
-    inputs = [
-        RecipePort(
-            id="input",
-            label="Trigger / Input Dataset",
-            type="dataframe",
-            required=False,
-            max_connections=1,
-            description="Optional upstream dataset for batch IDs or execution trigger"
-        )
-    ]
+    inputs: List[RecipePort] = []
 
     outputs = [
         RecipePort(
@@ -56,34 +47,125 @@ class RedshiftConnectorRecipe(BaseRecipe):
     def get_schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
+            "sections": [
+                {"id": "connection", "title": "Connection Configuration", "description": "Configure connection parameters"},
+                {"id": "query_selection", "title": "Query & Table Selection", "description": "Choose tables or custom SQL"},
+                {"id": "runtime_limits", "title": "Limits & Performance", "description": "Row limits and query performance"}
+            ],
             "properties": {
+                # ── 1. Connection Mode & Server Credentials ──
                 "connection_mode": {
                     "type": "string",
                     "title": "Connection Mode",
                     "input_type": "dropdown",
                     "enum": ["cluster_credentials", "connection_string", "credential"],
                     "default": "cluster_credentials",
+                    "section": "connection",
                     "description": "Choose how to connect: host/cluster parameters, connection string, or stored credential."
+                },
+                "credential_id": {
+                    "type": "string",
+                    "title": "Connected Redshift Credential",
+                    "input_type": "credential_dropdown",
+                    "provider": "redshift",
+                    "section": "connection",
+                    "description": "Select a stored Redshift credential from platform settings.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "credential"
+                    }
                 },
                 "host": {
                     "type": "string",
                     "title": "Redshift Cluster Endpoint / Host",
                     "input_type": "text",
-                    "default": "redshift-cluster-1.abcdef123456.us-east-1.redshift.amazonaws.com",
-                    "description": "Amazon Redshift cluster endpoint hostname."
+                    "default": "",
+                    "placeholder": "e.g. redshift-cluster-1.abcdef.us-east-1.redshift.amazonaws.com",
+                    "section": "connection",
+                    "description": "Amazon Redshift cluster endpoint hostname.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "cluster_credentials"
+                    }
                 },
                 "port": {
                     "type": "integer",
                     "title": "Port",
                     "input_type": "number",
                     "default": 5439,
-                    "description": "Redshift server port (default 5439)."
+                    "placeholder": "5439",
+                    "section": "connection",
+                    "description": "Redshift server port (default 5439).",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "cluster_credentials"
+                    }
+                },
+                "username": {
+                    "type": "string",
+                    "title": "Username",
+                    "input_type": "text",
+                    "default": "",
+                    "placeholder": "e.g. awsuser or master_user",
+                    "section": "connection",
+                    "description": "Redshift database master user.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "cluster_credentials"
+                    }
+                },
+                "password": {
+                    "type": "string",
+                    "title": "Password",
+                    "input_type": "password",
+                    "default": "",
+                    "placeholder": "Enter Redshift password",
+                    "section": "connection",
+                    "description": "Redshift database user password.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "cluster_credentials"
+                    }
+                },
+                "connection_string": {
+                    "type": "string",
+                    "title": "Connection String (URI)",
+                    "input_type": "text",
+                    "default": "",
+                    "placeholder": "e.g. postgresql://awsuser:pass@host:5439/dev",
+                    "section": "connection",
+                    "description": "Full Redshift connection URI e.g. postgresql://awsuser:pass@host:5439/dev",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "connection_string"
+                    }
+                },
+                "timeout": {
+                    "type": "integer",
+                    "title": "Timeout (seconds)",
+                    "input_type": "number",
+                    "default": 30,
+                    "section": "connection",
+                    "description": "Connection and query timeout in seconds."
+                },
+
+                # ── 2. Read Mode & Target Selection ──
+                "read_mode": {
+                    "type": "string",
+                    "title": "Read Mode",
+                    "input_type": "dropdown",
+                    "enum": ["table", "query"],
+                    "default": "table",
+                    "section": "query_selection",
+                    "description": "Read an entire table/view or run a custom read-only SQL query."
                 },
                 "database": {
                     "type": "string",
                     "title": "Database Name",
                     "input_type": "text",
-                    "default": "dev",
+                    "default": "",
+                    "placeholder": "e.g. dev or analytics",
+                    "section": "query_selection",
                     "description": "Name of the target Redshift database."
                 },
                 "schema_name": {
@@ -91,43 +173,13 @@ class RedshiftConnectorRecipe(BaseRecipe):
                     "title": "Schema Name",
                     "input_type": "text",
                     "default": "public",
-                    "description": "Target schema within the database (default 'public')."
-                },
-                "username": {
-                    "type": "string",
-                    "title": "Username",
-                    "input_type": "text",
-                    "default": "awsuser",
-                    "description": "Redshift database master user."
-                },
-                "password": {
-                    "type": "string",
-                    "title": "Password",
-                    "input_type": "password",
-                    "default": "",
-                    "description": "Redshift database user password."
-                },
-                "connection_string": {
-                    "type": "string",
-                    "title": "Connection String (URI)",
-                    "input_type": "text",
-                    "default": "",
-                    "description": "Full Redshift connection URI e.g. postgresql://awsuser:pass@host:5439/dev"
-                },
-                "credential_id": {
-                    "type": "string",
-                    "title": "Connected Redshift Credential",
-                    "input_type": "credential_dropdown",
-                    "provider": "redshift",
-                    "description": "Select a stored Redshift credential from platform settings."
-                },
-                "read_mode": {
-                    "type": "string",
-                    "title": "Read Mode",
-                    "input_type": "dropdown",
-                    "enum": ["table", "query"],
-                    "default": "table",
-                    "description": "Read an entire table/view or run a custom read-only SQL query."
+                    "placeholder": "public",
+                    "section": "query_selection",
+                    "description": "Target schema within the database (default 'public').",
+                    "visible_when": {
+                        "field": "read_mode",
+                        "equals": "table"
+                    }
                 },
                 "table_name": {
                     "type": "string",
@@ -135,14 +187,38 @@ class RedshiftConnectorRecipe(BaseRecipe):
                     "input_type": "text",
                     "default": "",
                     "placeholder": "e.g. sales",
-                    "description": "Target Redshift table or view name (used in 'table' mode)."
+                    "section": "query_selection",
+                    "description": "Target Redshift table or view name (used in 'table' mode).",
+                    "visible_when": {
+                        "field": "read_mode",
+                        "equals": "table"
+                    }
                 },
                 "columns": {
                     "type": "string",
                     "title": "Columns (comma-separated)",
                     "input_type": "text",
                     "default": "*",
-                    "description": "Columns to select (e.g. 'salesid, buyerid, sellerid, pricepaid, saletime'). Leave '*' for all."
+                    "placeholder": "e.g. salesid, buyerid, pricepaid or *",
+                    "section": "query_selection",
+                    "description": "Columns to select (e.g. 'salesid, buyerid, sellerid, pricepaid, saletime'). Leave '*' for all.",
+                    "visible_when": {
+                        "field": "read_mode",
+                        "equals": "table"
+                    }
+                },
+                "filter_condition": {
+                    "type": "string",
+                    "title": "Filter Condition (WHERE)",
+                    "input_type": "text",
+                    "default": "",
+                    "placeholder": "e.g. pricepaid > 100",
+                    "section": "query_selection",
+                    "description": "Optional SQL WHERE filter expression without 'WHERE' keyword (used in 'table' mode).",
+                    "visible_when": {
+                        "field": "read_mode",
+                        "equals": "table"
+                    }
                 },
                 "query": {
                     "type": "string",
@@ -150,13 +226,21 @@ class RedshiftConnectorRecipe(BaseRecipe):
                     "input_type": "textarea",
                     "default": "",
                     "placeholder": "e.g. SELECT * FROM public.sales LIMIT 100",
-                    "description": "Custom SQL query to execute in Redshift. Only used when Read Mode is 'query'. Modifying statements (DROP, DELETE, UPDATE, TRUNCATE) are rejected."
+                    "section": "query_selection",
+                    "description": "Custom SQL query to execute in Redshift. Only used when Read Mode is 'query'. Modifying statements (DROP, DELETE, UPDATE, TRUNCATE) are rejected.",
+                    "visible_when": {
+                        "field": "read_mode",
+                        "equals": "query"
+                    }
                 },
+
+                # ── 3. Limits & Pagination ──
                 "limit": {
                     "type": "integer",
                     "title": "Row Limit",
                     "input_type": "number",
                     "default": 1000,
+                    "section": "runtime_limits",
                     "description": "Maximum number of rows to retrieve (1 to 1,000,000)."
                 },
                 "simulation_mode": {
@@ -164,6 +248,7 @@ class RedshiftConnectorRecipe(BaseRecipe):
                     "title": "Simulation / Demo Mode",
                     "input_type": "checkbox",
                     "default": False,
+                    "section": "runtime_limits",
                     "description": "When enabled or when Redshift driver is offline, generates realistic Redshift columnar analytics benchmark data."
                 }
             },

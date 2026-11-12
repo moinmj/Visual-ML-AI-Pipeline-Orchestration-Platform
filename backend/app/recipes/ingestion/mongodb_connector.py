@@ -35,16 +35,7 @@ class MongoDBConnectorRecipe(BaseRecipe):
     input_types = ["dataframe"]
     output_types = ["dataframe"]
 
-    inputs = [
-        RecipePort(
-            id="input",
-            label="Trigger / Input Dataset",
-            type="dataframe",
-            required=False,
-            max_connections=1,
-            description="Optional upstream dataset for batch IDs or execution trigger"
-        )
-    ]
+    inputs: List[RecipePort] = []
 
     outputs = [
         RecipePort(
@@ -58,22 +49,33 @@ class MongoDBConnectorRecipe(BaseRecipe):
     def get_schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
+            "sections": [
+                {"id": "connection", "title": "Connection Configuration", "description": "Configure connection parameters"},
+                {"id": "query_selection", "title": "Query & Table Selection", "description": "Choose collection and filters"},
+                {"id": "runtime_limits", "title": "Limits & Performance", "description": "Row limits and data shaping"}
+            ],
             "properties": {
+                # ── 1. Connection Mode & Server Credentials ──
                 "connection_mode": {
                     "type": "string",
                     "title": "Connection Mode",
                     "input_type": "dropdown",
-                    "enum": ["connection_string", "host_port", "credential"],
-                    "default": "connection_string",
-                    "description": "Choose connection method: MongoDB URI (standard or Atlas SRV), host/port, or stored credential."
+                    "enum": ["host_port", "connection_string", "credential"],
+                    "default": "host_port",
+                    "section": "connection",
+                    "description": "Choose connection method: standard host/port parameters, connection URI (standard or Atlas SRV), or stored credential."
                 },
-                "connection_string": {
+                "credential_id": {
                     "type": "string",
-                    "title": "Connection String (URI)",
-                    "input_type": "text",
-                    "default": "",
-                    "placeholder": "e.g. mongodb://user:pass@host:27017/dbname or mongodb+srv://cluster.mongodb.net/dbname",
-                    "description": "Full MongoDB connection URI (standard or Atlas SRV)."
+                    "title": "Connected MongoDB Credential",
+                    "input_type": "credential_dropdown",
+                    "provider": "mongodb",
+                    "section": "connection",
+                    "description": "Select a stored MongoDB credential from platform settings.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "credential"
+                    }
                 },
                 "host": {
                     "type": "string",
@@ -81,7 +83,12 @@ class MongoDBConnectorRecipe(BaseRecipe):
                     "input_type": "text",
                     "default": "",
                     "placeholder": "e.g. 88.222.215.30 or localhost or cluster0.mongodb.net",
-                    "description": "MongoDB server hostname or IP address (used in 'host_port' mode)."
+                    "section": "connection",
+                    "description": "MongoDB server hostname or IP address (used in 'host_port' mode).",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "host_port"
+                    }
                 },
                 "port": {
                     "type": "integer",
@@ -89,14 +96,82 @@ class MongoDBConnectorRecipe(BaseRecipe):
                     "input_type": "number",
                     "default": 27017,
                     "placeholder": "27017",
-                    "description": "MongoDB server port (default 27017)."
+                    "section": "connection",
+                    "description": "MongoDB server port (default 27017).",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "host_port"
+                    }
                 },
+                "username": {
+                    "type": "string",
+                    "title": "Username",
+                    "input_type": "text",
+                    "default": "",
+                    "placeholder": "e.g. smartbot",
+                    "section": "connection",
+                    "description": "MongoDB user role for authentication.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "host_port"
+                    }
+                },
+                "password": {
+                    "type": "string",
+                    "title": "Password",
+                    "input_type": "password",
+                    "default": "",
+                    "placeholder": "Enter MongoDB password",
+                    "section": "connection",
+                    "description": "MongoDB user password.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "host_port"
+                    }
+                },
+                "auth_source": {
+                    "type": "string",
+                    "title": "Auth Source Database",
+                    "input_type": "text",
+                    "default": "admin",
+                    "placeholder": "admin",
+                    "section": "connection",
+                    "description": "Authentication source database (default 'admin').",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "host_port"
+                    }
+                },
+                "connection_string": {
+                    "type": "string",
+                    "title": "Connection String (URI)",
+                    "input_type": "text",
+                    "default": "",
+                    "placeholder": "e.g. mongodb://user:pass@host:27017/dbname or mongodb+srv://cluster.mongodb.net/dbname",
+                    "section": "connection",
+                    "description": "Full MongoDB connection URI (standard or Atlas SRV).",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "connection_string"
+                    }
+                },
+                "timeout": {
+                    "type": "integer",
+                    "title": "Timeout (seconds)",
+                    "input_type": "number",
+                    "default": 15,
+                    "section": "connection",
+                    "description": "Connection and query timeout in seconds."
+                },
+
+                # ── 2. Target Database & Collection Selection ──
                 "database": {
                     "type": "string",
                     "title": "Database Name",
                     "input_type": "text",
                     "default": "",
                     "placeholder": "e.g. ai_whatsapp_db or analytics",
+                    "section": "query_selection",
                     "description": "Target MongoDB database name."
                 },
                 "collection": {
@@ -105,44 +180,15 @@ class MongoDBConnectorRecipe(BaseRecipe):
                     "input_type": "text",
                     "default": "",
                     "placeholder": "e.g. conversations or events",
+                    "section": "query_selection",
                     "description": "Target MongoDB collection name (e.g. 'conversations', 'events', 'users')."
-                },
-                "username": {
-                    "type": "string",
-                    "title": "Username",
-                    "input_type": "text",
-                    "default": "",
-                    "placeholder": "e.g. smartbot",
-                    "description": "MongoDB user role for authentication."
-                },
-                "password": {
-                    "type": "string",
-                    "title": "Password",
-                    "input_type": "password",
-                    "default": "",
-                    "placeholder": "Enter MongoDB password",
-                    "description": "MongoDB user password."
-                },
-                "auth_source": {
-                    "type": "string",
-                    "title": "Auth Source Database",
-                    "input_type": "text",
-                    "default": "admin",
-                    "placeholder": "admin",
-                    "description": "Authentication source database (default 'admin')."
-                },
-                "credential_id": {
-                    "type": "string",
-                    "title": "Connected MongoDB Credential",
-                    "input_type": "credential_dropdown",
-                    "provider": "mongodb",
-                    "description": "Select a stored MongoDB credential from platform settings."
                 },
                 "filter_query": {
                     "type": "string",
                     "title": "Filter Query (MQL JSON)",
                     "input_type": "textarea",
                     "default": "{}",
+                    "section": "query_selection",
                     "description": "JSON filter query (e.g. '{\"status\": \"active\", \"score\": {\"$gte\": 50}}'). Leave empty or '{}' for all documents."
                 },
                 "projection": {
@@ -150,6 +196,7 @@ class MongoDBConnectorRecipe(BaseRecipe):
                     "title": "Projection (JSON)",
                     "input_type": "textarea",
                     "default": "{}",
+                    "section": "query_selection",
                     "description": "JSON field projection (e.g. '{\"_id\": 1, \"event_type\": 1, \"timestamp\": 1}')."
                 },
                 "sort": {
@@ -157,13 +204,17 @@ class MongoDBConnectorRecipe(BaseRecipe):
                     "title": "Sort (JSON)",
                     "input_type": "text",
                     "default": "{}",
+                    "section": "query_selection",
                     "description": "Sort expression (e.g. '{\"timestamp\": -1}')."
                 },
+
+                # ── 3. Limits & Data Shaping ──
                 "limit": {
                     "type": "integer",
                     "title": "Document Limit",
                     "input_type": "number",
                     "default": 1000,
+                    "section": "runtime_limits",
                     "description": "Maximum number of documents to retrieve (1 to 100000)."
                 },
                 "flatten_nested": {
@@ -171,6 +222,7 @@ class MongoDBConnectorRecipe(BaseRecipe):
                     "title": "Flatten Nested Documents",
                     "input_type": "checkbox",
                     "default": True,
+                    "section": "runtime_limits",
                     "description": "Automatically flatten nested dictionaries and objects (e.g. 'user.address.city') into tabular columns."
                 },
                 "convert_objectid": {
@@ -178,20 +230,15 @@ class MongoDBConnectorRecipe(BaseRecipe):
                     "title": "Convert ObjectId to String",
                     "input_type": "checkbox",
                     "default": True,
+                    "section": "runtime_limits",
                     "description": "Convert BSON ObjectId values to hexadecimal strings to ensure clean tabular display and downstream recipe compatibility."
-                },
-                "timeout": {
-                    "type": "integer",
-                    "title": "Timeout (seconds)",
-                    "input_type": "number",
-                    "default": 15,
-                    "description": "Connection and query timeout in seconds."
                 },
                 "simulation_mode": {
                     "type": "boolean",
                     "title": "Simulation / Demo Mode",
                     "input_type": "checkbox",
                     "default": False,
+                    "section": "runtime_limits",
                     "description": "Generate realistic benchmark document dataset without connecting to an external MongoDB cluster."
                 }
             },

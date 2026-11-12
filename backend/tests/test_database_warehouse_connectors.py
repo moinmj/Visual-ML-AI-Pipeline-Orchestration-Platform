@@ -1209,3 +1209,68 @@ def test_executor_skips_unconnected_draft_nodes():
     assert res_mongo.status == "SUCCESS"
     res_draft = next(r for r in exec_result.node_results if r.node_id == "snowflake_draft")
     assert res_draft.status == "SKIPPED"
+
+
+def test_connector_schema_property_ordering_consistency():
+    """Verify that all database and warehouse connectors follow the standardized 3-section ordering and visible_when spec."""
+    from backend.app.recipes.ingestion.mysql_connector import MySQLConnectorRecipe
+    from backend.app.recipes.ingestion.postgresql_connector import PostgreSQLConnectorRecipe
+    from backend.app.recipes.ingestion.mongodb_connector import MongoDBConnectorRecipe
+    from backend.app.recipes.ingestion.snowflake_connector import SnowflakeConnectorRecipe
+    from backend.app.recipes.ingestion.redshift_connector import RedshiftConnectorRecipe
+    from backend.app.recipes.ingestion.bigquery_connector import BigQueryConnectorRecipe
+
+    connectors = [
+        MySQLConnectorRecipe(),
+        PostgreSQLConnectorRecipe(),
+        MongoDBConnectorRecipe(),
+        SnowflakeConnectorRecipe(),
+        RedshiftConnectorRecipe(),
+        BigQueryConnectorRecipe()
+    ]
+
+    expected_section_ids = {"connection", "query_selection", "runtime_limits"}
+
+    for conn in connectors:
+        # Connectors are ingestion entry points: no upstream required
+        assert len(conn.inputs) == 0, f"{conn.recipe_id} inputs should be empty list, got {conn.inputs}"
+        assert len(conn.outputs) >= 1, f"{conn.recipe_id} should provide an output port"
+
+        schema = conn.get_schema()
+        # 1. Verify standard accordion sections metadata
+        assert "sections" in schema, f"{conn.recipe_id} schema missing 'sections'"
+        sections = schema["sections"]
+        assert len(sections) == 3, f"{conn.recipe_id} sections should contain 3 sections"
+        section_ids = {s["id"] for s in sections}
+        assert section_ids == expected_section_ids, f"{conn.recipe_id} section IDs mismatch: {section_ids}"
+
+        props = schema["properties"]
+        keys = list(props.keys())
+
+        # 2. Connection mode must be the first property
+        assert keys[0] == "connection_mode", f"{conn.recipe_id} first property should be connection_mode, got {keys[0]}"
+
+        # 3. credential_id must be in connection section and have visible_when
+        assert "credential_id" in keys
+        assert keys.index("credential_id") <= 2, f"{conn.recipe_id} credential_id should be near top, got index {keys.index('credential_id')}"
+        cred_field = props["credential_id"]
+        assert cred_field.get("section") == "connection"
+        assert cred_field.get("visible_when") == {"field": "connection_mode", "equals": "credential"}
+
+        # 4. Target data fields (database or dataset_id) must appear after credentials
+        target_key = "dataset_id" if "dataset_id" in keys else "database"
+        assert keys.index(target_key) > keys.index("credential_id")
+
+        # 5. Limit must appear in runtime_limits
+        assert "limit" in keys
+        assert keys.index("limit") > keys.index(target_key)
+        assert props["limit"].get("section") == "runtime_limits"
+
+        # 6. Every property must specify a valid section
+        for prop_name, prop_def in props.items():
+            assert "section" in prop_def, f"{conn.recipe_id}.{prop_name} is missing 'section'"
+            assert prop_def["section"] in expected_section_ids, f"{conn.recipe_id}.{prop_name} has invalid section: {prop_def['section']}"
+
+        # 7. Relational / warehouse connectors with read_mode have visible_when on query
+        if "read_mode" in props and "query" in props:
+            assert props["query"].get("visible_when") == {"field": "read_mode", "equals": "query"}
