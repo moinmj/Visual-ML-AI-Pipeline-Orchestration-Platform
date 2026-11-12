@@ -71,42 +71,48 @@ class MongoDBConnectorRecipe(BaseRecipe):
                     "type": "string",
                     "title": "Connection String (URI)",
                     "input_type": "text",
-                    "default": "mongodb://localhost:27017",
-                    "description": "MongoDB URI e.g. mongodb://localhost:27017 or mongodb+srv://user:pass@cluster0.mongodb.net/dbname"
+                    "default": "",
+                    "placeholder": "e.g. mongodb://user:pass@host:27017/dbname or mongodb+srv://cluster.mongodb.net/dbname",
+                    "description": "Full MongoDB connection URI (standard or Atlas SRV)."
                 },
                 "host": {
                     "type": "string",
                     "title": "Host",
                     "input_type": "text",
-                    "default": "localhost",
-                    "description": "MongoDB server hostname."
+                    "default": "",
+                    "placeholder": "e.g. 88.222.215.30 or localhost or cluster0.mongodb.net",
+                    "description": "MongoDB server hostname or IP address (used in 'host_port' mode)."
                 },
                 "port": {
                     "type": "integer",
                     "title": "Port",
                     "input_type": "number",
                     "default": 27017,
+                    "placeholder": "27017",
                     "description": "MongoDB server port (default 27017)."
                 },
                 "database": {
                     "type": "string",
                     "title": "Database Name",
                     "input_type": "text",
-                    "default": "analytics",
+                    "default": "",
+                    "placeholder": "e.g. ai_whatsapp_db or analytics",
                     "description": "Target MongoDB database name."
                 },
                 "collection": {
                     "type": "string",
                     "title": "Collection Name",
                     "input_type": "text",
-                    "default": "events",
-                    "description": "Target MongoDB collection name (e.g. 'events', 'users', 'logs')."
+                    "default": "",
+                    "placeholder": "e.g. conversations or events",
+                    "description": "Target MongoDB collection name (e.g. 'conversations', 'events', 'users')."
                 },
                 "username": {
                     "type": "string",
                     "title": "Username",
                     "input_type": "text",
                     "default": "",
+                    "placeholder": "e.g. smartbot",
                     "description": "MongoDB user role for authentication."
                 },
                 "password": {
@@ -114,6 +120,7 @@ class MongoDBConnectorRecipe(BaseRecipe):
                     "title": "Password",
                     "input_type": "password",
                     "default": "",
+                    "placeholder": "Enter MongoDB password",
                     "description": "MongoDB user password."
                 },
                 "auth_source": {
@@ -121,6 +128,7 @@ class MongoDBConnectorRecipe(BaseRecipe):
                     "title": "Auth Source Database",
                     "input_type": "text",
                     "default": "admin",
+                    "placeholder": "admin",
                     "description": "Authentication source database (default 'admin')."
                 },
                 "credential_id": {
@@ -278,11 +286,11 @@ class MongoDBConnectorRecipe(BaseRecipe):
         mode = str(config.get("connection_mode", "connection_string")).strip().lower()
         credential_id = str(config.get("credential_id", "")).strip()
 
-        conn_str = str(config.get("connection_string", "mongodb://localhost:27017")).strip()
-        host = str(config.get("host", "localhost")).strip()
-        port = int(config.get("port", 27017))
-        database = str(config.get("database", "analytics")).strip()
-        collection = str(config.get("collection", "events")).strip()
+        conn_str = str(config.get("connection_string", "")).strip()
+        host = str(config.get("host", "")).strip()
+        port = int(config.get("port") or 27017)
+        database = str(config.get("database", "")).strip()
+        collection = str(config.get("collection", "")).strip()
         username = str(config.get("username", "")).strip()
         password = str(config.get("password", "")).strip()
         auth_source = str(config.get("auth_source", "admin")).strip()
@@ -302,14 +310,16 @@ class MongoDBConnectorRecipe(BaseRecipe):
                 password = c_data.get("password") or password
                 auth_source = c_data.get("auth_source") or auth_source
 
-        # Environment variable overrides
-        if not conn_str:
-            conn_str = os.getenv("MONGODB_URI", os.getenv("MONGO_URL", ""))
-
-        if not conn_str and host:
-            auth_part = f"{username}:{password}@" if username and password else ""
-            auth_param = f"?authSource={auth_source}" if username and auth_source else ""
-            conn_str = f"mongodb://{auth_part}{host}:{port}/{database}{auth_param}"
+        # Host/Port mode: construct URI directly from components
+        if mode == "host_port" or (mode != "connection_string" and host):
+            from urllib.parse import quote_plus
+            auth_part = f"{quote_plus(username)}:{quote_plus(password)}@" if username and password else ""
+            auth_param = f"?authSource={quote_plus(auth_source)}" if auth_source else ""
+            db_part = f"/{database}" if database else ""
+            conn_str = f"mongodb://{auth_part}{host}:{port}{db_part}{auth_param}"
+        elif mode == "connection_string":
+            if not conn_str:
+                conn_str = os.getenv("MONGODB_URI", os.getenv("MONGO_URL", ""))
 
         return {
             "mode": mode,
@@ -418,9 +428,14 @@ class MongoDBConnectorRecipe(BaseRecipe):
         records: List[Dict[str, Any]] = []
         delivery_status = "SIMULATED"
         status_msg = ""
+        last_error = None
 
         # Live Execution Attempt
-        if not simulation_mode and params["connection_string"]:
+        if not simulation_mode:
+            if not params["connection_string"]:
+                raise ValidationException(
+                    f"MongoDB connection failed: Connection URI or host/port configuration must be provided."
+                )
             try:
                 import pymongo
                 timeout_ms = int(config.get("timeout", 15)) * 1000
@@ -431,6 +446,9 @@ class MongoDBConnectorRecipe(BaseRecipe):
                 )
                 db = client[database_name]
                 coll = db[collection_name]
+
+                # Ping server to verify connectivity before querying
+                db.command("ping")
 
                 # Build Cursor
                 cursor = coll.find(filter_dict or {}, projection=projection_dict or None)

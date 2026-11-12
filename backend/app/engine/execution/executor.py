@@ -96,6 +96,58 @@ def diagnose_execution_error(
             "suggestion": "Verify that two datasets are connected and that the join keys (left_on / right_on) exist in both datasets."
         }
 
+    # 8. MongoDB Connection & Driver Errors
+    if any(k in err_str for k in ["ServerSelectionTimeoutError", "No replica set members found", "pymongo", "dnspython", "MongoDB connection", "OperationFailure"]):
+        if "dnspython" in err_str:
+            return {
+                "title": "MongoDB Atlas SRV Resolver Missing",
+                "message": "Connecting to MongoDB Atlas (mongodb+srv://) requires the 'dnspython' package.",
+                "suggestion": "Install 'dnspython>=2.6.0' in requirements or configure standard host/port parameters."
+            }
+        if any(a in err_str for a in ["Authentication failed", "auth failed", "AuthenticationFailed"]):
+            return {
+                "title": "MongoDB Authentication Failed",
+                "message": f"Authentication failed for user '{config.get('username') or 'specified in URI'}'. Invalid username or password.",
+                "suggestion": "Verify MongoDB username, password, and authSource database (e.g. 'admin'). For Atlas, verify Database User permissions."
+            }
+        if any(t in err_str for t in ["ServerSelectionTimeoutError", "timed out", "No replica set members"]):
+            return {
+                "title": "MongoDB Connection Timed Out",
+                "message": "Could not connect to MongoDB server within timeout period. The server may be unreachable, offline, or behind a firewall.",
+                "suggestion": "1) If using MongoDB Atlas, check Network Access IP Access List to ensure the server IP is whitelisted (or 0.0.0.0/0). 2) Verify host IP/port and firewall settings."
+            }
+        return {
+            "title": "MongoDB Connection Error",
+            "message": err_str,
+            "suggestion": "Verify MongoDB connection URI, database and collection names, and network access."
+        }
+
+    # 9. Relational & Warehouse Database Errors (MySQL, PostgreSQL, Snowflake, Redshift, BigQuery)
+    if any(k in err_str for k in ["Access denied for user", "password authentication failed", "28000", "28P01", "Incorrect username or password"]):
+        return {
+            "title": "Database Authentication Failed",
+            "message": f"Access denied: Invalid database credentials for '{rec_name}'.",
+            "suggestion": "Verify your database username and password in the connector settings."
+        }
+    if any(k in err_str for k in ["Unknown database", "database does not exist", "3D000", "1049"]):
+        return {
+            "title": "Database Not Found",
+            "message": f"The database specified does not exist on the database server.",
+            "suggestion": "Check the database name in the connector configuration."
+        }
+    if any(k in err_str for k in ["doesn't exist", "relation", "does not exist", "42P01", "1146", "Object does not exist"]):
+        return {
+            "title": "Database Table Not Found",
+            "message": err_str,
+            "suggestion": "Verify that the table exists in the database and check for exact case-sensitivity."
+        }
+    if any(k in err_str for k in ["Can't connect to MySQL server", "could not connect to server", "Connection refused", "OperationalError"]):
+        return {
+            "title": "Database Server Unreachable",
+            "message": f"Could not establish connection to the database server: {err_str}",
+            "suggestion": "Verify the server host IP and port (e.g. 3306 for MySQL, 5432 for PostgreSQL) and ensure server firewall allows inbound connections."
+        }
+
     # Default fallback
     return {
         "title": f"Execution Error in {rec_name}",
@@ -380,6 +432,9 @@ class DAGExecutor:
         })
 
         # 3. Step-by-Step Node Execution
+        connected_node_ids = {e.source for e in workflow.edges} | {e.target for e in workflow.edges}
+        has_pipeline = len(connected_node_ids) > 0
+
         for node in ordered_nodes:
             node_start = time.time()
             parents = parent_map[node.id]
@@ -399,6 +454,25 @@ class DAGExecutor:
                     error_message=err_msg
                 ))
                 break
+
+            # 3a. Gracefully Skip Unconnected Draft Nodes with Missing Configuration
+            is_unconnected = (has_pipeline and node.id not in connected_node_ids) or (not has_pipeline and len(workflow.nodes) > 1 and node.id not in connected_node_ids)
+            if is_unconnected:
+                cfg_errors = recipe.validate_config(node.config or {})
+                if cfg_errors:
+                    logs.append(f"⏭️ Node '{node.id}' [{recipe.name}] ➔ Skipped (unconnected draft node with pending configuration)")
+                    _add_result(NodeExecutionResult(
+                        node_id=node.id,
+                        recipe_id=node.recipe_id,
+                        status="SKIPPED",
+                        duration_ms=0.0,
+                        output_summary={
+                            "status": "SKIPPED",
+                            "title": "Draft Node Skipped",
+                            "message": f"Skipped unconnected draft node '{node.id}' [{recipe.name}]. Connect to pipeline or configure to execute."
+                        }
+                    ))
+                    continue
 
             # Resume: reuse this node's saved result if it succeeded before and nothing changed
             prev = prev_nodes.get(node.id)
