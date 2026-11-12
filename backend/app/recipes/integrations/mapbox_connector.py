@@ -43,14 +43,33 @@ class MapboxConnectorRecipe(BaseRecipe):
         )
     ]
 
-    # Deterministic fallback dictionary for top landmarks
+    # Deterministic fallback dictionary for top global landmarks and cities
     LANDMARK_CACHE = {
         "empire state":   {"lng": -73.9857, "lat": 40.7484, "place_name": "Empire State Building, New York, NY 10001, United States"},
         "eiffel tower":   {"lng": 2.2945,   "lat": 48.8584, "place_name": "Eiffel Tower, 5 Av. Anatole France, 75007 Paris, France"},
         "big ben":        {"lng": -0.1246,  "lat": 51.5007, "place_name": "Big Ben, London SW1A 0AA, United Kingdom"},
         "golden gate":    {"lng": -122.4786,"lat": 37.8199, "place_name": "Golden Gate Bridge, San Francisco, CA, United States"},
         "tokyo tower":    {"lng": 139.7454, "lat": 35.6586, "place_name": "Tokyo Tower, 4 Chome-2-8 Shibakoen, Minato City, Tokyo, Japan"},
-        "sydney opera":   {"lng": 151.2153, "lat": -33.8568,"place_name": "Sydney Opera House, Sydney NSW 2000, Australia"}
+        "sydney opera":   {"lng": 151.2153, "lat": -33.8568,"place_name": "Sydney Opera House, Sydney NSW 2000, Australia"},
+        "taj mahal":      {"lng": 78.0421,  "lat": 27.1751, "place_name": "Taj Mahal, Dharmapuri, Forest Colony, Agra, Uttar Pradesh 282001, India"},
+        "burj khalifa":   {"lng": 55.2744,  "lat": 25.1972, "place_name": "Burj Khalifa, 1 Sheikh Mohammed bin Rashid Blvd, Downtown Dubai, UAE"},
+        "statue of liberty": {"lng": -74.0445, "lat": 40.6892, "place_name": "Statue of Liberty, New York, NY 10004, United States"},
+        "colosseum":      {"lng": 12.4922,  "lat": 41.8902, "place_name": "Colosseum, Piazza del Colosseo, 1, 00184 Roma RM, Italy"},
+        "times square":   {"lng": -73.9855, "lat": 40.7580, "place_name": "Times Square, Manhattan, NY 10036, United States"},
+        "central park":   {"lng": -73.9683, "lat": 40.7851, "place_name": "Central Park, New York, NY, United States"},
+        "pyramids of giza": {"lng": 31.1342, "lat": 29.9792, "place_name": "Giza Necropolis, Al Haram, Giza Governorate, Egypt"},
+        "machu picchu":   {"lng": -72.5450, "lat": -13.1631,"place_name": "Machu Picchu, 08680, Peru"},
+        "london":         {"lng": -0.1278,  "lat": 51.5074, "place_name": "London, Greater London, England, United Kingdom"},
+        "paris":          {"lng": 2.3522,   "lat": 48.8566, "place_name": "Paris, Île-de-France, France"},
+        "new york":       {"lng": -74.0060, "lat": 40.7128, "place_name": "New York, NY, United States"},
+        "san francisco":  {"lng": -122.4194,"lat": 37.7749, "place_name": "San Francisco, CA, United States"},
+        "tokyo":          {"lng": 139.6503, "lat": 35.6762, "place_name": "Tokyo, Japan"},
+        "dubai":          {"lng": 55.2708,  "lat": 25.2048, "place_name": "Dubai, United Arab Emirates"},
+        "mumbai":         {"lng": 72.8777,  "lat": 19.0760, "place_name": "Mumbai, Maharashtra, India"},
+        "delhi":          {"lng": 77.2090,  "lat": 28.6139, "place_name": "New Delhi, Delhi, India"},
+        "berlin":         {"lng": 13.4050,  "lat": 52.5200, "place_name": "Berlin, Germany"},
+        "singapore":      {"lng": 103.8198, "lat": 1.3521,  "place_name": "Singapore"},
+        "toronto":        {"lng": -79.3832, "lat": 43.6532, "place_name": "Toronto, Ontario, Canada"}
     }
 
     def get_schema(self) -> Dict[str, Any]:
