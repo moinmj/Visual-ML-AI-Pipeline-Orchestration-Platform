@@ -169,7 +169,8 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                     "type": "string",
                     "title": "Table Name",
                     "input_type": "text",
-                    "default": "sales",
+                    "default": "",
+                    "placeholder": "e.g. sales",
                     "description": "Single table to read (e.g. 'sales'). Ignored if 'Table(s) to Read' or 'Select All Tables' is specified.",
                 },
                 "select_all_columns": {
@@ -203,10 +204,11 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                 # Query Mode Field
                 "query": {
                     "type": "string",
-                    "title": "SQL Query",
+                    "title": "Custom SQL Query",
                     "input_type": "textarea",
-                    "default": "SELECT * FROM public.sales LIMIT 100",
-                    "description": "Read-only SQL query to execute when Read Mode is 'query' (SELECT, WITH, SHOW, etc.).",
+                    "default": "",
+                    "placeholder": "e.g. SELECT * FROM public.sales LIMIT 100",
+                    "description": "Custom SQL query to execute. Only used when Read Mode is set to 'query'. Ignored when Read Mode is 'table'.",
                 },
 
                 # ── 3. Limits & Pagination ──
@@ -663,7 +665,9 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                         else:
                             status_msg = f"Retrieved {len(records)} live rows from PostgreSQL ({schema_name}.{target_tables[0]})."
                     else:
-                        query = str(config.get("query", "SELECT * FROM public.sales")).strip()
+                        query = str(config.get("query", "")).strip()
+                        if not query:
+                            raise ValidationException("SQL Query is required when Read Mode is set to 'query'.")
                         if "limit" not in query.lower():
                             query = f"{query} LIMIT {limit}"
                         res = conn.execute(sqlalchemy.text(query))
@@ -733,7 +737,9 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                             else:
                                 status_msg = f"Retrieved {len(records)} live rows from PostgreSQL via psycopg2 ({schema_name}.{target_tables[0]})."
                         else:
-                            query = str(config.get("query", "SELECT * FROM public.sales")).strip()
+                            query = str(config.get("query", "")).strip()
+                        if not query:
+                            raise ValidationException("SQL Query is required when Read Mode is set to 'query'.")
                             if "limit" not in query.lower():
                                 query = f"{query} LIMIT {limit}"
                             cur.execute(query)

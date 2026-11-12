@@ -140,7 +140,8 @@ class MySQLConnectorRecipe(BaseRecipe):
                     "type": "string",
                     "title": "Database Name",
                     "input_type": "text",
-                    "default": "shop_db",
+                    "default": "",
+                    "placeholder": "e.g. ProjectX",
                     "description": "Name of the target MySQL database / schema. Discovered dynamically from the server or entered manually."
                 },
                 "select_all_tables": {
@@ -162,7 +163,8 @@ class MySQLConnectorRecipe(BaseRecipe):
                     "type": "string",
                     "title": "Table Name",
                     "input_type": "text",
-                    "default": "orders",
+                    "default": "",
+                    "placeholder": "e.g. Businesses",
                     "description": "Single table to read (e.g. 'Businesses', 'orders'). Ignored if 'Table(s) to Read' or 'Select All Tables' is specified."
                 },
                 "select_all_columns": {
@@ -196,10 +198,11 @@ class MySQLConnectorRecipe(BaseRecipe):
                 },
                 "query": {
                     "type": "string",
-                    "title": "SQL Query",
+                    "title": "Custom SQL Query",
                     "input_type": "textarea",
-                    "default": "SELECT * FROM orders WHERE status = 'COMPLETED' LIMIT 100",
-                    "description": "Read-only SQL query to execute (SELECT, WITH, SHOW, etc.)."
+                    "default": "",
+                    "placeholder": "e.g. SELECT * FROM Businesses WHERE Id > 100",
+                    "description": "Custom SQL query to execute. Only used when Read Mode is set to 'query'. Ignored when Read Mode is 'table'."
                 },
                 "limit": {
                     "type": "integer",
@@ -517,7 +520,9 @@ class MySQLConnectorRecipe(BaseRecipe):
                             target_desc = f"{database}.{target_tables[0]}"
                             status_msg = f"Retrieved {len(records)} live rows from MySQL ({target_desc})."
                     else:
-                        query = str(config.get("query", f"SELECT * FROM `{target_tables[0] if target_tables else 'orders'}`")).strip()
+                        query = str(config.get("query", "")).strip()
+                        if not query:
+                            raise ValidationException("SQL Query is required when Read Mode is set to 'query'.")
                         target_desc = "Custom Query"
                         if "limit" not in query.lower():
                             query = f"{query} LIMIT {limit}"

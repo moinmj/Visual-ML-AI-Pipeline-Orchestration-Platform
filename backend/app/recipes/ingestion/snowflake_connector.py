@@ -140,7 +140,8 @@ class SnowflakeConnectorRecipe(BaseRecipe):
                     "type": "string",
                     "title": "Table / View Name",
                     "input_type": "text",
-                    "default": "FCT_ORDERS",
+                    "default": "",
+                    "placeholder": "e.g. FCT_ORDERS",
                     "description": "Target Snowflake table or view name (used in 'table' mode)."
                 },
                 "columns": {
@@ -152,10 +153,11 @@ class SnowflakeConnectorRecipe(BaseRecipe):
                 },
                 "query": {
                     "type": "string",
-                    "title": "Custom SQL Query (Read-Only)",
+                    "title": "Custom SQL Query",
                     "input_type": "textarea",
-                    "default": "SELECT * FROM PUBLIC.FCT_ORDERS LIMIT 100",
-                    "description": "Custom SQL query to execute in Snowflake. Modifying statements (DROP, DELETE, UPDATE, TRUNCATE) are rejected."
+                    "default": "",
+                    "placeholder": "e.g. SELECT * FROM PUBLIC.FCT_ORDERS LIMIT 100",
+                    "description": "Custom SQL query to execute in Snowflake. Only used when Read Mode is 'query'. Modifying statements (DROP, DELETE, UPDATE, TRUNCATE) are rejected."
                 },
                 "limit": {
                     "type": "integer",

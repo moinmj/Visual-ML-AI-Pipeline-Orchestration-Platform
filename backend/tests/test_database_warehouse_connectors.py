@@ -1018,3 +1018,59 @@ def test_snowflake_and_mongodb_connector_error_when_unreachable():
     mongo_recipe = MongoDBConnectorRecipe()
     with pytest.raises(ValidationException):
         mongo_recipe.execute(inputs={}, config={"simulation_mode": False, "host": "192.0.2.1", "port": 27017, "timeout": 1})
+
+
+def test_connectors_have_clean_defaults_and_no_dummy_queries():
+    """Verify that all connectors have clean empty defaults for queries and tables, with helpful placeholders."""
+    from backend.app.recipes.ingestion.mysql_connector import MySQLConnectorRecipe
+    from backend.app.recipes.ingestion.postgresql_connector import PostgreSQLConnectorRecipe
+    from backend.app.recipes.ingestion.snowflake_connector import SnowflakeConnectorRecipe
+    from backend.app.recipes.ingestion.redshift_connector import RedshiftConnectorRecipe
+    from backend.app.recipes.ingestion.bigquery_connector import BigQueryConnectorRecipe
+
+    for recipe_cls in [MySQLConnectorRecipe, PostgreSQLConnectorRecipe, SnowflakeConnectorRecipe, RedshiftConnectorRecipe, BigQueryConnectorRecipe]:
+        r = recipe_cls()
+        props = r.get_schema()["properties"]
+        assert "query" in props, f"Missing 'query' in {r.recipe_id}"
+        assert props["query"].get("default", "") == "", f"Query default must be empty in {r.recipe_id}"
+        assert "placeholder" in props["query"], f"Query must have placeholder in {r.recipe_id}"
+
+        tbl_key = "table_id" if "table_id" in props else "table_name"
+        if tbl_key in props:
+            assert props[tbl_key].get("default", "") == "", f"{tbl_key} default must be empty in {r.recipe_id}"
+            assert "placeholder" in props[tbl_key], f"{tbl_key} must have placeholder in {r.recipe_id}"
+
+
+def test_node_test_step_response_schema_and_failure_summary():
+    """Verify that NodeTestStepResponse holds rich diagnostic output_summary on failure."""
+    from backend.app.workflows.schemas import NodeTestStepResponse
+
+    err_summary = {
+        "title": "MySQL Connection Failed",
+        "status": "FAILED",
+        "message": "Can't connect to MySQL server on '88.222.215.30'",
+        "error": "Can't connect to MySQL server on '88.222.215.30'",
+        "suggestion": "Please verify credentials, firewall, and host/port.",
+        "duration_ms": 120.5
+    }
+
+    resp = NodeTestStepResponse(
+        success=False,
+        session_id="test_sess",
+        node_id="node_mysql",
+        recipe_id="mysql_connector",
+        recipe_name="MySQL Connector",
+        status="FAILED",
+        duration_ms=120.5,
+        error_message="Can't connect to MySQL server on '88.222.215.30'",
+        error_title="MySQL Connection Failed",
+        error_suggestion="Please verify credentials, firewall, and host/port.",
+        output_summary=err_summary
+    )
+
+    assert resp.status == "FAILED"
+    assert resp.success is False
+    assert resp.output_summary["status"] == "FAILED"
+    assert resp.output_summary["error"] == "Can't connect to MySQL server on '88.222.215.30'"
+    assert resp.output_summary["title"] == "MySQL Connection Failed"
+    assert "firewall" in resp.output_summary["suggestion"]

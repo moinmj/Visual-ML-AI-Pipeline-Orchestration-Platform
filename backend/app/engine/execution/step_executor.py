@@ -581,6 +581,16 @@ class NodeStepExecutor:
                     config=merged_config,
                     context=node_inputs
                 )
+                err_title = diag.get("title") or f"Execution Failed: {getattr(recipe, 'name', r_id)}"
+                err_suggestion = diag.get("suggestion") or "Please verify database connection parameters, credentials, and network accessibility."
+                err_summary = {
+                    "title": err_title,
+                    "status": "FAILED",
+                    "message": str(ex),
+                    "error": str(ex),
+                    "suggestion": err_suggestion,
+                    "duration_ms": duration_ms
+                }
                 return None, NodeTestStepResponse(
                     success=False,
                     session_id=session_id,
@@ -590,8 +600,9 @@ class NodeStepExecutor:
                     status="FAILED",
                     duration_ms=duration_ms,
                     error_message=str(ex),
-                    error_title=diag.get("title"),
-                    error_suggestion=diag.get("suggestion")
+                    error_title=err_title,
+                    error_suggestion=err_suggestion,
+                    output_summary=err_summary
                 )
 
         # 5. Run Ancestors that Need Running
@@ -616,5 +627,12 @@ class NodeStepExecutor:
             node_id=target_node_id,
             recipe_id=str(node_map[target_node_id].get("recipe_id", "")),
             status="FAILED",
-            error_message="Unexpected error during node step execution."
+            error_message="Unexpected error during node step execution.",
+            output_summary={
+                "title": "Execution Error",
+                "status": "FAILED",
+                "message": "Unexpected error during node step execution.",
+                "error": "Unexpected error during node step execution.",
+                "suggestion": "Check node configuration and recipe parameters."
+            }
         )

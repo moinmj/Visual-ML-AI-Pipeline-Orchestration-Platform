@@ -133,7 +133,8 @@ class RedshiftConnectorRecipe(BaseRecipe):
                     "type": "string",
                     "title": "Table / View Name",
                     "input_type": "text",
-                    "default": "sales",
+                    "default": "",
+                    "placeholder": "e.g. sales",
                     "description": "Target Redshift table or view name (used in 'table' mode)."
                 },
                 "columns": {
@@ -145,10 +146,11 @@ class RedshiftConnectorRecipe(BaseRecipe):
                 },
                 "query": {
                     "type": "string",
-                    "title": "Custom SQL Query (Read-Only)",
+                    "title": "Custom SQL Query",
                     "input_type": "textarea",
-                    "default": "SELECT * FROM public.sales LIMIT 100",
-                    "description": "Custom SQL query to execute in Redshift. Modifying statements (DROP, DELETE, UPDATE, TRUNCATE) are rejected."
+                    "default": "",
+                    "placeholder": "e.g. SELECT * FROM public.sales LIMIT 100",
+                    "description": "Custom SQL query to execute in Redshift. Only used when Read Mode is 'query'. Modifying statements (DROP, DELETE, UPDATE, TRUNCATE) are rejected."
                 },
                 "limit": {
                     "type": "integer",
@@ -302,6 +304,8 @@ class RedshiftConnectorRecipe(BaseRecipe):
                     sql = f'SELECT {cols} FROM "{schema_name}"."{table_name}" LIMIT {limit}'
                 else:
                     sql = str(config.get("query", "")).strip()
+                    if not sql:
+                        raise ValidationException("SQL Query is required when Read Mode is set to 'query'.")
                     if limit and "limit" not in sql.lower():
                         sql = f"{sql} LIMIT {limit}"
 
