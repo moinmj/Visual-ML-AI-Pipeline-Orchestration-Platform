@@ -223,6 +223,20 @@ class WorkflowGraph(BaseModel):
                     )
 
         # 3b. Node Configuration & Required Schema Validation in sequential pipeline order (upstream -> downstream)
+        connected_node_ids = {e.source for e in self.edges} | {e.target for e in self.edges}
+        has_pipeline = len(connected_node_ids) > 0
+
+        # Precompute which nodes on the canvas are valid vs invalid
+        valid_nodes = set()
+        for node in ordered_nodes:
+            try:
+                rec = recipe_registry.get(node.recipe_id)
+                cfg = node.config or {}
+                if not rec.validate_config(cfg):
+                    valid_nodes.add(node.id)
+            except Exception:
+                pass
+
         for node in ordered_nodes:
             try:
                 recipe = recipe_registry.get(node.recipe_id)
@@ -231,9 +245,23 @@ class WorkflowGraph(BaseModel):
 
             cfg = node.config or {}
             cfg_errors = recipe.validate_config(cfg)
+            if not cfg_errors:
+                continue
+
+            is_connected = node.id in connected_node_ids
+            # A node is treated as an incomplete draft node if:
+            # 1. There is an active pipeline on canvas (has_pipeline) and this node is disconnected from it; OR
+            # 2. There are no edges (edges == 0), multiple nodes (> 1), and at least one other node is valid/configured.
+            is_draft = (has_pipeline and not is_connected) or (not has_pipeline and len(self.nodes) > 1 and len(valid_nodes) > 0)
+
             for ce in cfg_errors:
                 if str(ce).startswith("⚠️") or str(ce).startswith("💡"):
                     add_error(f"{ce}", node_id=node.id, recipe_id=node.recipe_id)
+                elif is_draft:
+                    add_error(
+                        f"⚠️ Incomplete Draft Node '{node.id}' [{recipe.name}]: {ce} (Disconnected from active pipeline)",
+                        node_id=node.id, recipe_id=node.recipe_id
+                    )
                 else:
                     add_error(f"❌ Configuration Error for '{node.id}' [{recipe.name}]: {ce}", node_id=node.id, recipe_id=node.recipe_id)
 

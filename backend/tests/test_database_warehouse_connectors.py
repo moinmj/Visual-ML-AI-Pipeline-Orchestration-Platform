@@ -1074,3 +1074,138 @@ def test_node_test_step_response_schema_and_failure_summary():
     assert resp.output_summary["error"] == "Can't connect to MySQL server on '88.222.215.30'"
     assert resp.output_summary["title"] == "MySQL Connection Failed"
     assert "firewall" in resp.output_summary["suggestion"]
+
+
+def test_mongodb_clean_schema_defaults_and_placeholders():
+    """Verify that MongoDB connector has empty defaults and descriptive placeholders."""
+    from backend.app.recipes.ingestion.mongodb_connector import MongoDBConnectorRecipe
+    r = MongoDBConnectorRecipe()
+    props = r.get_schema()["properties"]
+
+    assert props["connection_string"].get("default", "") == ""
+    assert "placeholder" in props["connection_string"]
+
+    assert props["host"].get("default", "") == ""
+    assert "placeholder" in props["host"]
+
+    assert props["database"].get("default", "") == ""
+    assert "placeholder" in props["database"]
+
+    assert props["collection"].get("default", "") == ""
+    assert "placeholder" in props["collection"]
+
+
+def test_mongodb_resolve_connection_params_host_port():
+    """Verify host_port mode builds clean URI and does not let leftover connection_string overwrite it."""
+    from backend.app.recipes.ingestion.mongodb_connector import MongoDBConnectorRecipe
+    r = MongoDBConnectorRecipe()
+    cfg = {
+        "connection_mode": "host_port",
+        "connection_string": "",
+        "host": "88.222.215.30",
+        "port": 27017,
+        "username": "my_user",
+        "password": "my_password",
+        "database": "production_db",
+        "collection": "events",
+        "auth_source": "admin"
+    }
+    params = r._resolve_connection_params(cfg)
+    assert params["host"] == "88.222.215.30"
+    assert params["port"] == 27017
+    assert params["database"] == "production_db"
+    assert params["collection"] == "events"
+    assert "mongodb://my_user:my_password@88.222.215.30:27017/production_db?authSource=admin" == params["connection_string"]
+
+
+def test_draft_nodes_do_not_block_graph_validation():
+    """Verify that unconfigured draft nodes on canvas with 0 edges do not block validation if another node is configured."""
+    nodes = [
+        WorkflowNode(
+            id="mongo_1",
+            recipe_id="mongodb_connector",
+            config={"database": "test_db", "collection": "test_coll", "simulation_mode": True}
+        ),
+        WorkflowNode(
+            id="snowflake_draft",
+            recipe_id="snowflake_connector",
+            config={}  # unconfigured draft node
+        ),
+        WorkflowNode(
+            id="bigquery_draft",
+            recipe_id="bigquery_connector",
+            config={}  # unconfigured draft node
+        ),
+        WorkflowNode(
+            id="redshift_draft",
+            recipe_id="redshift_connector",
+            config={}  # unconfigured draft node
+        )
+    ]
+    graph = WorkflowGraph(id="wf_draft_test", name="Draft Canvas Test", nodes=nodes, edges=[])
+    diag = graph.get_diagnostics()
+
+    assert diag["is_valid"] is True, f"Graph should be valid despite draft nodes! Errors: {diag['errors']}"
+    assert len(diag["errors"]) == 0
+    assert len(diag["warnings"]) >= 3
+    draft_warnings = [w["message"] for w in diag["warnings"] if "Incomplete Draft Node" in w["message"]]
+    assert len(draft_warnings) >= 3
+
+
+def test_connected_node_configuration_error_blocks_validation():
+    """Verify that if a node IS connected to an active pipeline and missing configuration, it blocks validation."""
+    nodes = [
+        WorkflowNode(
+            id="mongo_1",
+            recipe_id="mongodb_connector",
+            config={"database": "test_db", "collection": "test_coll", "simulation_mode": True}
+        ),
+        WorkflowNode(
+            id="snowflake_connected",
+            recipe_id="snowflake_connector",
+            config={}  # connected but missing table_name
+        )
+    ]
+    edges = [
+        WorkflowEdge(id="e1", source="mongo_1", target="snowflake_connected")
+    ]
+    graph = WorkflowGraph(id="wf_conn_test", name="Connected Test", nodes=nodes, edges=edges)
+    diag = graph.get_diagnostics()
+
+    assert diag["is_valid"] is False
+    assert any("Configuration Error" in e["message"] for e in diag["errors"])
+
+
+def test_executor_skips_unconnected_draft_nodes():
+    """Verify DAGExecutor executes configured nodes and gracefully skips unconnected draft nodes."""
+    nodes = [
+        WorkflowNode(
+            id="mongo_configured",
+            recipe_id="mongodb_connector",
+            config={
+                "database": "telemetry",
+                "collection": "events",
+                "limit": 10,
+                "flatten_nested": True,
+                "simulation_mode": True
+            }
+        ),
+        WorkflowNode(
+            id="snowflake_draft",
+            recipe_id="snowflake_connector",
+            config={}  # unconfigured draft
+        )
+    ]
+    graph = WorkflowGraph(id="wf_skip_draft", name="Skip Draft DAG Test", nodes=nodes, edges=[])
+    exec_result = DAGExecutor.execute_workflow(
+        execution_id="test_skip_draft_exec",
+        workflow=graph,
+        include_node_outputs=True
+    )
+
+    assert exec_result.status == "SUCCESS"
+    assert len(exec_result.node_results) == 2
+    res_mongo = next(r for r in exec_result.node_results if r.node_id == "mongo_configured")
+    assert res_mongo.status == "SUCCESS"
+    res_draft = next(r for r in exec_result.node_results if r.node_id == "snowflake_draft")
+    assert res_draft.status == "SKIPPED"
