@@ -36,16 +36,7 @@ class MySQLConnectorRecipe(BaseRecipe):
     input_types = ["dataframe"]
     output_types = ["dataframe"]
 
-    inputs = [
-        RecipePort(
-            id="input",
-            label="Trigger / Input Dataset",
-            type="dataframe",
-            required=False,
-            max_connections=1,
-            description="Optional upstream dataset for batch IDs or execution trigger"
-        )
-    ]
+    inputs: List[RecipePort] = []
 
     outputs = [
         RecipePort(
@@ -59,6 +50,11 @@ class MySQLConnectorRecipe(BaseRecipe):
     def get_schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
+            "sections": [
+                {"id": "connection", "title": "Connection Configuration", "description": "Configure connection parameters"},
+                {"id": "query_selection", "title": "Query & Table Selection", "description": "Choose tables or custom SQL"},
+                {"id": "runtime_limits", "title": "Limits & Performance", "description": "Row limits and pagination"}
+            ],
             "properties": {
                 # ── 1. Connection Mode & Server Credentials ──
                 "connection_mode": {
@@ -67,6 +63,7 @@ class MySQLConnectorRecipe(BaseRecipe):
                     "input_type": "dropdown",
                     "enum": ["host_port", "connection_string", "credential"],
                     "default": "host_port",
+                    "section": "connection",
                     "description": "Choose connection method: standard host/port parameters, connection URI, or stored credential."
                 },
                 "credential_id": {
@@ -74,42 +71,73 @@ class MySQLConnectorRecipe(BaseRecipe):
                     "title": "Connected MySQL Credential",
                     "input_type": "credential_dropdown",
                     "provider": "mysql",
-                    "description": "Select a stored MySQL credential from platform settings."
+                    "section": "connection",
+                    "description": "Select a stored MySQL credential from platform settings.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "credential"
+                    }
                 },
                 "host": {
                     "type": "string",
                     "title": "Host",
                     "input_type": "text",
                     "default": "localhost",
-                    "description": "MySQL / MariaDB server hostname or IP address (used in 'host_port' mode)."
+                    "section": "connection",
+                    "description": "MySQL / MariaDB server hostname or IP address (used in 'host_port' mode).",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "host_port"
+                    }
                 },
                 "port": {
                     "type": "integer",
                     "title": "Port",
                     "input_type": "number",
                     "default": 3306,
-                    "description": "MySQL server port (default 3306)."
+                    "section": "connection",
+                    "description": "MySQL server port (default 3306).",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "host_port"
+                    }
                 },
                 "username": {
                     "type": "string",
                     "title": "Username",
                     "input_type": "text",
                     "default": "root",
-                    "description": "MySQL user role."
+                    "section": "connection",
+                    "description": "MySQL user role.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "host_port"
+                    }
                 },
                 "password": {
                     "type": "string",
                     "title": "Password",
                     "input_type": "password",
                     "default": "",
-                    "description": "MySQL user password."
+                    "section": "connection",
+                    "description": "MySQL user password.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "host_port"
+                    }
                 },
                 "connection_string": {
                     "type": "string",
                     "title": "Connection String (URI)",
                     "input_type": "text",
                     "default": "",
-                    "description": "Full MySQL connection URI e.g. mysql+pymysql://user:password@localhost:3306/dbname"
+                    "placeholder": "e.g. mysql+pymysql://user:password@localhost:3306/dbname",
+                    "section": "connection",
+                    "description": "Full MySQL connection URI e.g. mysql+pymysql://user:password@localhost:3306/dbname",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "connection_string"
+                    }
                 },
                 "charset": {
                     "type": "string",
@@ -117,13 +145,19 @@ class MySQLConnectorRecipe(BaseRecipe):
                     "input_type": "dropdown",
                     "enum": ["utf8mb4", "utf8", "latin1"],
                     "default": "utf8mb4",
-                    "description": "Connection character set (default 'utf8mb4')."
+                    "section": "connection",
+                    "description": "Connection character set (default 'utf8mb4').",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "host_port"
+                    }
                 },
                 "timeout": {
                     "type": "integer",
                     "title": "Timeout (seconds)",
                     "input_type": "number",
                     "default": 15,
+                    "section": "connection",
                     "description": "Connection and query timeout in seconds."
                 },
 
@@ -134,6 +168,7 @@ class MySQLConnectorRecipe(BaseRecipe):
                     "input_type": "dropdown",
                     "enum": ["table", "query"],
                     "default": "table",
+                    "section": "query_selection",
                     "description": "Read from tables (specifying database, tables, columns) or execute a custom SQL query."
                 },
                 "database": {
@@ -142,6 +177,7 @@ class MySQLConnectorRecipe(BaseRecipe):
                     "input_type": "text",
                     "default": "",
                     "placeholder": "e.g. ProjectX",
+                    "section": "query_selection",
                     "description": "Name of the target MySQL database / schema. Discovered dynamically from the server or entered manually."
                 },
                 "select_all_tables": {
@@ -149,7 +185,12 @@ class MySQLConnectorRecipe(BaseRecipe):
                     "title": "Select All Tables in Database (*)",
                     "input_type": "checkbox",
                     "default": False,
-                    "description": "If enabled or if no table is specified, retrieves all tables in the selected database."
+                    "section": "query_selection",
+                    "description": "If enabled or if no table is specified, retrieves all tables in the selected database.",
+                    "visible_when": {
+                        "field": "read_mode",
+                        "equals": "table"
+                    }
                 },
                 "tables": {
                     "type": "array",
@@ -157,7 +198,12 @@ class MySQLConnectorRecipe(BaseRecipe):
                     "input_type": "tag_input",
                     "items": {"type": "string"},
                     "default": [],
-                    "description": "Specify one or multiple tables to read (e.g. ['Businesses', 'BookingServices']). Leave empty or enable 'Select All Tables' to read all tables."
+                    "section": "query_selection",
+                    "description": "Specify one or multiple tables to read (e.g. ['Businesses', 'BookingServices']). Leave empty or enable 'Select All Tables' to read all tables.",
+                    "visible_when": {
+                        "field": "read_mode",
+                        "equals": "table"
+                    }
                 },
                 "table_name": {
                     "type": "string",
@@ -165,14 +211,24 @@ class MySQLConnectorRecipe(BaseRecipe):
                     "input_type": "text",
                     "default": "",
                     "placeholder": "e.g. Businesses",
-                    "description": "Single table to read (e.g. 'Businesses', 'orders'). Ignored if 'Table(s) to Read' or 'Select All Tables' is specified."
+                    "section": "query_selection",
+                    "description": "Single table to read (e.g. 'Businesses', 'orders'). Ignored if 'Table(s) to Read' or 'Select All Tables' is specified.",
+                    "visible_when": {
+                        "field": "read_mode",
+                        "equals": "table"
+                    }
                 },
                 "select_all_columns": {
                     "type": "boolean",
                     "title": "Select All Columns (*)",
                     "input_type": "checkbox",
                     "default": True,
-                    "description": "If enabled and no specific columns are entered in 'Columns to Select', retrieves all columns ('*')."
+                    "section": "query_selection",
+                    "description": "If enabled and no specific columns are entered in 'Columns to Select', retrieves all columns ('*').",
+                    "visible_when": {
+                        "field": "read_mode",
+                        "equals": "table"
+                    }
                 },
                 "columns": {
                     "type": "array",
@@ -180,21 +236,36 @@ class MySQLConnectorRecipe(BaseRecipe):
                     "input_type": "tag_input",
                     "items": {"type": "string"},
                     "default": [],
-                    "description": "Specify one or more column names to select (e.g. ['Id', 'Name']). When specified, ONLY these columns are retrieved."
+                    "section": "query_selection",
+                    "description": "Specify one or more column names to select (e.g. ['Id', 'Name']). When specified, ONLY these columns are retrieved.",
+                    "visible_when": {
+                        "field": "read_mode",
+                        "equals": "table"
+                    }
                 },
                 "where_clause": {
                     "type": "string",
                     "title": "Filter Condition (WHERE)",
                     "input_type": "text",
                     "default": "",
-                    "description": "Optional SQL WHERE filter expression without 'WHERE' keyword (e.g. status = 'COMPLETED' AND amount > 0)."
+                    "section": "query_selection",
+                    "description": "Optional SQL WHERE filter expression without 'WHERE' keyword (e.g. status = 'COMPLETED' AND amount > 0).",
+                    "visible_when": {
+                        "field": "read_mode",
+                        "equals": "table"
+                    }
                 },
                 "order_by": {
                     "type": "string",
                     "title": "Sort Order (ORDER BY)",
                     "input_type": "text",
                     "default": "",
-                    "description": "Optional SQL sort expression without 'ORDER BY' keyword (e.g. created_at DESC)."
+                    "section": "query_selection",
+                    "description": "Optional SQL sort expression without 'ORDER BY' keyword (e.g. created_at DESC).",
+                    "visible_when": {
+                        "field": "read_mode",
+                        "equals": "table"
+                    }
                 },
                 "query": {
                     "type": "string",
@@ -202,13 +273,21 @@ class MySQLConnectorRecipe(BaseRecipe):
                     "input_type": "textarea",
                     "default": "",
                     "placeholder": "e.g. SELECT * FROM Businesses WHERE Id > 100",
-                    "description": "Custom SQL query to execute. Only used when Read Mode is set to 'query'. Ignored when Read Mode is 'table'."
+                    "section": "query_selection",
+                    "description": "Custom SQL query to execute. Only used when Read Mode is set to 'query'. Ignored when Read Mode is 'table'.",
+                    "visible_when": {
+                        "field": "read_mode",
+                        "equals": "query"
+                    }
                 },
+
+                # ── 3. Limits & Pagination ──
                 "limit": {
                     "type": "integer",
                     "title": "Row Limit",
                     "input_type": "number",
                     "default": 1000,
+                    "section": "runtime_limits",
                     "description": "Maximum number of rows to retrieve (1 to 100000)."
                 },
                 "offset": {
@@ -216,6 +295,7 @@ class MySQLConnectorRecipe(BaseRecipe):
                     "title": "Row Offset",
                     "input_type": "number",
                     "default": 0,
+                    "section": "runtime_limits",
                     "description": "Number of initial rows to skip for pagination."
                 },
                 "simulation_mode": {
@@ -223,6 +303,7 @@ class MySQLConnectorRecipe(BaseRecipe):
                     "title": "Simulation / Demo Mode",
                     "input_type": "checkbox",
                     "default": False,
+                    "section": "runtime_limits",
                     "description": "Generate realistic benchmark dataset without connecting to an external database."
                 }
             },

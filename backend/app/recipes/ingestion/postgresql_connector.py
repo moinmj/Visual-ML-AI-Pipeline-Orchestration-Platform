@@ -36,16 +36,7 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
     input_types = ["dataframe"]
     output_types = ["dataframe"]
 
-    inputs = [
-        RecipePort(
-            id="input",
-            label="Trigger / Input Dataset",
-            type="dataframe",
-            required=False,
-            max_connections=1,
-            description="Optional upstream dataset for batch IDs or execution trigger",
-        )
-    ]
+    inputs: List[RecipePort] = []
 
     outputs = [
         RecipePort(
@@ -59,57 +50,94 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
     def get_schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
+            "sections": [
+                {"id": "connection", "title": "Connection Configuration", "description": "Configure connection parameters"},
+                {"id": "query_selection", "title": "Query & Table Selection", "description": "Choose tables or custom SQL"},
+                {"id": "runtime_limits", "title": "Limits & Performance", "description": "Row limits and pagination"}
+            ],
             "properties": {
                 # ── 1. Connection Configuration ──
                 "connection_mode": {
                     "type": "string",
                     "title": "Connection Mode",
                     "input_type": "dropdown",
+                    "section": "connection",
                     "enum": ["host_port", "connection_string", "credential"],
                     "default": "host_port",
-                    "description": "Choose how to connect: standard host/port parameters, full connection string (URI), or stored credential.",
+                    "description": "Choose how to connect: standard host/port parameters, full connection string (URI), or stored credential."
                 },
                 "credential_id": {
                     "type": "string",
                     "title": "Connected PostgreSQL Credential",
                     "input_type": "credential_dropdown",
                     "provider": "postgresql",
+                    "section": "connection",
                     "description": "Select a stored credential from platform settings.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "credential"
+                    }
                 },
                 "host": {
                     "type": "string",
                     "title": "Host",
                     "input_type": "text",
                     "default": "localhost",
+                    "section": "connection",
                     "description": "PostgreSQL server hostname or IP address (used in 'host_port' mode).",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "host_port"
+                    }
                 },
                 "port": {
                     "type": "integer",
                     "title": "Port",
                     "input_type": "number",
                     "default": 5432,
+                    "section": "connection",
                     "description": "PostgreSQL server port (default 5432).",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "host_port"
+                    }
                 },
                 "username": {
                     "type": "string",
                     "title": "Username",
                     "input_type": "text",
                     "default": "postgres",
+                    "section": "connection",
                     "description": "PostgreSQL user role.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "host_port"
+                    }
                 },
                 "password": {
                     "type": "string",
                     "title": "Password",
                     "input_type": "password",
                     "default": "",
+                    "section": "connection",
                     "description": "PostgreSQL user password.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "host_port"
+                    }
                 },
                 "connection_string": {
                     "type": "string",
                     "title": "Connection String (URI)",
                     "input_type": "text",
                     "default": "",
+                    "placeholder": "e.g. postgresql://user:password@localhost:5432/dbname",
+                    "section": "connection",
                     "description": "Full PostgreSQL connection URI e.g. postgresql://user:password@localhost:5432/dbname",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "connection_string"
+                    }
                 },
                 "ssl_mode": {
                     "type": "string",
@@ -117,14 +145,20 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                     "input_type": "dropdown",
                     "enum": ["prefer", "require", "disable", "verify-ca", "verify-full"],
                     "default": "prefer",
+                    "section": "connection",
                     "description": "PostgreSQL SSL connection mode.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "host_port"
+                    }
                 },
                 "timeout": {
                     "type": "integer",
                     "title": "Timeout (seconds)",
                     "input_type": "number",
                     "default": 15,
-                    "description": "Connection and query execution timeout in seconds.",
+                    "section": "connection",
+                    "description": "Connection and query execution timeout in seconds."
                 },
 
                 # ── 2. Read Mode & Target Selection ──
@@ -134,36 +168,52 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                     "input_type": "dropdown",
                     "enum": ["table", "query"],
                     "default": "table",
-                    "description": "Read from tables (specifying schema, tables, columns) or execute a custom SQL query.",
+                    "section": "query_selection",
+                    "description": "Read from tables (specifying schema, tables, columns) or execute a custom SQL query."
                 },
-                # Table Mode Fields
                 "database": {
                     "type": "string",
                     "title": "Database Name",
                     "input_type": "text",
                     "default": "postgres",
-                    "description": "Name of the target PostgreSQL database. Discovered dynamically from the server or entered manually.",
+                    "section": "query_selection",
+                    "description": "Name of the target PostgreSQL database. Discovered dynamically from the server or entered manually."
                 },
                 "schema_name": {
                     "type": "string",
                     "title": "Schema Name",
                     "input_type": "text",
                     "default": "public",
+                    "section": "query_selection",
                     "description": "PostgreSQL schema name (default 'public'). Discovered dynamically from the database upon connection.",
+                    "visible_when": {
+                        "field": "read_mode",
+                        "equals": "table"
+                    }
                 },
                 "select_all_tables": {
                     "type": "boolean",
                     "title": "Select All Tables in Schema (*)",
                     "input_type": "checkbox",
                     "default": False,
+                    "section": "query_selection",
                     "description": "If enabled or if no table is specified, retrieves all tables in the selected schema.",
+                    "visible_when": {
+                        "field": "read_mode",
+                        "equals": "table"
+                    }
                 },
                 "tables": {
                     "type": "array",
                     "items": {"type": "string"},
                     "title": "Table(s) to Read",
                     "input_type": "tags",
+                    "section": "query_selection",
                     "description": "Specify one or multiple tables to read (e.g. ['sales', 'retail_sales']). Leave empty or enable 'Select All Tables' to read all tables.",
+                    "visible_when": {
+                        "field": "read_mode",
+                        "equals": "table"
+                    }
                 },
                 "table_name": {
                     "type": "string",
@@ -171,44 +221,73 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                     "input_type": "text",
                     "default": "",
                     "placeholder": "e.g. sales",
+                    "section": "query_selection",
                     "description": "Single table to read (e.g. 'sales'). Ignored if 'Table(s) to Read' or 'Select All Tables' is specified.",
+                    "visible_when": {
+                        "field": "read_mode",
+                        "equals": "table"
+                    }
                 },
                 "select_all_columns": {
                     "type": "boolean",
                     "title": "Select All Columns (*)",
                     "input_type": "checkbox",
                     "default": True,
+                    "section": "query_selection",
                     "description": "If enabled and no specific columns are entered in 'Columns to Select', retrieves all columns ('*').",
+                    "visible_when": {
+                        "field": "read_mode",
+                        "equals": "table"
+                    }
                 },
                 "columns": {
                     "type": "array",
                     "items": {"type": "string"},
                     "title": "Columns to Select",
                     "input_type": "tags",
+                    "section": "query_selection",
                     "description": "Specify one or more column names to select (e.g. ['invoice_id', 'branch']). When specified, ONLY these columns are retrieved.",
+                    "visible_when": {
+                        "field": "read_mode",
+                        "equals": "table"
+                    }
                 },
                 "where_clause": {
                     "type": "string",
                     "title": "Filter Condition (WHERE)",
                     "input_type": "text",
                     "default": "",
+                    "section": "query_selection",
                     "description": "Optional SQL WHERE filter expression without 'WHERE' keyword (e.g. status = 'ACTIVE' AND amount > 0).",
+                    "visible_when": {
+                        "field": "read_mode",
+                        "equals": "table"
+                    }
                 },
                 "order_by": {
                     "type": "string",
                     "title": "Sort Order (ORDER BY)",
                     "input_type": "text",
                     "default": "",
+                    "section": "query_selection",
                     "description": "Optional SQL sort expression without 'ORDER BY' keyword (e.g. created_at DESC).",
+                    "visible_when": {
+                        "field": "read_mode",
+                        "equals": "table"
+                    }
                 },
-                # Query Mode Field
                 "query": {
                     "type": "string",
                     "title": "Custom SQL Query",
                     "input_type": "textarea",
                     "default": "",
                     "placeholder": "e.g. SELECT * FROM public.sales LIMIT 100",
+                    "section": "query_selection",
                     "description": "Custom SQL query to execute. Only used when Read Mode is set to 'query'. Ignored when Read Mode is 'table'.",
+                    "visible_when": {
+                        "field": "read_mode",
+                        "equals": "query"
+                    }
                 },
 
                 # ── 3. Limits & Pagination ──
@@ -217,24 +296,25 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                     "title": "Row Limit",
                     "input_type": "number",
                     "default": 1000,
-                    "description": "Maximum number of rows to retrieve (1 to 100000).",
+                    "section": "runtime_limits",
+                    "description": "Maximum number of rows to retrieve (1 to 100000)."
                 },
                 "offset": {
                     "type": "integer",
                     "title": "Row Offset",
                     "input_type": "number",
                     "default": 0,
-                    "description": "Number of initial rows to skip for pagination.",
+                    "section": "runtime_limits",
+                    "description": "Number of initial rows to skip for pagination."
                 },
-
-                # ── 4. Demo / Benchmark ──
                 "simulation_mode": {
                     "type": "boolean",
                     "title": "Simulation / Demo Mode",
                     "input_type": "checkbox",
                     "default": False,
-                    "description": "Generate realistic benchmark dataset without connecting to an external database.",
-                },
+                    "section": "runtime_limits",
+                    "description": "Generate realistic benchmark dataset without connecting to an external database."
+                }
             },
             "required": ["read_mode"],
             "templates": [

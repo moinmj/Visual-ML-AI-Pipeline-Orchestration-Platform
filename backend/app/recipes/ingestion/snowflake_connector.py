@@ -33,16 +33,7 @@ class SnowflakeConnectorRecipe(BaseRecipe):
     input_types = ["dataframe"]
     output_types = ["dataframe"]
 
-    inputs = [
-        RecipePort(
-            id="input",
-            label="Trigger / Input Dataset",
-            type="dataframe",
-            required=False,
-            max_connections=1,
-            description="Optional upstream dataset for batch IDs or execution trigger"
-        )
-    ]
+    inputs: List[RecipePort] = []
 
     outputs = [
         RecipePort(
@@ -56,6 +47,11 @@ class SnowflakeConnectorRecipe(BaseRecipe):
     def get_schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
+            "sections": [
+                {"id": "connection", "title": "Connection Configuration", "description": "Configure connection parameters"},
+                {"id": "query_selection", "title": "Query & Table Selection", "description": "Choose tables or custom SQL"},
+                {"id": "runtime_limits", "title": "Limits & Performance", "description": "Row limits and warehouse performance"}
+            ],
             "properties": {
                 # ── 1. Connection Mode & Server Credentials ──
                 "connection_mode": {
@@ -64,6 +60,7 @@ class SnowflakeConnectorRecipe(BaseRecipe):
                     "input_type": "dropdown",
                     "enum": ["account_credentials", "connection_string", "credential"],
                     "default": "account_credentials",
+                    "section": "connection",
                     "description": "Choose how to connect: Snowflake account credentials, connection string (SQLAlchemy URI), or stored credential."
                 },
                 "credential_id": {
@@ -71,7 +68,12 @@ class SnowflakeConnectorRecipe(BaseRecipe):
                     "title": "Connected Snowflake Credential",
                     "input_type": "credential_dropdown",
                     "provider": "snowflake",
-                    "description": "Select a stored credential from platform settings."
+                    "section": "connection",
+                    "description": "Select a stored credential from platform settings.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "credential"
+                    }
                 },
                 "account": {
                     "type": "string",
@@ -79,7 +81,12 @@ class SnowflakeConnectorRecipe(BaseRecipe):
                     "input_type": "text",
                     "default": "",
                     "placeholder": "e.g. xy12345.us-east-1 or myorg-myaccount",
-                    "description": "Snowflake account identifier (e.g. 'xy12345.us-east-1' or '<orgname>-<accountname>')."
+                    "section": "connection",
+                    "description": "Snowflake account identifier (e.g. 'xy12345.us-east-1' or '<orgname>-<accountname>').",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "account_credentials"
+                    }
                 },
                 "user": {
                     "type": "string",
@@ -87,7 +94,12 @@ class SnowflakeConnectorRecipe(BaseRecipe):
                     "input_type": "text",
                     "default": "",
                     "placeholder": "e.g. analyst or my_user",
-                    "description": "Snowflake user login name."
+                    "section": "connection",
+                    "description": "Snowflake user login name.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "account_credentials"
+                    }
                 },
                 "password": {
                     "type": "string",
@@ -95,7 +107,12 @@ class SnowflakeConnectorRecipe(BaseRecipe):
                     "input_type": "password",
                     "default": "",
                     "placeholder": "Enter Snowflake password",
-                    "description": "Snowflake user password."
+                    "section": "connection",
+                    "description": "Snowflake user password.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "account_credentials"
+                    }
                 },
                 "warehouse": {
                     "type": "string",
@@ -103,7 +120,12 @@ class SnowflakeConnectorRecipe(BaseRecipe):
                     "input_type": "text",
                     "default": "",
                     "placeholder": "e.g. COMPUTE_WH or ANALYTICS_WH",
-                    "description": "Virtual warehouse used to execute queries (e.g. 'COMPUTE_WH', 'ANALYTICS_WH')."
+                    "section": "connection",
+                    "description": "Virtual warehouse used to execute queries (e.g. 'COMPUTE_WH', 'ANALYTICS_WH').",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "account_credentials"
+                    }
                 },
                 "role": {
                     "type": "string",
@@ -111,7 +133,12 @@ class SnowflakeConnectorRecipe(BaseRecipe):
                     "input_type": "text",
                     "default": "PUBLIC",
                     "placeholder": "PUBLIC",
-                    "description": "Security role to assume (e.g. 'ACCOUNTADMIN', 'SYSADMIN', 'DATA_ANALYST')."
+                    "section": "connection",
+                    "description": "Security role to assume (e.g. 'ACCOUNTADMIN', 'SYSADMIN', 'DATA_ANALYST').",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "account_credentials"
+                    }
                 },
                 "connection_string": {
                     "type": "string",
@@ -119,13 +146,19 @@ class SnowflakeConnectorRecipe(BaseRecipe):
                     "input_type": "text",
                     "default": "",
                     "placeholder": "e.g. snowflake://user:pass@account/db/schema?warehouse=wh&role=role",
-                    "description": "Full Snowflake SQLAlchemy URI e.g. snowflake://user:pass@account/db/schema?warehouse=wh&role=role"
+                    "section": "connection",
+                    "description": "Full Snowflake SQLAlchemy URI e.g. snowflake://user:pass@account/db/schema?warehouse=wh&role=role",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "connection_string"
+                    }
                 },
                 "timeout": {
                     "type": "integer",
                     "title": "Timeout (seconds)",
                     "input_type": "number",
                     "default": 30,
+                    "section": "connection",
                     "description": "Connection and query timeout in seconds."
                 },
 
@@ -136,6 +169,7 @@ class SnowflakeConnectorRecipe(BaseRecipe):
                     "input_type": "dropdown",
                     "enum": ["table", "query"],
                     "default": "table",
+                    "section": "query_selection",
                     "description": "Read an entire table/view or run a custom read-only SQL query."
                 },
                 "database": {
@@ -144,6 +178,7 @@ class SnowflakeConnectorRecipe(BaseRecipe):
                     "input_type": "text",
                     "default": "",
                     "placeholder": "e.g. ANALYTICS_DB or PROD_DB",
+                    "section": "query_selection",
                     "description": "Name of the target Snowflake database."
                 },
                 "schema_name": {
@@ -152,7 +187,12 @@ class SnowflakeConnectorRecipe(BaseRecipe):
                     "input_type": "text",
                     "default": "PUBLIC",
                     "placeholder": "PUBLIC",
-                    "description": "Target schema within the database (default 'PUBLIC')."
+                    "section": "query_selection",
+                    "description": "Target schema within the database (default 'PUBLIC').",
+                    "visible_when": {
+                        "field": "read_mode",
+                        "equals": "table"
+                    }
                 },
                 "table_name": {
                     "type": "string",
@@ -160,7 +200,12 @@ class SnowflakeConnectorRecipe(BaseRecipe):
                     "input_type": "text",
                     "default": "",
                     "placeholder": "e.g. FCT_ORDERS",
-                    "description": "Target Snowflake table or view name (used in 'table' mode)."
+                    "section": "query_selection",
+                    "description": "Target Snowflake table or view name (used in 'table' mode).",
+                    "visible_when": {
+                        "field": "read_mode",
+                        "equals": "table"
+                    }
                 },
                 "columns": {
                     "type": "string",
@@ -168,7 +213,12 @@ class SnowflakeConnectorRecipe(BaseRecipe):
                     "input_type": "text",
                     "default": "*",
                     "placeholder": "e.g. ORDER_ID, CUSTOMER_ID, TOTAL_AMOUNT or *",
-                    "description": "Columns to select (e.g. 'ORDER_ID, CUSTOMER_ID, TOTAL_AMOUNT, CREATED_AT'). Leave '*' for all."
+                    "section": "query_selection",
+                    "description": "Columns to select (e.g. 'ORDER_ID, CUSTOMER_ID, TOTAL_AMOUNT, CREATED_AT'). Leave '*' for all.",
+                    "visible_when": {
+                        "field": "read_mode",
+                        "equals": "table"
+                    }
                 },
                 "filter_condition": {
                     "type": "string",
@@ -176,7 +226,12 @@ class SnowflakeConnectorRecipe(BaseRecipe):
                     "input_type": "text",
                     "default": "",
                     "placeholder": "e.g. STATUS = 'COMPLETED' AND AMOUNT > 0",
-                    "description": "Optional SQL WHERE filter expression without 'WHERE' keyword (used in 'table' mode)."
+                    "section": "query_selection",
+                    "description": "Optional SQL WHERE filter expression without 'WHERE' keyword (used in 'table' mode).",
+                    "visible_when": {
+                        "field": "read_mode",
+                        "equals": "table"
+                    }
                 },
                 "query": {
                     "type": "string",
@@ -184,7 +239,12 @@ class SnowflakeConnectorRecipe(BaseRecipe):
                     "input_type": "textarea",
                     "default": "",
                     "placeholder": "e.g. SELECT * FROM PUBLIC.FCT_ORDERS LIMIT 100",
-                    "description": "Custom SQL query to execute in Snowflake. Only used when Read Mode is 'query'. Modifying statements (DROP, DELETE, UPDATE, TRUNCATE) are rejected."
+                    "section": "query_selection",
+                    "description": "Custom SQL query to execute in Snowflake. Only used when Read Mode is 'query'. Modifying statements (DROP, DELETE, UPDATE, TRUNCATE) are rejected.",
+                    "visible_when": {
+                        "field": "read_mode",
+                        "equals": "query"
+                    }
                 },
 
                 # ── 3. Limits & Pagination ──
@@ -193,6 +253,7 @@ class SnowflakeConnectorRecipe(BaseRecipe):
                     "title": "Row Limit",
                     "input_type": "number",
                     "default": 1000,
+                    "section": "runtime_limits",
                     "description": "Maximum number of rows to retrieve (1 to 1,000,000)."
                 },
                 "simulation_mode": {
@@ -200,6 +261,7 @@ class SnowflakeConnectorRecipe(BaseRecipe):
                     "title": "Simulation / Demo Mode",
                     "input_type": "checkbox",
                     "default": False,
+                    "section": "runtime_limits",
                     "description": "When enabled or when Snowflake driver is offline, generates realistic Snowflake warehouse benchmark data."
                 }
             },
