@@ -59,21 +59,21 @@ class MongoDBConnectorRecipe(BaseRecipe):
         return {
             "type": "object",
             "properties": {
+                # ── 1. Connection Mode & Server Credentials ──
                 "connection_mode": {
                     "type": "string",
                     "title": "Connection Mode",
                     "input_type": "dropdown",
-                    "enum": ["connection_string", "host_port", "credential"],
-                    "default": "connection_string",
-                    "description": "Choose connection method: MongoDB URI (standard or Atlas SRV), host/port, or stored credential."
+                    "enum": ["host_port", "connection_string", "credential"],
+                    "default": "host_port",
+                    "description": "Choose connection method: standard host/port parameters, connection URI (standard or Atlas SRV), or stored credential."
                 },
-                "connection_string": {
+                "credential_id": {
                     "type": "string",
-                    "title": "Connection String (URI)",
-                    "input_type": "text",
-                    "default": "",
-                    "placeholder": "e.g. mongodb://user:pass@host:27017/dbname or mongodb+srv://cluster.mongodb.net/dbname",
-                    "description": "Full MongoDB connection URI (standard or Atlas SRV)."
+                    "title": "Connected MongoDB Credential",
+                    "input_type": "credential_dropdown",
+                    "provider": "mongodb",
+                    "description": "Select a stored MongoDB credential from platform settings."
                 },
                 "host": {
                     "type": "string",
@@ -90,22 +90,6 @@ class MongoDBConnectorRecipe(BaseRecipe):
                     "default": 27017,
                     "placeholder": "27017",
                     "description": "MongoDB server port (default 27017)."
-                },
-                "database": {
-                    "type": "string",
-                    "title": "Database Name",
-                    "input_type": "text",
-                    "default": "",
-                    "placeholder": "e.g. ai_whatsapp_db or analytics",
-                    "description": "Target MongoDB database name."
-                },
-                "collection": {
-                    "type": "string",
-                    "title": "Collection Name",
-                    "input_type": "text",
-                    "default": "",
-                    "placeholder": "e.g. conversations or events",
-                    "description": "Target MongoDB collection name (e.g. 'conversations', 'events', 'users')."
                 },
                 "username": {
                     "type": "string",
@@ -131,12 +115,38 @@ class MongoDBConnectorRecipe(BaseRecipe):
                     "placeholder": "admin",
                     "description": "Authentication source database (default 'admin')."
                 },
-                "credential_id": {
+                "connection_string": {
                     "type": "string",
-                    "title": "Connected MongoDB Credential",
-                    "input_type": "credential_dropdown",
-                    "provider": "mongodb",
-                    "description": "Select a stored MongoDB credential from platform settings."
+                    "title": "Connection String (URI)",
+                    "input_type": "text",
+                    "default": "",
+                    "placeholder": "e.g. mongodb://user:pass@host:27017/dbname or mongodb+srv://cluster.mongodb.net/dbname",
+                    "description": "Full MongoDB connection URI (standard or Atlas SRV)."
+                },
+                "timeout": {
+                    "type": "integer",
+                    "title": "Timeout (seconds)",
+                    "input_type": "number",
+                    "default": 15,
+                    "description": "Connection and query timeout in seconds."
+                },
+
+                # ── 2. Target Database & Collection Selection ──
+                "database": {
+                    "type": "string",
+                    "title": "Database Name",
+                    "input_type": "text",
+                    "default": "",
+                    "placeholder": "e.g. ai_whatsapp_db or analytics",
+                    "description": "Target MongoDB database name."
+                },
+                "collection": {
+                    "type": "string",
+                    "title": "Collection Name",
+                    "input_type": "text",
+                    "default": "",
+                    "placeholder": "e.g. conversations or events",
+                    "description": "Target MongoDB collection name (e.g. 'conversations', 'events', 'users')."
                 },
                 "filter_query": {
                     "type": "string",
@@ -159,6 +169,8 @@ class MongoDBConnectorRecipe(BaseRecipe):
                     "default": "{}",
                     "description": "Sort expression (e.g. '{\"timestamp\": -1}')."
                 },
+
+                # ── 3. Limits & Data Shaping ──
                 "limit": {
                     "type": "integer",
                     "title": "Document Limit",
@@ -179,13 +191,6 @@ class MongoDBConnectorRecipe(BaseRecipe):
                     "input_type": "checkbox",
                     "default": True,
                     "description": "Convert BSON ObjectId values to hexadecimal strings to ensure clean tabular display and downstream recipe compatibility."
-                },
-                "timeout": {
-                    "type": "integer",
-                    "title": "Timeout (seconds)",
-                    "input_type": "number",
-                    "default": 15,
-                    "description": "Connection and query timeout in seconds."
                 },
                 "simulation_mode": {
                     "type": "boolean",

@@ -1209,3 +1209,36 @@ def test_executor_skips_unconnected_draft_nodes():
     assert res_mongo.status == "SUCCESS"
     res_draft = next(r for r in exec_result.node_results if r.node_id == "snowflake_draft")
     assert res_draft.status == "SKIPPED"
+
+
+def test_connector_schema_property_ordering_consistency():
+    """Verify that all database and warehouse connectors follow the standardized 3-section ordering."""
+    from backend.app.recipes.ingestion.mysql_connector import MySQLConnectorRecipe
+    from backend.app.recipes.ingestion.postgresql_connector import PostgreSQLConnectorRecipe
+    from backend.app.recipes.ingestion.mongodb_connector import MongoDBConnectorRecipe
+    from backend.app.recipes.ingestion.snowflake_connector import SnowflakeConnectorRecipe
+    from backend.app.recipes.ingestion.redshift_connector import RedshiftConnectorRecipe
+    from backend.app.recipes.ingestion.bigquery_connector import BigQueryConnectorRecipe
+
+    connectors = [
+        MySQLConnectorRecipe(),
+        PostgreSQLConnectorRecipe(),
+        MongoDBConnectorRecipe(),
+        SnowflakeConnectorRecipe(),
+        RedshiftConnectorRecipe(),
+        BigQueryConnectorRecipe()
+    ]
+
+    for conn in connectors:
+        keys = list(conn.get_schema()["properties"].keys())
+        # 1. Connection mode must be the first property
+        assert keys[0] == "connection_mode", f"{conn.recipe_id} first property should be connection_mode, got {keys[0]}"
+        # 2. credential_id must be in the connection section (first 3 properties)
+        assert "credential_id" in keys
+        assert keys.index("credential_id") <= 2, f"{conn.recipe_id} credential_id should be near top, got index {keys.index('credential_id')}"
+        # 3. Target data fields (database or dataset_id) must appear after credentials
+        target_key = "dataset_id" if "dataset_id" in keys else "database"
+        assert keys.index(target_key) > keys.index("credential_id")
+        # 4. Limit must appear near the bottom
+        assert "limit" in keys
+        assert keys.index("limit") > keys.index(target_key)

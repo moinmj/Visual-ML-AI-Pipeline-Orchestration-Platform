@@ -57,6 +57,7 @@ class RedshiftConnectorRecipe(BaseRecipe):
         return {
             "type": "object",
             "properties": {
+                # ── 1. Connection Mode & Server Credentials ──
                 "connection_mode": {
                     "type": "string",
                     "title": "Connection Mode",
@@ -65,55 +66,6 @@ class RedshiftConnectorRecipe(BaseRecipe):
                     "default": "cluster_credentials",
                     "description": "Choose how to connect: host/cluster parameters, connection string, or stored credential."
                 },
-                "host": {
-                    "type": "string",
-                    "title": "Redshift Cluster Endpoint / Host",
-                    "input_type": "text",
-                    "default": "redshift-cluster-1.abcdef123456.us-east-1.redshift.amazonaws.com",
-                    "description": "Amazon Redshift cluster endpoint hostname."
-                },
-                "port": {
-                    "type": "integer",
-                    "title": "Port",
-                    "input_type": "number",
-                    "default": 5439,
-                    "description": "Redshift server port (default 5439)."
-                },
-                "database": {
-                    "type": "string",
-                    "title": "Database Name",
-                    "input_type": "text",
-                    "default": "dev",
-                    "description": "Name of the target Redshift database."
-                },
-                "schema_name": {
-                    "type": "string",
-                    "title": "Schema Name",
-                    "input_type": "text",
-                    "default": "public",
-                    "description": "Target schema within the database (default 'public')."
-                },
-                "username": {
-                    "type": "string",
-                    "title": "Username",
-                    "input_type": "text",
-                    "default": "awsuser",
-                    "description": "Redshift database master user."
-                },
-                "password": {
-                    "type": "string",
-                    "title": "Password",
-                    "input_type": "password",
-                    "default": "",
-                    "description": "Redshift database user password."
-                },
-                "connection_string": {
-                    "type": "string",
-                    "title": "Connection String (URI)",
-                    "input_type": "text",
-                    "default": "",
-                    "description": "Full Redshift connection URI e.g. postgresql://awsuser:pass@host:5439/dev"
-                },
                 "credential_id": {
                     "type": "string",
                     "title": "Connected Redshift Credential",
@@ -121,6 +73,55 @@ class RedshiftConnectorRecipe(BaseRecipe):
                     "provider": "redshift",
                     "description": "Select a stored Redshift credential from platform settings."
                 },
+                "host": {
+                    "type": "string",
+                    "title": "Redshift Cluster Endpoint / Host",
+                    "input_type": "text",
+                    "default": "",
+                    "placeholder": "e.g. redshift-cluster-1.abcdef.us-east-1.redshift.amazonaws.com",
+                    "description": "Amazon Redshift cluster endpoint hostname."
+                },
+                "port": {
+                    "type": "integer",
+                    "title": "Port",
+                    "input_type": "number",
+                    "default": 5439,
+                    "placeholder": "5439",
+                    "description": "Redshift server port (default 5439)."
+                },
+                "username": {
+                    "type": "string",
+                    "title": "Username",
+                    "input_type": "text",
+                    "default": "",
+                    "placeholder": "e.g. awsuser or master_user",
+                    "description": "Redshift database master user."
+                },
+                "password": {
+                    "type": "string",
+                    "title": "Password",
+                    "input_type": "password",
+                    "default": "",
+                    "placeholder": "Enter Redshift password",
+                    "description": "Redshift database user password."
+                },
+                "connection_string": {
+                    "type": "string",
+                    "title": "Connection String (URI)",
+                    "input_type": "text",
+                    "default": "",
+                    "placeholder": "e.g. postgresql://awsuser:pass@host:5439/dev",
+                    "description": "Full Redshift connection URI e.g. postgresql://awsuser:pass@host:5439/dev"
+                },
+                "timeout": {
+                    "type": "integer",
+                    "title": "Timeout (seconds)",
+                    "input_type": "number",
+                    "default": 30,
+                    "description": "Connection and query timeout in seconds."
+                },
+
+                # ── 2. Read Mode & Target Selection ──
                 "read_mode": {
                     "type": "string",
                     "title": "Read Mode",
@@ -128,6 +129,22 @@ class RedshiftConnectorRecipe(BaseRecipe):
                     "enum": ["table", "query"],
                     "default": "table",
                     "description": "Read an entire table/view or run a custom read-only SQL query."
+                },
+                "database": {
+                    "type": "string",
+                    "title": "Database Name",
+                    "input_type": "text",
+                    "default": "",
+                    "placeholder": "e.g. dev or analytics",
+                    "description": "Name of the target Redshift database."
+                },
+                "schema_name": {
+                    "type": "string",
+                    "title": "Schema Name",
+                    "input_type": "text",
+                    "default": "public",
+                    "placeholder": "public",
+                    "description": "Target schema within the database (default 'public')."
                 },
                 "table_name": {
                     "type": "string",
@@ -142,6 +159,7 @@ class RedshiftConnectorRecipe(BaseRecipe):
                     "title": "Columns (comma-separated)",
                     "input_type": "text",
                     "default": "*",
+                    "placeholder": "e.g. salesid, buyerid, pricepaid or *",
                     "description": "Columns to select (e.g. 'salesid, buyerid, sellerid, pricepaid, saletime'). Leave '*' for all."
                 },
                 "query": {
@@ -152,6 +170,8 @@ class RedshiftConnectorRecipe(BaseRecipe):
                     "placeholder": "e.g. SELECT * FROM public.sales LIMIT 100",
                     "description": "Custom SQL query to execute in Redshift. Only used when Read Mode is 'query'. Modifying statements (DROP, DELETE, UPDATE, TRUNCATE) are rejected."
                 },
+
+                # ── 3. Limits & Pagination ──
                 "limit": {
                     "type": "integer",
                     "title": "Row Limit",
