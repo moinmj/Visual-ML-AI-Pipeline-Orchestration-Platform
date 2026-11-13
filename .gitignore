@@ -54,3 +54,5 @@ scratch/
 # Object detection
 *.pt
 test_images/
+backend.zip
+ozone_log.txt

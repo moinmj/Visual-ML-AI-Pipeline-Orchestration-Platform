@@ -37,6 +37,11 @@ def tenant_root_prefix(tenant_id: int) -> str:
     return f"t{int(tenant_id)}/"
 
 
+def tenant_landing_prefix(tenant_id: int) -> str:
+    """Landing folder for database ingestion data: 'landing/db/t<tenant_id>/'. Read/register only, never deleted."""
+    return f"landing/db/t{int(tenant_id)}/"
+
+
 def tenant_prefix(tenant_id: int) -> str:
     """Folder for one tenant inside ml-workflow (default, backwards compatible)."""
     return tenant_ml_workflow_prefix(tenant_id)
@@ -60,19 +65,20 @@ def is_in_tenant_prefix(key: str, tenant_id: int, scope: str = "any") -> bool:
     """
     True only if the full object key lives inside THIS tenant's folders.
     If scope is 'ml_workflow': checks 'ml-workflow/t<tenant_id>/'.
-    If scope is 'all_tenant_data': checks 't<tenant_id>/'.
-    If scope is 'any': checks either 'ml-workflow/t<tenant_id>/' or 't<tenant_id>/'.
+    If scope is 'all_tenant_data': checks 't<tenant_id>/' or 'landing/db/t<tenant_id>/'.
+    If scope is 'any': checks 'ml-workflow/t<tenant_id>/', 't<tenant_id>/' or 'landing/db/t<tenant_id>/'.
     """
     key = (key or "").strip()
     if not key or any(part == ".." for part in key.split("/")):
         return False
     ml_prefix = tenant_ml_workflow_prefix(tenant_id)
     root_prefix = tenant_root_prefix(tenant_id)
+    landing_prefix = tenant_landing_prefix(tenant_id)
     if scope == "ml_workflow":
         return key.startswith(ml_prefix)
     if scope == "all_tenant_data":
-        return key.startswith(root_prefix)
-    return key.startswith(ml_prefix) or key.startswith(root_prefix)
+        return key.startswith(root_prefix) or key.startswith(landing_prefix)
+    return key.startswith(ml_prefix) or key.startswith(root_prefix) or key.startswith(landing_prefix)
 
 
 def _client_config() -> Config:
@@ -163,6 +169,10 @@ def delete_file_from_ozone(ozone_key: str, tenant_id: Optional[int] = None) -> b
     """
     if tenant_id is not None and not is_in_tenant_prefix(ozone_key, tenant_id):
         logger.warning(f"[Ozone] Refused to delete '{ozone_key}': outside tenant {tenant_id}'s folder")
+        return False
+    if ozone_key.lstrip("/").startswith("landing/"):
+        # Landing data is written by the ingestion pipeline. It can be browsed and registered, never deleted here.
+        logger.warning(f"[Ozone] Refused to delete '{ozone_key}': landing data is read-only")
         return False
     bucket = settings.OZONE_BUCKET
     try:
@@ -263,7 +273,9 @@ def list_ozone_objects(
     """
     Lists objects inside the caller's tenant space in Ozone.
     - scope="all_tenant_data": the WHOLE tenant space = the platform folder 'ml-workflow/t<tenant_id>/'
-      (datasets, unstructured, outputs ...) PLUS the bucket-level folder 't<tenant_id>/'. 'relative_path' is the full key.
+      (datasets, unstructured, outputs ...) PLUS the bucket-level folder 't<tenant_id>/' PLUS the database
+      landing folder 'landing/db/t<tenant_id>/'. 'relative_path' is the full key.
+    - scope="landing": only the database landing folder 'landing/db/t<tenant_id>/'. 'relative_path' is the full key.
     - scope="ml_workflow": lists under 'ml-workflow/t<tenant_id>/', with optional
       folder='datasets' (structured data) or folder='unstructured' (unstructured media).
     - media_type: optional filter by 'image', 'audio', 'video', 'tabular', 'other', 'folder' or 'all'.
@@ -283,8 +295,15 @@ def list_ozone_objects(
 
     if scope == "bucket":
         scans = [("", clean_prefix)]  # the whole bucket; 'relative_path' is the full key
+    elif scope == "landing":
+        landing = tenant_landing_prefix(tenant_id)
+        scans = [(landing, f"{landing}{clean_prefix}")]  # only 'landing/db/t<tenant_id>/'; 'relative_path' is the full key
     elif scope == "all_tenant_data":
-        roots = list(dict.fromkeys([tenant_ml_workflow_prefix(tenant_id), tenant_root_prefix(tenant_id)]))
+        roots = list(dict.fromkeys([
+            tenant_ml_workflow_prefix(tenant_id),
+            tenant_root_prefix(tenant_id),
+            tenant_landing_prefix(tenant_id),
+        ]))
         scans = [(root, f"{root}{clean_prefix}") for root in roots]
     else:
         base_prefix = tenant_ml_workflow_prefix(tenant_id)
@@ -328,7 +347,7 @@ def list_ozone_objects(
                     break
                 items.append({
                     "key": key,
-                    "relative_path": key if scope == "all_tenant_data" else key[len(base_prefix):],
+                    "relative_path": key if scope in ("all_tenant_data", "landing") else key[len(base_prefix):],
                     "file_name": key.rsplit("/", 1)[-1],
                     "file_format": ext or "unknown",
                     "size_bytes": obj["Size"],
