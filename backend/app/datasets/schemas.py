@@ -38,6 +38,16 @@ class OzoneObjectResponse(DatasetResponse):
     key: Optional[str] = Field(None, description="Full Ozone key")
     relative_path: Optional[str] = Field(None, description="Path relative to tenant root or ml-workflow root")
     scope: Optional[str] = Field(None, description="all_tenant_data or ml_workflow")
+    dataset_id: Optional[str] = Field(
+        None,
+        description="UUID of the dataset record for this file if it is already registered, otherwise null. "
+                    "Use this (not 'id', which is the storage key) in every API that takes a dataset_id.",
+    )
+    can_register: bool = Field(
+        False,
+        description="True when this is a tabular file inside the caller's own tenant folders and can be "
+                    "registered with POST /datasets/ozone/register.",
+    )
 
 
 class ColumnSchemaItem(BaseModel):
@@ -63,4 +73,3 @@ class DatasetProfileResponse(BaseModel):
     id: str
     name: str
     profile: Dict[str, Any]
-    

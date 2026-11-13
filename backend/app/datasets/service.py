@@ -1,8 +1,10 @@
+import re
 import uuid
 import pandas as pd
 from typing import List, Optional, Dict, Any, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, func, or_
+from sqlalchemy.exc import IntegrityError
 from fastapi import UploadFile
 
 from backend.app.datasets.models import Dataset
@@ -13,6 +15,11 @@ except ImportError:
 from backend.app.profiling.profiler import DataProfiler
 from backend.app.core.exceptions import NotFoundException, ValidationException
 from backend.app.core.logging import logger
+
+
+TABULAR_FORMATS = {"csv", "xlsx", "xls", "json", "parquet"}
+# Files saved as datasets/{dataset_id}_{name}: the UUID prefix is the dataset id.
+UUID_PREFIX = re.compile(r"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})_")
 
 
 class DatasetService:
@@ -195,7 +202,12 @@ class DatasetService:
             else:
                 dt = now_utc
 
-            folder_label = f"ml-workflow/{folder}" if scope == "ml_workflow" else ("bucket" if scope == "bucket" else "all_tenant_data")
+            folder_label = (
+                f"ml-workflow/{folder}" if scope == "ml_workflow"
+                else "landing/db" if scope == "landing"
+                else "bucket" if scope == "bucket"
+                else "all_tenant_data"
+            )
             results.append({
                 "id": key,
                 "name": stem,
@@ -229,6 +241,7 @@ class DatasetService:
         Registers an existing Ozone object as a dataset, without re-uploading it.
         Reads it once to compute the same profile/schema an upload would get.
         """
+        ozone_key = (ozone_key or "").strip().lstrip("/")   # bucket-scope keys can start with "/"
         ext = ozone_key.rsplit(".", 1)[-1].lower() if "." in ozone_key else ""
         if ext not in ["csv", "xlsx", "xls", "json", "parquet"]:
             raise ValidationException(f"Unsupported file format: '.{ext}'. Allowed: CSV, XLSX, JSON, Parquet.")
@@ -236,11 +249,32 @@ class DatasetService:
         from backend.app.core.config import settings
         from backend.app.infrastructure.storage.ozone_client import is_in_tenant_prefix, tenant_prefix
         if not is_in_tenant_prefix(ozone_key, tenant_id):
-            raise ValidationException(f"Only files under '{tenant_prefix(tenant_id)}' can be registered.")
+            raise ValidationException(
+                f"Only files under '{tenant_prefix(tenant_id)}', 't{tenant_id}/' or 'landing/db/t{tenant_id}/' can be registered."
+            )
         storage_path = f"s3://{settings.OZONE_BUCKET}/{ozone_key}"
-        dataset_id = str(uuid.uuid4())
+
+        # Idempotent: the same file in the same tenant is registered once. Done after the
+        # tenant-prefix check and before the (expensive) read, and always scoped to the tenant.
+        existing = (await db.execute(
+            select(Dataset).where(Dataset.tenant_id == tenant_id, Dataset.storage_path == storage_path)
+        )).scalars().first()
+        if existing:
+            return existing
+
         file_name = ozone_key.rsplit("/", 1)[-1]
         dataset_name = name or file_name.rsplit(".", 1)[0]
+
+        # Files saved as datasets/{dataset_id}_{name} keep their own id: if the UUID in the
+        # file name is not used by any dataset row yet, reuse it, so the id the file already
+        # carries is the dataset id. Otherwise (no UUID prefix, or id already taken) a new id.
+        dataset_id = str(uuid.uuid4())
+        m = UUID_PREFIX.match(file_name)
+        if m:
+            candidate = m.group(1).lower()
+            taken = (await db.execute(select(Dataset.id).where(Dataset.id == candidate))).first()
+            if not taken:
+                dataset_id = candidate
 
         try:
             df = storage_manager.read_dataframe(storage_path, tenant_id)
@@ -266,11 +300,53 @@ class DatasetService:
             quality_score=profile_data["quality_score"],
             profile=profile_data
         )
-        db.add(dataset)
-        await db.commit()
+        try:
+            db.add(dataset)
+            await db.commit()
+        except IntegrityError:
+            # The reused id was taken by a row this session could not see: fall back to a new id.
+            await db.rollback()
+            dataset.id = str(uuid.uuid4())
+            db.add(dataset)
+            await db.commit()
         await db.refresh(dataset)
         logger.info(f"Dataset registered from Ozone: {dataset.id} ({dataset.name}) -> {storage_path}")
         return dataset
+
+    @staticmethod
+    async def annotate_ozone_items(db: AsyncSession, tenant_id: int, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Adds `dataset_id` (UUID of the registered dataset for the file, else None) and
+        `can_register` to each browse item. 'id' / 'key' are left untouched.
+        One query for the caller's tenant; matching is by exact storage_path.
+        """
+        from backend.app.core.config import settings
+        from backend.app.infrastructure.storage.ozone_client import is_in_tenant_prefix
+
+        rows = (await db.execute(
+            select(Dataset.id, Dataset.storage_path).where(Dataset.tenant_id == tenant_id)
+        )).all()
+        id_by_path = {path: ds_id for ds_id, path in rows}
+        known_ids = {str(ds_id).lower(): ds_id for ds_id, _ in rows}
+
+        for it in items:
+            key = (it.get("key") or "").lstrip("/")
+            clean_path = f"s3://{settings.OZONE_BUCKET}/{key}"
+            ds_id = id_by_path.get(it.get("storage_path")) or id_by_path.get(clean_path)
+            if not ds_id:
+                # Fallback: the file is named {dataset_id}_{name}. Use that id only if a dataset
+                # row with exactly that id exists for this tenant, so the id always works in the APIs.
+                m = UUID_PREFIX.match(it.get("file_name") or "")
+                if m:
+                    ds_id = known_ids.get(m.group(1).lower())
+            it["dataset_id"] = ds_id
+            it["can_register"] = bool(
+                key
+                and it.get("media_type") != "folder"
+                and it.get("file_format") in TABULAR_FORMATS
+                and is_in_tenant_prefix(key, tenant_id)
+            )
+        return items
 
     @staticmethod
     async def get_dataset(db: AsyncSession, dataset_id: str, tenant_id: int) -> Dataset:
