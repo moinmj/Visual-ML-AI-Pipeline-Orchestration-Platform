@@ -356,6 +356,17 @@ class DAGExecutor:
         governance_summary = None
 
         pipeline_context = dict(context or {})
+        from backend.app.core.tenant_context import (
+            get_current_workflow_id,
+            get_current_execution_id,
+            get_current_session_id,
+        )
+        if "workflow_id" not in pipeline_context or not pipeline_context["workflow_id"]:
+            pipeline_context["workflow_id"] = getattr(workflow, "id", None) or getattr(workflow, "workflow_id", None) or get_current_workflow_id()
+        if "execution_id" not in pipeline_context or not pipeline_context["execution_id"]:
+            pipeline_context["execution_id"] = execution_id or get_current_execution_id()
+        if "session_id" not in pipeline_context or not pipeline_context["session_id"]:
+            pipeline_context["session_id"] = get_current_session_id()
         if initial_df is not None:
             pipeline_context["dataframe"] = initial_df.copy()
 

@@ -58,7 +58,14 @@ from backend.app.engine.inference import (
     CombinedDatasetResponse
 )
 from backend.app.core.security import get_current_user, require_role, require_permission, require_export_access, resolve_session, TokenData
-from backend.app.core.tenant_context import get_current_tenant_id, tenant_cache_dir, set_current_tenant_id
+from backend.app.core.tenant_context import (
+    get_current_tenant_id,
+    tenant_cache_dir,
+    set_current_tenant_id,
+    set_current_workflow_id,
+    set_current_execution_id,
+    get_current_session_id,
+)
 
 from backend.app.datasets.models import Dataset
 from backend.app.workflows.endpoint_router import endpoint_router  # noqa: F401
@@ -2286,6 +2293,9 @@ async def execute_workflow(
 
     _require_resumable(resume_from)
     execution_id = str(uuid.uuid4())
+    if target_id:
+        set_current_workflow_id(str(target_id))
+    set_current_execution_id(str(execution_id))
     tid = get_current_tenant_id()
     await preload_workflow_datasets(workflow=workflow, db=db, tenant_id=tid)
 
@@ -2293,7 +2303,12 @@ async def execute_workflow(
         execution_id=execution_id,
         workflow=workflow,
         include_node_outputs=include_node_outputs,
-        resume_from=resume_from
+        resume_from=resume_from,
+        context={
+            "workflow_id": str(target_id) if target_id else None,
+            "execution_id": str(execution_id),
+            "session_id": get_current_session_id(),
+        }
     )
     if target_id:
         result.workflow_id = target_id
@@ -3126,6 +3141,9 @@ async def test_workflow_node_step(
                 node_configs = wf.node_configs
 
     session_id = payload.session_id or wf_id or f"draft_{uuid.uuid4().hex[:12]}"
+    if wf_id:
+        set_current_workflow_id(str(wf_id))
+    set_current_execution_id(str(session_id))
 
     return await NodeStepExecutor.execute_node_step(
         target_node_id=node_id,

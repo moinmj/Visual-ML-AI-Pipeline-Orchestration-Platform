@@ -23,6 +23,9 @@ from typing import Optional
 
 _current_tenant_id: ContextVar[Optional[int]] = ContextVar("current_tenant_id", default=None)
 _current_user_id: ContextVar[Optional[str]] = ContextVar("current_user_id", default=None)
+_current_session_id: ContextVar[Optional[str]] = ContextVar("current_session_id", default=None)
+_current_workflow_id: ContextVar[Optional[str]] = ContextVar("current_workflow_id", default=None)
+_current_execution_id: ContextVar[Optional[str]] = ContextVar("current_execution_id", default=None)
 
 
 def set_current_tenant_id(tenant_id: Optional[int]) -> None:
@@ -40,6 +43,33 @@ def set_current_user_id(user_id: Optional[str]) -> None:
 
 def get_current_user_id() -> Optional[str]:
     return _current_user_id.get()
+
+
+def set_current_session_id(session_id: Optional[str]) -> None:
+    """The active caller's authentication session ID ('sid')."""
+    _current_session_id.set(str(session_id) if session_id not in (None, "") else None)
+
+
+def get_current_session_id() -> Optional[str]:
+    return _current_session_id.get()
+
+
+def set_current_workflow_id(workflow_id: Optional[str]) -> None:
+    """The active workflow ID executing on the canvas."""
+    _current_workflow_id.set(str(workflow_id) if workflow_id not in (None, "") else None)
+
+
+def get_current_workflow_id() -> Optional[str]:
+    return _current_workflow_id.get()
+
+
+def set_current_execution_id(execution_id: Optional[str]) -> None:
+    """The active execution ID or session ID executing on the canvas."""
+    _current_execution_id.set(str(execution_id) if execution_id not in (None, "") else None)
+
+
+def get_current_execution_id() -> Optional[str]:
+    return _current_execution_id.get()
 
 
 def tenant_cache_dir() -> str:

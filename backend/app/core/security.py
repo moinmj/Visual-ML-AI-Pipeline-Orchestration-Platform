@@ -45,7 +45,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from backend.app.core.config import settings
 from backend.app.core.logging import logger
-from backend.app.core.tenant_context import set_current_tenant_id, set_current_user_id
+from backend.app.core.tenant_context import set_current_tenant_id, set_current_user_id, set_current_session_id
 
 COOKIE_NAME    = "sid"
 CSRF_HEADER    = "X-CSRF-Token"
@@ -245,14 +245,12 @@ async def resolve_session(sid: str, *, x_tenant_id: Optional[int] = None, set_co
     if set_context:
         set_current_tenant_id(user.tenant_id)
         set_current_user_id(user.sub)
+        set_current_session_id(sid)
     return user
 
 
 def _extract_sid(request: Request) -> Tuple[Optional[str], bool]:
-    """Return (sid, from_cookie). Cookie first (browser), then header / Bearer / query param."""
-    sid = request.cookies.get(COOKIE_NAME)
-    if sid:
-        return sid.strip(), True
+    """Return (sid, from_cookie). Header / Bearer / query param first (explicit API client), then cookie (browser)."""
     hdr = request.headers.get(SESSION_HEADER)
     if hdr:
         return hdr.strip(), False
@@ -262,6 +260,9 @@ def _extract_sid(request: Request) -> Tuple[Optional[str], bool]:
     param = request.query_params.get("sid") or request.query_params.get("session_id")
     if param:
         return param.strip(), False
+    sid = request.cookies.get(COOKIE_NAME)
+    if sid:
+        return sid.strip(), True
     return None, False
 
 
