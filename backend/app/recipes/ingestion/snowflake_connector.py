@@ -88,58 +88,6 @@ class SnowflakeConnectorRecipe(BaseRecipe):
                         "equals": "sso"
                     }
                 },
-                "sso_account": {
-                    "type": "string",
-                    "title": "Snowflake Account Identifier",
-                    "input_type": "text",
-                    "default": "",
-                    "placeholder": "e.g. xy12345.us-east-1 or myorg-myaccount",
-                    "section": "connection",
-                    "description": "Snowflake account identifier for SSO routing.",
-                    "visible_when": {
-                        "field": "connection_mode",
-                        "equals": "sso"
-                    }
-                },
-                "sso_user": {
-                    "type": "string",
-                    "title": "Username / SSO Email",
-                    "input_type": "text",
-                    "default": "",
-                    "placeholder": "e.g. user@company.com or analyst",
-                    "section": "connection",
-                    "description": "Snowflake username or SSO identity email.",
-                    "visible_when": {
-                        "field": "connection_mode",
-                        "equals": "sso"
-                    }
-                },
-                "sso_role": {
-                    "type": "string",
-                    "title": "Role",
-                    "input_type": "text",
-                    "default": "PUBLIC",
-                    "placeholder": "PUBLIC",
-                    "section": "connection",
-                    "description": "Snowflake security role to assume (e.g. 'DATA_ANALYST', 'SYSADMIN', 'PUBLIC').",
-                    "visible_when": {
-                        "field": "connection_mode",
-                        "equals": "sso"
-                    }
-                },
-                "sso_warehouse": {
-                    "type": "string",
-                    "title": "Warehouse",
-                    "input_type": "text",
-                    "default": "",
-                    "placeholder": "e.g. COMPUTE_WH",
-                    "section": "connection",
-                    "description": "Virtual warehouse used to execute queries.",
-                    "visible_when": {
-                        "field": "connection_mode",
-                        "equals": "sso"
-                    }
-                },
                 "sso_token": {
                     "type": "string",
                     "title": "OAuth Access Token",
@@ -173,24 +121,16 @@ class SnowflakeConnectorRecipe(BaseRecipe):
                     "default": "",
                     "placeholder": "e.g. xy12345.us-east-1 or myorg-myaccount",
                     "section": "connection",
-                    "description": "Snowflake account identifier (e.g. 'xy12345.us-east-1' or '<orgname>-<accountname>').",
-                    "visible_when": {
-                        "field": "connection_mode",
-                        "equals": "account_credentials"
-                    }
+                    "description": "Snowflake account identifier (e.g. 'xy12345.us-east-1' or '<orgname>-<accountname>')."
                 },
                 "user": {
                     "type": "string",
-                    "title": "Username",
+                    "title": "Username / SSO Email",
                     "input_type": "text",
                     "default": "",
-                    "placeholder": "e.g. analyst or my_user",
+                    "placeholder": "e.g. user@company.com or analyst",
                     "section": "connection",
-                    "description": "Snowflake user login name.",
-                    "visible_when": {
-                        "field": "connection_mode",
-                        "equals": "account_credentials"
-                    }
+                    "description": "Snowflake username or SSO identity email."
                 },
                 "password": {
                     "type": "string",
@@ -205,19 +145,6 @@ class SnowflakeConnectorRecipe(BaseRecipe):
                         "equals": "account_credentials"
                     }
                 },
-                "warehouse": {
-                    "type": "string",
-                    "title": "Warehouse",
-                    "input_type": "text",
-                    "default": "",
-                    "placeholder": "e.g. COMPUTE_WH or ANALYTICS_WH",
-                    "section": "connection",
-                    "description": "Virtual warehouse used to execute queries (e.g. 'COMPUTE_WH', 'ANALYTICS_WH').",
-                    "visible_when": {
-                        "field": "connection_mode",
-                        "equals": "account_credentials"
-                    }
-                },
                 "role": {
                     "type": "string",
                     "title": "Role",
@@ -225,11 +152,16 @@ class SnowflakeConnectorRecipe(BaseRecipe):
                     "default": "PUBLIC",
                     "placeholder": "PUBLIC",
                     "section": "connection",
-                    "description": "Security role to assume (e.g. 'ACCOUNTADMIN', 'SYSADMIN', 'DATA_ANALYST').",
-                    "visible_when": {
-                        "field": "connection_mode",
-                        "equals": "account_credentials"
-                    }
+                    "description": "Snowflake security role to assume (e.g. 'ACCOUNTADMIN', 'SYSADMIN', 'DATA_ANALYST')."
+                },
+                "warehouse": {
+                    "type": "string",
+                    "title": "Warehouse",
+                    "input_type": "text",
+                    "default": "",
+                    "placeholder": "e.g. COMPUTE_WH or ANALYTICS_WH",
+                    "section": "connection",
+                    "description": "Virtual warehouse used to execute queries (e.g. 'COMPUTE_WH', 'ANALYTICS_WH')."
                 },
                 "connection_string": {
                     "type": "string",
@@ -388,8 +320,8 @@ class SnowflakeConnectorRecipe(BaseRecipe):
                 if not config.get("user"):
                     errors.append("Username is required in 'account_credentials' mode.")
             elif conn_mode == "sso":
-                acc = str(config.get("sso_account") or config.get("account", "")).strip()
-                usr = str(config.get("sso_user") or config.get("user", "")).strip()
+                acc = str(config.get("account") or config.get("sso_account", "")).strip()
+                usr = str(config.get("user") or config.get("sso_user", "")).strip()
                 if not acc:
                     errors.append("Snowflake Account identifier is required in 'sso' mode.")
                 if not usr:
@@ -433,13 +365,13 @@ class SnowflakeConnectorRecipe(BaseRecipe):
 
     def _resolve_connection_params(self, config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
         conn_mode = str(config.get("connection_mode", "account_credentials")).strip().lower()
-        account = str(config.get("sso_account") if conn_mode == "sso" and config.get("sso_account") else config.get("account", "xy12345.us-east-1")).strip()
-        user = str(config.get("sso_user") if conn_mode == "sso" and config.get("sso_user") else config.get("user", "analyst")).strip()
+        account = str(config.get("account") or config.get("sso_account", "xy12345.us-east-1")).strip()
+        user = str(config.get("user") or config.get("sso_user", "analyst")).strip()
         password = str(config.get("password", "")).strip()
-        warehouse = str(config.get("sso_warehouse") if conn_mode == "sso" and config.get("sso_warehouse") else config.get("warehouse", "COMPUTE_WH")).strip()
+        warehouse = str(config.get("warehouse") or config.get("sso_warehouse", "COMPUTE_WH")).strip()
         database = str(config.get("database", "ANALYTICS_DB")).strip()
         schema_name = str(config.get("schema_name", "PUBLIC")).strip()
-        role = str(config.get("sso_role") if conn_mode == "sso" and config.get("sso_role") else config.get("role", "PUBLIC")).strip()
+        role = str(config.get("role") or config.get("sso_role", "PUBLIC")).strip()
         cs = str(config.get("connection_string", "")).strip()
         sso_authenticator = str(config.get("sso_authenticator", "externalbrowser")).strip().lower()
         sso_token = str(config.get("sso_token", "")).strip()
