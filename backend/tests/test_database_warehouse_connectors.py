@@ -1277,22 +1277,20 @@ def test_connector_schema_property_ordering_consistency():
 
 
 def test_cloud_database_warehouse_sso_schema_support():
-    """Verify that all cloud database and warehouse connectors provide SSO in connection_mode with full schema."""
+    """Verify that cloud data warehouses and lakes provide SSO, while traditional DBs maintain clean host/port."""
     from backend.app.recipes.ingestion.snowflake_connector import SnowflakeConnectorRecipe
     from backend.app.recipes.ingestion.redshift_connector import RedshiftConnectorRecipe
     from backend.app.recipes.ingestion.bigquery_connector import BigQueryConnectorRecipe
+    from backend.app.recipes.ingestion.azure_data_lake_connector import AzureDataLakeConnectorRecipe
     from backend.app.recipes.ingestion.postgresql_connector import PostgreSQLConnectorRecipe
     from backend.app.recipes.ingestion.mysql_connector import MySQLConnectorRecipe
     from backend.app.recipes.ingestion.mongodb_connector import MongoDBConnectorRecipe
-    from backend.app.recipes.ingestion.azure_data_lake_connector import AzureDataLakeConnectorRecipe
 
+    # 1. Cloud Warehouses & Lakes that support native SSO
     sso_connectors = [
         (SnowflakeConnectorRecipe(), "connection_mode", ["sso_authenticator", "sso_account", "sso_user", "sso_token"]),
         (RedshiftConnectorRecipe(), "connection_mode", ["sso_provider", "sso_host", "sso_username", "sso_token"]),
         (BigQueryConnectorRecipe(), "connection_mode", ["sso_provider", "sso_access_token"]),
-        (PostgreSQLConnectorRecipe(), "connection_mode", ["sso_provider", "sso_host", "sso_username", "sso_token"]),
-        (MySQLConnectorRecipe(), "connection_mode", ["sso_provider", "sso_host", "sso_username", "sso_token"]),
-        (MongoDBConnectorRecipe(), "connection_mode", ["sso_provider", "sso_host", "sso_username", "sso_token"]),
         (AzureDataLakeConnectorRecipe(), "auth_mode", ["tenant_id", "client_id", "sso_token"]),
     ]
 
@@ -1311,15 +1309,24 @@ def test_cloud_database_warehouse_sso_schema_support():
                 f"{recipe.recipe_id}.{prop_name} visible_when mismatch: {p_def.get('visible_when')}"
             )
 
+    # 2. Traditional DBs where SSO was excluded to keep standard host/port workflows clean
+    traditional_dbs = [
+        PostgreSQLConnectorRecipe(),
+        MySQLConnectorRecipe(),
+        MongoDBConnectorRecipe()
+    ]
+    for r in traditional_dbs:
+        schema = r.get_schema()
+        mode_enum = schema["properties"]["connection_mode"]["enum"]
+        assert "sso" not in mode_enum, f"{r.recipe_id} should not have 'sso' in connection_mode: {mode_enum}"
+        assert mode_enum == ["host_port", "connection_string", "credential"], f"{r.recipe_id} enum unexpected: {mode_enum}"
+
 
 def test_cloud_database_warehouse_sso_validation_and_resolution():
-    """Verify that SSO configurations validate and resolve correctly across all cloud DBs."""
+    """Verify that SSO configurations validate and resolve correctly for native cloud data warehouses."""
     from backend.app.recipes.ingestion.snowflake_connector import SnowflakeConnectorRecipe
     from backend.app.recipes.ingestion.redshift_connector import RedshiftConnectorRecipe
     from backend.app.recipes.ingestion.bigquery_connector import BigQueryConnectorRecipe
-    from backend.app.recipes.ingestion.postgresql_connector import PostgreSQLConnectorRecipe
-    from backend.app.recipes.ingestion.mysql_connector import MySQLConnectorRecipe
-    from backend.app.recipes.ingestion.mongodb_connector import MongoDBConnectorRecipe
     from backend.app.recipes.ingestion.azure_data_lake_connector import AzureDataLakeConnectorRecipe
 
     # 1. Snowflake SSO
@@ -1360,66 +1367,7 @@ def test_cloud_database_warehouse_sso_validation_and_resolution():
         "table_id": "events"
     }) == []
 
-    # 4. PostgreSQL SSO
-    pg = PostgreSQLConnectorRecipe()
-    assert pg.validate_config({
-        "connection_mode": "sso",
-        "sso_provider": "aws_iam_rds",
-        "sso_host": "rds.amazonaws.com",
-        "sso_username": "dbuser",
-        "read_mode": "table",
-        "table_name": "users"
-    }) == []
-    pg_params = pg._resolve_connection_params({
-        "connection_mode": "sso",
-        "sso_host": "rds.amazonaws.com",
-        "sso_port": 5432,
-        "sso_username": "dbuser",
-        "sso_token": "token123",
-        "database": "users_db"
-    })
-    assert "rds.amazonaws.com" in pg_params["connection_string"]
-    assert "token123" in pg_params["connection_string"]
-
-    # 5. MySQL SSO
-    my = MySQLConnectorRecipe()
-    assert my.validate_config({
-        "connection_mode": "sso",
-        "sso_provider": "aws_iam_rds",
-        "sso_host": "rds-mysql.amazonaws.com",
-        "sso_username": "dbuser",
-        "read_mode": "table",
-        "table_name": "orders"
-    }) == []
-    my_params = my._resolve_connection_params({
-        "connection_mode": "sso",
-        "sso_host": "rds-mysql.amazonaws.com",
-        "sso_username": "dbuser",
-        "sso_token": "mysql_token",
-        "database": "shop_db"
-    })
-    assert "rds-mysql.amazonaws.com" in my_params["connection_string"]
-
-    # 6. MongoDB SSO
-    mg = MongoDBConnectorRecipe()
-    assert mg.validate_config({
-        "connection_mode": "sso",
-        "sso_provider": "mongodb_oidc",
-        "sso_host": "cluster0.mongodb.net",
-        "database": "analytics",
-        "collection": "events"
-    }) == []
-    mg_params = mg._resolve_connection_params({
-        "connection_mode": "sso",
-        "sso_provider": "mongodb_oidc",
-        "sso_host": "cluster0.mongodb.net",
-        "sso_username": "analyst@company.com",
-        "database": "analytics",
-        "collection": "events"
-    })
-    assert "authMechanism=MONGODB-OIDC" in mg_params["connection_string"]
-
-    # 7. Azure Data Lake SSO
+    # 4. Azure Data Lake SSO
     adls = AzureDataLakeConnectorRecipe()
     assert adls.validate_config({
         "auth_mode": "sso",
@@ -1428,4 +1376,5 @@ def test_cloud_database_warehouse_sso_validation_and_resolution():
         "container_name": "raw",
         "blob_path": "events/data.parquet"
     }) == []
+
 
