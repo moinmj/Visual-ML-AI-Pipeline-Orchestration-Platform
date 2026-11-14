@@ -60,10 +60,10 @@ class MongoDBConnectorRecipe(BaseRecipe):
                     "type": "string",
                     "title": "Connection Mode",
                     "input_type": "dropdown",
-                    "enum": ["host_port", "connection_string", "credential"],
+                    "enum": ["host_port", "sso", "connection_string", "credential"],
                     "default": "host_port",
                     "section": "connection",
-                    "description": "Choose connection method: standard host/port parameters, connection URI (standard or Atlas SRV), or stored credential."
+                    "description": "Choose connection method: standard host/port parameters, Single Sign-On (MongoDB Atlas OIDC / AWS IAM SSO), connection URI (standard or Atlas SRV), or stored credential."
                 },
                 "credential_id": {
                     "type": "string",
@@ -75,6 +75,71 @@ class MongoDBConnectorRecipe(BaseRecipe):
                     "visible_when": {
                         "field": "connection_mode",
                         "equals": "credential"
+                    }
+                },
+                "sso_provider": {
+                    "type": "string",
+                    "title": "SSO / OIDC Provider",
+                    "input_type": "dropdown",
+                    "enum": ["mongodb_oidc", "aws_iam"],
+                    "default": "mongodb_oidc",
+                    "section": "connection",
+                    "description": "MongoDB Atlas SSO authentication mechanism: MONGODB-OIDC (OpenID Connect / IdP) or MONGODB-AWS (AWS IAM SSO).",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "sso"
+                    }
+                },
+                "sso_host": {
+                    "type": "string",
+                    "title": "Host / Atlas Cluster Endpoint",
+                    "input_type": "text",
+                    "default": "",
+                    "placeholder": "e.g. cluster0.abcdef.mongodb.net or 88.222.215.30",
+                    "section": "connection",
+                    "description": "MongoDB Atlas cluster endpoint or server hostname.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "sso"
+                    }
+                },
+                "sso_port": {
+                    "type": "integer",
+                    "title": "Port",
+                    "input_type": "number",
+                    "default": 27017,
+                    "placeholder": "27017",
+                    "section": "connection",
+                    "description": "MongoDB server port (default 27017).",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "sso"
+                    }
+                },
+                "sso_username": {
+                    "type": "string",
+                    "title": "Username / IdP Identity",
+                    "input_type": "text",
+                    "default": "",
+                    "placeholder": "e.g. analyst@company.com or federated_user",
+                    "section": "connection",
+                    "description": "MongoDB Atlas SSO username or federated IdP identity.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "sso"
+                    }
+                },
+                "sso_token": {
+                    "type": "string",
+                    "title": "OIDC Access Token / AWS Session Token",
+                    "input_type": "password",
+                    "default": "",
+                    "placeholder": "Enter OIDC bearer token or AWS session token",
+                    "section": "connection",
+                    "description": "OpenID Connect (OIDC) access token or temporary AWS STS session token.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "sso"
                     }
                 },
                 "host": {
@@ -318,7 +383,11 @@ class MongoDBConnectorRecipe(BaseRecipe):
         # Validate Connection mode requirements if not simulated
         conn_mode = str(config.get("connection_mode", "connection_string")).strip().lower()
         if not config.get("simulation_mode"):
-            if conn_mode == "connection_string" and "connection_string" in config:
+            if conn_mode == "sso":
+                host_val = config.get("sso_host") or config.get("host")
+                if not host_val:
+                    errors.append("Host / Atlas cluster endpoint is required in 'sso' mode.")
+            elif conn_mode == "connection_string" and "connection_string" in config:
                 cs = str(config.get("connection_string", "")).strip()
                 if not cs and not config.get("host"):
                     errors.append("Connection string (URI) is required in 'connection_string' mode.")
@@ -357,8 +426,20 @@ class MongoDBConnectorRecipe(BaseRecipe):
                 password = c_data.get("password") or password
                 auth_source = c_data.get("auth_source") or auth_source
 
+        # SSO Mode: construct URI with Atlas OIDC or IAM authentication
+        if mode == "sso":
+            from urllib.parse import quote_plus
+            host = str(config.get("sso_host") or config.get("host", host)).strip()
+            port = int(config.get("sso_port") or config.get("port") or port)
+            username = str(config.get("sso_username") or config.get("username", username)).strip()
+            sso_provider = str(config.get("sso_provider", "mongodb_oidc")).strip().lower()
+            mechanism = "MONGODB-OIDC" if sso_provider == "mongodb_oidc" else "MONGODB-AWS"
+            auth_param = f"?authMechanism={mechanism}&authSource={quote_plus(auth_source)}" if auth_source else f"?authMechanism={mechanism}"
+            user_part = f"{quote_plus(username)}@" if username else ""
+            db_part = f"/{database}" if database else ""
+            conn_str = f"mongodb://{user_part}{host}:{port}{db_part}{auth_param}"
         # Host/Port mode: construct URI directly from components
-        if mode == "host_port" or (mode != "connection_string" and host):
+        elif mode == "host_port" or (mode != "connection_string" and host):
             from urllib.parse import quote_plus
             auth_part = f"{quote_plus(username)}:{quote_plus(password)}@" if username and password else ""
             auth_param = f"?authSource={quote_plus(auth_source)}" if auth_source else ""

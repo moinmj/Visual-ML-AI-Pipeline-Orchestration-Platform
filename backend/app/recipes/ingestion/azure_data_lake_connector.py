@@ -70,9 +70,48 @@ class AzureDataLakeConnectorRecipe(BaseRecipe):
                     "title": "Authentication Mode",
                     "input_type": "dropdown",
                     "section": "connection",
-                    "enum": ["connection_string", "sas_token", "account_key", "credential"],
+                    "enum": ["connection_string", "sas_token", "account_key", "sso", "credential"],
                     "default": "connection_string",
-                    "description": "Choose Azure Storage authentication: Connection String, SAS Token, Account Key, or Stored Credential.",
+                    "description": "Choose Azure Storage authentication: Connection String, SAS Token, Account Key, Single Sign-On (Microsoft Entra ID / Azure AD SSO), or Stored Credential.",
+                },
+                "tenant_id": {
+                    "type": "string",
+                    "title": "Azure Tenant ID",
+                    "input_type": "text",
+                    "section": "connection",
+                    "default": "",
+                    "placeholder": "e.g. 00000000-0000-0000-0000-000000000000",
+                    "description": "Microsoft Entra ID (Azure AD) Directory / Tenant ID.",
+                    "visible_when": {
+                        "field": "auth_mode",
+                        "equals": "sso",
+                    },
+                },
+                "client_id": {
+                    "type": "string",
+                    "title": "Application / Client ID",
+                    "input_type": "text",
+                    "section": "connection",
+                    "default": "",
+                    "placeholder": "e.g. 11111111-1111-1111-1111-111111111111",
+                    "description": "Registered Entra ID Enterprise App / Client ID.",
+                    "visible_when": {
+                        "field": "auth_mode",
+                        "equals": "sso",
+                    },
+                },
+                "sso_token": {
+                    "type": "string",
+                    "title": "Entra ID Bearer Token",
+                    "input_type": "password",
+                    "section": "connection",
+                    "default": "",
+                    "placeholder": "Enter Azure Entra ID OAuth 2.0 token",
+                    "description": "OAuth 2.0 access token issued by Microsoft Entra ID.",
+                    "visible_when": {
+                        "field": "auth_mode",
+                        "equals": "sso",
+                    },
                 },
                 "connection_string": {
                     "type": "string",
@@ -199,6 +238,9 @@ class AzureDataLakeConnectorRecipe(BaseRecipe):
                     errors.append("Storage account name is required in 'sas_token' mode.")
                 if not str(config.get("sas_token", "")).strip():
                     errors.append("SAS token is required in 'sas_token' mode.")
+            elif mode == "sso":
+                if not str(config.get("account_name", "")).strip():
+                    errors.append("Storage account name is required in 'sso' mode.")
             elif mode == "credential":
                 if not config.get("credential_id"):
                     errors.append("Credential ID is required in 'credential' mode.")

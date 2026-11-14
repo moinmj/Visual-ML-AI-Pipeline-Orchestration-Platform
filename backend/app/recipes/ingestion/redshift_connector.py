@@ -58,10 +58,10 @@ class RedshiftConnectorRecipe(BaseRecipe):
                     "type": "string",
                     "title": "Connection Mode",
                     "input_type": "dropdown",
-                    "enum": ["cluster_credentials", "connection_string", "credential"],
+                    "enum": ["cluster_credentials", "sso", "connection_string", "credential"],
                     "default": "cluster_credentials",
                     "section": "connection",
-                    "description": "Choose how to connect: host/cluster parameters, connection string, or stored credential."
+                    "description": "Choose how to connect: host/cluster parameters, Single Sign-On (AWS IAM / Azure AD / Okta), connection string, or stored credential."
                 },
                 "credential_id": {
                     "type": "string",
@@ -73,6 +73,97 @@ class RedshiftConnectorRecipe(BaseRecipe):
                     "visible_when": {
                         "field": "connection_mode",
                         "equals": "credential"
+                    }
+                },
+                "sso_provider": {
+                    "type": "string",
+                    "title": "SSO / IAM Provider",
+                    "input_type": "dropdown",
+                    "enum": ["aws_iam", "azure_ad", "okta", "ping_federate"],
+                    "default": "aws_iam",
+                    "section": "connection",
+                    "description": "Amazon Redshift SSO/IAM authentication provider: AWS IAM STS token, Azure AD, Okta, or PingFederate.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "sso"
+                    }
+                },
+                "sso_host": {
+                    "type": "string",
+                    "title": "Redshift Cluster Endpoint / Host",
+                    "input_type": "text",
+                    "default": "",
+                    "placeholder": "e.g. redshift-cluster-1.abcdef.us-east-1.redshift.amazonaws.com",
+                    "section": "connection",
+                    "description": "Redshift cluster endpoint hostname.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "sso"
+                    }
+                },
+                "sso_port": {
+                    "type": "integer",
+                    "title": "Port",
+                    "input_type": "number",
+                    "default": 5439,
+                    "placeholder": "5439",
+                    "section": "connection",
+                    "description": "Redshift server port (default 5439).",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "sso"
+                    }
+                },
+                "sso_username": {
+                    "type": "string",
+                    "title": "Database User / SSO Role",
+                    "input_type": "text",
+                    "default": "",
+                    "placeholder": "e.g. awsuser or analyst@company.com",
+                    "section": "connection",
+                    "description": "Redshift database username or mapped SSO federated user.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "sso"
+                    }
+                },
+                "role_arn": {
+                    "type": "string",
+                    "title": "IAM Role ARN",
+                    "input_type": "text",
+                    "default": "",
+                    "placeholder": "arn:aws:iam::123456789012:role/RedshiftSSORole",
+                    "section": "connection",
+                    "description": "AWS IAM Role ARN assumed for SSO authentication.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "sso"
+                    }
+                },
+                "idp_host": {
+                    "type": "string",
+                    "title": "IdP Host / Tenant URL",
+                    "input_type": "text",
+                    "default": "",
+                    "placeholder": "e.g. login.microsoftonline.com/<tenant_id> or company.okta.com",
+                    "section": "connection",
+                    "description": "Identity provider hostname or tenant URL used for federated Azure AD or Okta Redshift login.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "sso"
+                    }
+                },
+                "sso_token": {
+                    "type": "string",
+                    "title": "SSO / IAM Session Token",
+                    "input_type": "password",
+                    "default": "",
+                    "placeholder": "Enter temporary IAM/SSO session token",
+                    "section": "connection",
+                    "description": "Temporary STS session token or OAuth bearer token (leave blank to assume IAM role).",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "sso"
                     }
                 },
                 "host": {
@@ -282,6 +373,13 @@ class RedshiftConnectorRecipe(BaseRecipe):
                     errors.append("Host endpoint is required in 'cluster_credentials' mode.")
                 if not config.get("username"):
                     errors.append("Username is required in 'cluster_credentials' mode.")
+            elif conn_mode == "sso":
+                host_val = config.get("sso_host") or config.get("host")
+                user_val = config.get("sso_username") or config.get("username")
+                if not host_val:
+                    errors.append("Redshift cluster endpoint / host is required in 'sso' mode.")
+                if not user_val:
+                    errors.append("Database user / SSO role is required in 'sso' mode.")
             elif conn_mode == "connection_string" and "connection_string" in config:
                 cs = str(config.get("connection_string", "")).strip()
                 if not cs and not config.get("host"):
@@ -345,13 +443,21 @@ class RedshiftConnectorRecipe(BaseRecipe):
         read_mode = str(config.get("read_mode", "table")).strip().lower()
         simulation_mode = bool(config.get("simulation_mode", False))
 
-        host = str(config.get("host", "localhost")).strip()
-        port = int(config.get("port", 5439))
+        conn_mode = str(config.get("connection_mode", "cluster_credentials")).strip().lower()
+        if conn_mode == "sso":
+            host = str(config.get("sso_host") or config.get("host", "localhost")).strip()
+            port = int(config.get("sso_port") or config.get("port", 5439))
+            user = str(config.get("sso_username") or config.get("username", "awsuser")).strip()
+            password = str(config.get("sso_token") or config.get("password", "")).strip()
+        else:
+            host = str(config.get("host", "localhost")).strip()
+            port = int(config.get("port", 5439))
+            user = str(config.get("username", "awsuser")).strip()
+            password = str(config.get("password", "")).strip()
+
         database = str(config.get("database", "dev")).strip()
         schema_name = str(config.get("schema_name", "public")).strip()
         table_name = str(config.get("table_name", "sales")).strip()
-        user = str(config.get("username", "awsuser")).strip()
-        password = str(config.get("password", "")).strip()
 
         records: List[Dict[str, Any]] = []
         delivery_status = "SIMULATED"

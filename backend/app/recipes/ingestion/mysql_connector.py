@@ -61,10 +61,10 @@ class MySQLConnectorRecipe(BaseRecipe):
                     "type": "string",
                     "title": "Connection Mode",
                     "input_type": "dropdown",
-                    "enum": ["host_port", "connection_string", "credential"],
+                    "enum": ["host_port", "sso", "connection_string", "credential"],
                     "default": "host_port",
                     "section": "connection",
-                    "description": "Choose connection method: standard host/port parameters, connection URI, or stored credential."
+                    "description": "Choose connection method: standard host/port parameters, Single Sign-On (Cloud IAM / Azure AD), connection URI, or stored credential."
                 },
                 "credential_id": {
                     "type": "string",
@@ -76,6 +76,68 @@ class MySQLConnectorRecipe(BaseRecipe):
                     "visible_when": {
                         "field": "connection_mode",
                         "equals": "credential"
+                    }
+                },
+                "sso_provider": {
+                    "type": "string",
+                    "title": "SSO / Cloud IAM Provider",
+                    "input_type": "dropdown",
+                    "enum": ["aws_iam_rds", "azure_ad"],
+                    "default": "aws_iam_rds",
+                    "section": "connection",
+                    "description": "Cloud Identity & SSO provider: AWS RDS IAM Authentication or Azure Database for MySQL Entra ID SSO.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "sso"
+                    }
+                },
+                "sso_host": {
+                    "type": "string",
+                    "title": "Host",
+                    "input_type": "text",
+                    "default": "localhost",
+                    "section": "connection",
+                    "description": "MySQL server hostname or cloud endpoint.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "sso"
+                    }
+                },
+                "sso_port": {
+                    "type": "integer",
+                    "title": "Port",
+                    "input_type": "number",
+                    "default": 3306,
+                    "section": "connection",
+                    "description": "MySQL server port (default 3306).",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "sso"
+                    }
+                },
+                "sso_username": {
+                    "type": "string",
+                    "title": "Username / IAM Role",
+                    "input_type": "text",
+                    "default": "root",
+                    "section": "connection",
+                    "description": "Database user or IAM role mapped in MySQL.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "sso"
+                    }
+                },
+                "sso_token": {
+                    "type": "string",
+                    "title": "IAM / SSO Auth Token",
+                    "input_type": "password",
+                    "default": "",
+                    "placeholder": "Enter RDS IAM auth token or Azure Entra bearer token",
+                    "section": "connection",
+                    "description": "Cloud IAM authentication token or Entra ID bearer token used in place of a static password.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "sso"
                     }
                 },
                 "host": {
@@ -373,7 +435,14 @@ class MySQLConnectorRecipe(BaseRecipe):
         # Validate Connection mode requirements if not simulated
         conn_mode = str(config.get("connection_mode", "host_port")).strip().lower()
         if not config.get("simulation_mode"):
-            if conn_mode == "connection_string":
+            if conn_mode == "sso":
+                host_val = config.get("sso_host") or config.get("host")
+                user_val = config.get("sso_username") or config.get("username")
+                if not host_val:
+                    errors.append("Host endpoint is required in 'sso' mode.")
+                if not user_val:
+                    errors.append("Username / IAM Role is required in 'sso' mode.")
+            elif conn_mode == "connection_string":
                 cs = str(config.get("connection_string", "")).strip()
                 if not cs:
                     errors.append("Connection string (URI) is required in 'connection_string' mode.")
@@ -416,7 +485,16 @@ class MySQLConnectorRecipe(BaseRecipe):
             username = os.getenv("MYSQL_USER", "root")
 
         # Parse connection string if supplied
-        if mode == "connection_string" or (conn_str and not host):
+        if mode == "sso":
+            host = str(config.get("sso_host") or config.get("host", "localhost")).strip()
+            port = int(config.get("sso_port") or config.get("port", 3306))
+            username = str(config.get("sso_username") or config.get("username", "root")).strip()
+            password = str(config.get("sso_token") or config.get("password", "")).strip()
+            quoted_user = quote_plus(str(username)) if username else ""
+            quoted_pass = quote_plus(str(password)) if password else ""
+            auth_part = f"{quoted_user}:{quoted_pass}@" if (quoted_user or quoted_pass) else ""
+            conn_str = f"mysql+pymysql://{auth_part}{host}:{port}/{database}?charset={charset}"
+        elif mode == "connection_string" or (conn_str and not host):
             try:
                 parsed = urlparse(conn_str)
                 if parsed.hostname:

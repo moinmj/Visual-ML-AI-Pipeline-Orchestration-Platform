@@ -59,10 +59,10 @@ class BigQueryConnectorRecipe(BaseRecipe):
                     "type": "string",
                     "title": "Auth Mode",
                     "input_type": "dropdown",
-                    "enum": ["service_account_json", "credentials_file", "adc", "credential"],
+                    "enum": ["service_account_json", "credentials_file", "adc", "sso", "credential"],
                     "default": "service_account_json",
                     "section": "connection",
-                    "description": "Method of authentication: Service Account JSON key string, credentials file path, ADC, or stored credential."
+                    "description": "Method of authentication: Service Account JSON key string, credentials file path, Application Default Credentials (ADC), Single Sign-On (Google SSO / WIF), or stored credential."
                 },
                 "credential_id": {
                     "type": "string",
@@ -74,6 +74,45 @@ class BigQueryConnectorRecipe(BaseRecipe):
                     "visible_when": {
                         "field": "connection_mode",
                         "equals": "credential"
+                    }
+                },
+                "sso_provider": {
+                    "type": "string",
+                    "title": "SSO Provider",
+                    "input_type": "dropdown",
+                    "enum": ["google_sso", "workforce_identity_federation"],
+                    "default": "google_sso",
+                    "section": "connection",
+                    "description": "Google Cloud SSO mechanism: Google Workspace OAuth SSO or Workforce Identity Federation (WIF).",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "sso"
+                    }
+                },
+                "sso_access_token": {
+                    "type": "string",
+                    "title": "OAuth / SSO Access Token",
+                    "input_type": "password",
+                    "default": "",
+                    "placeholder": "Enter Google OAuth 2.0 access token",
+                    "section": "connection",
+                    "description": "OAuth 2.0 Bearer access token for BigQuery API authorization.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "sso"
+                    }
+                },
+                "workforce_pool_provider": {
+                    "type": "string",
+                    "title": "Workforce Pool Provider Resource",
+                    "input_type": "text",
+                    "default": "",
+                    "placeholder": "locations/global/workforcePools/my-pool/providers/my-idp",
+                    "section": "connection",
+                    "description": "GCP Workforce Identity Federation pool provider resource identifier (used when SSO Provider is WIF).",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "sso"
                     }
                 },
                 "project_id": {
@@ -255,6 +294,10 @@ class BigQueryConnectorRecipe(BaseRecipe):
                 fpath = str(config.get("credentials_file_path", "")).strip()
                 if not fpath:
                     errors.append("Key file path is required in 'credentials_file' mode.")
+            elif conn_mode == "sso":
+                sso_provider = str(config.get("sso_provider", "google_sso")).strip().lower()
+                if sso_provider == "workforce_identity_federation" and not str(config.get("workforce_pool_provider", "")).strip():
+                    errors.append("Workforce Pool Provider Resource is required when SSO Provider is WIF.")
             elif conn_mode == "credential":
                 if not config.get("credential_id"):
                     errors.append("Credential ID is required in 'credential' mode.")
@@ -344,6 +387,14 @@ class BigQueryConnectorRecipe(BaseRecipe):
                 elif conn_mode == "credentials_file" and fpath and os.path.exists(fpath):
                     creds = service_account.Credentials.from_service_account_file(fpath)
                     client = bigquery.Client(project=project_id, credentials=creds)
+                elif conn_mode == "sso":
+                    sso_token = str(config.get("sso_access_token", "")).strip()
+                    if sso_token:
+                        from google.oauth2.credentials import Credentials
+                        creds = Credentials(token=sso_token)
+                        client = bigquery.Client(project=project_id, credentials=creds)
+                    else:
+                        client = bigquery.Client(project=project_id)
                 else:
                     client = bigquery.Client(project=project_id)
 

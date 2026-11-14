@@ -62,9 +62,9 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                     "title": "Connection Mode",
                     "input_type": "dropdown",
                     "section": "connection",
-                    "enum": ["host_port", "connection_string", "credential"],
+                    "enum": ["host_port", "sso", "connection_string", "credential"],
                     "default": "host_port",
-                    "description": "Choose how to connect: standard host/port parameters, full connection string (URI), or stored credential."
+                    "description": "Choose how to connect: standard host/port parameters, Single Sign-On (Cloud IAM / Entra ID / Okta), full connection string (URI), or stored credential."
                 },
                 "credential_id": {
                     "type": "string",
@@ -76,6 +76,68 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                     "visible_when": {
                         "field": "connection_mode",
                         "equals": "credential"
+                    }
+                },
+                "sso_provider": {
+                    "type": "string",
+                    "title": "SSO / Cloud IAM Provider",
+                    "input_type": "dropdown",
+                    "enum": ["aws_iam_rds", "azure_ad", "okta"],
+                    "default": "aws_iam_rds",
+                    "section": "connection",
+                    "description": "Cloud Identity & SSO provider: AWS RDS IAM Authentication, Azure Database for PostgreSQL Entra ID SSO, or Okta token.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "sso"
+                    }
+                },
+                "sso_host": {
+                    "type": "string",
+                    "title": "Host",
+                    "input_type": "text",
+                    "default": "localhost",
+                    "section": "connection",
+                    "description": "PostgreSQL server hostname or cloud endpoint.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "sso"
+                    }
+                },
+                "sso_port": {
+                    "type": "integer",
+                    "title": "Port",
+                    "input_type": "number",
+                    "default": 5432,
+                    "section": "connection",
+                    "description": "PostgreSQL server port (default 5432).",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "sso"
+                    }
+                },
+                "sso_username": {
+                    "type": "string",
+                    "title": "Username / IAM Role",
+                    "input_type": "text",
+                    "default": "postgres",
+                    "section": "connection",
+                    "description": "Database user or IAM identity mapped in PostgreSQL.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "sso"
+                    }
+                },
+                "sso_token": {
+                    "type": "string",
+                    "title": "IAM / SSO Auth Token",
+                    "input_type": "password",
+                    "default": "",
+                    "placeholder": "Enter IAM RDS auth token or Azure Entra bearer token",
+                    "section": "connection",
+                    "description": "Cloud IAM authentication token or Entra ID bearer token used in place of a static password.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "sso"
                     }
                 },
                 "host": {
@@ -444,7 +506,14 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
         ).strip().lower()
 
         if not config.get("simulation_mode"):
-            if conn_mode == "connection_string":
+            if conn_mode == "sso":
+                host_val = config.get("sso_host") or config.get("host")
+                user_val = config.get("sso_username") or config.get("username")
+                if not host_val:
+                    errors.append("Host endpoint is required in 'sso' mode.")
+                if not user_val:
+                    errors.append("Username / IAM Role is required in 'sso' mode.")
+            elif conn_mode == "connection_string":
                 cs = str(config.get("connection_string", "")).strip()
                 if not cs:
                     errors.append("Connection string (URI) is required in 'connection_string' mode.")
@@ -493,7 +562,20 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
             username = os.getenv("PGUSER", os.getenv("POSTGRES_USER", "postgres"))
 
         # Synchronize connection parameters
-        if mode == "host_port":
+        if mode == "sso":
+            host = str(config.get("sso_host") or config.get("host", "localhost")).strip()
+            try:
+                port = int(config.get("sso_port") or config.get("port", 5432))
+            except (ValueError, TypeError):
+                port = 5432
+            username = str(config.get("sso_username") or config.get("username", "postgres")).strip()
+            password = str(config.get("sso_token") or config.get("password", "")).strip()
+            quoted_user = quote_plus(str(username)) if username else ""
+            quoted_pass = quote_plus(str(password)) if password else ""
+            auth_part = f"{quoted_user}:{quoted_pass}@" if (quoted_user or quoted_pass) else ""
+            ssl_param = f"?sslmode={ssl_mode}" if ssl_mode else ""
+            conn_str = f"postgresql://{auth_part}{host}:{port}/{database}{ssl_param}"
+        elif mode == "host_port":
             # Direct parameters mode: build connection string from explicit fields with URL-encoded password
             quoted_user = quote_plus(str(username)) if username else ""
             quoted_pass = quote_plus(str(password)) if password else ""
