@@ -296,17 +296,15 @@ class GCSConnectorRecipe(BaseRecipe):
                 delivery_status = "LIVE"
                 status_msg = f"Successfully read {len(records)} records from gs://{bucket}/{blob} (format: {format_type})."
             except ImportError:
-                status_msg = "google-cloud-storage driver not installed. Using benchmark simulation fallback."
-                logger.info(status_msg)
+                raise ValidationException("google-cloud-storage driver not installed. Please install 'google-cloud-storage' to connect.")
             except Exception as e:
                 logger.warning(f"GCS ingestion failed: {e}")
-                status_msg = f"GCS ingestion failed ({str(e)}). Using benchmark simulation fallback."
+                raise ValidationException(f"Google Cloud Storage ingestion failed: {str(e)}")
 
-        # Fallback to realistic benchmark data
-        if not records:
+        # Simulation Mode (ONLY when simulation_mode is True)
+        if simulation_mode:
             records = self._generate_benchmark_data(config, bucket, blob)
-            if not status_msg:
-                status_msg = f"Loaded {len(records)} benchmark records for GCS '{uri or 'analytics-bucket'}'."
+            status_msg = f"Loaded {len(records)} benchmark records for GCS '{uri or 'analytics-bucket'}'."
 
         df_out = pd.DataFrame(records)
         duration_ms = int((time.time() - start_time) * 1000)

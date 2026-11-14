@@ -601,6 +601,33 @@ class NodeStepExecutor:
                     "suggestion": err_suggestion,
                     "duration_ms": duration_ms
                 }
+                # Record failure metadata and clear any stale dataframe cache from previous runs
+                try:
+                    sdir = cls.get_session_dir(session_id)
+                    stale_df = sdir / f"node_{nid}_df.parquet"
+                    if stale_df.exists():
+                        stale_df.unlink()
+                    meta_fail = {
+                        "node_id": nid,
+                        "recipe_id": r_id,
+                        "status": "FAILED",
+                        "duration_ms": duration_ms,
+                        "row_count": 0,
+                        "columns": [],
+                        "column_types": {},
+                        "preview_rows": [],
+                        "error_message": str(ex),
+                        "error_title": err_title,
+                        "error_suggestion": err_suggestion,
+                        "output_summary": err_summary,
+                        "timestamp": time.time()
+                    }
+                    meta_file = sdir / f"node_{nid}_meta.json"
+                    with open(meta_file, "w", encoding="utf-8") as f:
+                        json.dump(make_json_safe(meta_fail), f, indent=2, default=str)
+                except Exception as clean_err:
+                    logger.debug(f"Could not record failure metadata for node {nid}: {clean_err}")
+
                 return None, NodeTestStepResponse(
                     success=False,
                     session_id=session_id,

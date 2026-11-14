@@ -322,17 +322,15 @@ class S3DataLakeConnectorRecipe(BaseRecipe):
                 delivery_status = "LIVE"
                 status_msg = f"Successfully read {len(records)} records from s3://{bucket}/{key} (format: {format_type})."
             except ImportError:
-                status_msg = "boto3 or pyarrow driver not installed. Using benchmark simulation fallback."
-                logger.info(status_msg)
+                raise ValidationException("boto3 or pyarrow driver not installed. Please install 'boto3' and 'pyarrow' to connect to S3.")
             except Exception as e:
                 logger.warning(f"S3 ingestion failed: {e}")
-                status_msg = f"S3 ingestion failed ({e}). Using benchmark simulation fallback."
+                raise ValidationException(f"Amazon S3 Data Lake ingestion failed: {str(e)}")
 
-        # Fallback to realistic benchmark data
-        if not records:
+        # Simulation Mode (ONLY when simulation_mode is True)
+        if simulation_mode:
             records = self._generate_benchmark_data(config)
-            if not status_msg:
-                status_msg = f"Loaded {len(records)} benchmark records for S3 Data Lake '{uri}'."
+            status_msg = f"Loaded {len(records)} benchmark records for S3 Data Lake '{uri}'."
 
         df_out = pd.DataFrame(records) if pd is not None else records
         duration_ms = int((time.time() - start_time) * 1000)

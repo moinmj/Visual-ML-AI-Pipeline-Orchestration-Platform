@@ -17,6 +17,7 @@ except ImportError:
     pd = None
 
 from backend.app.recipes.base.recipe import BaseRecipe, RecipePort
+from backend.app.core.exceptions import ValidationException
 from backend.app.core.logging import logger
 from backend.app.core.config import settings
 
@@ -226,17 +227,15 @@ class WebSocketListenerRecipe(BaseRecipe):
                 delivery_status = "LIVE"
                 status_msg = f"Captured {len(records)} live streaming messages from WebSocket feed '{url}'."
             except ImportError:
-                status_msg = "websocket-client driver not installed. Using benchmark simulation fallback."
-                logger.info(status_msg)
+                raise ValidationException("websocket-client driver not installed. Please install 'websocket-client' to listen to WebSocket feeds.")
             except Exception as e:
                 logger.warning(f"WebSocket connection failed: {e}")
-                status_msg = f"WebSocket connection failed ({e}). Using benchmark simulation fallback."
+                raise ValidationException(f"WebSocket connection failed: {str(e)}")
 
-        # Fallback to realistic benchmark data
-        if not records:
+        # Simulation Mode (ONLY when simulation_mode is True)
+        if simulation_mode:
             records = self._generate_benchmark_data(config)
-            if not status_msg:
-                status_msg = f"Loaded {len(records)} benchmark streaming messages for WebSocket feed '{url}'."
+            status_msg = f"Loaded {len(records)} benchmark streaming messages for WebSocket feed '{url}'."
 
         if pd is not None and records:
             if flatten_json:
