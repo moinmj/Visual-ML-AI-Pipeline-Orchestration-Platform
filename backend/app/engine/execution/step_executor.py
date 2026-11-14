@@ -282,7 +282,13 @@ class NodeStepExecutor:
         Executes a single visual canvas node in isolation or auto-resolves unexecuted ancestors.
         Returns immediate schema, preview rows, metrics, and execution diagnostics.
         """
-        from backend.app.core.tenant_context import get_current_tenant_id, with_tenant_config
+        from backend.app.core.tenant_context import (
+            get_current_tenant_id,
+            with_tenant_config,
+            get_current_workflow_id,
+            get_current_execution_id,
+            get_current_session_id,
+        )
         if tenant_id is None:
             tenant_id = get_current_tenant_id()
         session_id = session_id or "default_session"
@@ -532,8 +538,12 @@ class NodeStepExecutor:
 
             # Execute Recipe
             try:
-                # Session Context for model/scaler propagation
+                # Session Context for model/scaler propagation & endpoint URLs
                 session_context = dict(node_inputs)
+                session_context["session_id"] = session_id
+                session_context["workflow_id"] = get_current_workflow_id() or session_id
+                session_context["execution_id"] = get_current_execution_id() or session_id
+                session_context["auth_session_id"] = get_current_session_id()
                 outputs = await asyncio.to_thread(
                     recipe.execute,
                     inputs=node_inputs,

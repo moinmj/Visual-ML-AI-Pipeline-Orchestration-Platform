@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     DEBUG: bool = True
     API_V1_STR: str = "/api/v1"
+    BACKEND_PUBLIC_URL: str = "https://ml-crt.aiiotgeeks.com"
+    FRONTEND_PUBLIC_URL: str = "https://crt.aiiotgeeks.com"
     SECRET_KEY: str = "development-secret-key-change-in-production"
 
     # Database

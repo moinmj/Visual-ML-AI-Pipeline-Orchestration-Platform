@@ -188,6 +188,13 @@ class ApiResponseEndpointRecipe(BaseRecipe):
                     "description": "Custom secret key required when Authentication Requirement is set to 'API Key'. Callers provide this via 'X-API-Key' header or '?api_key=' parameter.",
                     "input_type": "text"
                 },
+                "manual_session_id": {
+                    "type": "string",
+                    "title": "Session ID (Optional Override)",
+                    "default": "",
+                    "description": "Optional session ID for URL testing. If left blank, your active logged-in session ID will be used automatically.",
+                    "input_type": "text"
+                },
                 "cache_duration_seconds": {
                     "type": "integer",
                     "title": "Cache Duration (Seconds)",
@@ -289,25 +296,80 @@ class ApiResponseEndpointRecipe(BaseRecipe):
         # 4. Cache payload for live endpoint retrieval
         store_cached_endpoint_payload(endpoint_path, endpoint_envelope)
 
-        # Context-aware caching if workflow_id is present
+        # Base Domains
+        backend_base = getattr(settings, "BACKEND_PUBLIC_URL", "https://ml-crt.aiiotgeeks.com").rstrip("/")
+        frontend_base = getattr(settings, "FRONTEND_PUBLIC_URL", "https://crt.aiiotgeeks.com").rstrip("/")
+
+        # Context-aware resolution
         workflow_id = None
+        execution_id = None
+        session_id = None
+
         if context and isinstance(context, dict):
             workflow_id = context.get("workflow_id")
+            execution_id = context.get("execution_id")
+            session_id = context.get("session_id") or context.get("auth_session_id")
+
+        try:
+            from backend.app.core.tenant_context import (
+                get_current_workflow_id,
+                get_current_execution_id,
+                get_current_session_id,
+            )
+            workflow_id = workflow_id or get_current_workflow_id()
+            execution_id = execution_id or get_current_execution_id()
+            session_id = session_id or get_current_session_id()
+        except Exception:
+            pass
+
+        # Allow explicit manual session override if provided in node config
+        manual_sid = str(config.get("manual_session_id", "")).strip()
+        if manual_sid:
+            session_id = manual_sid
+
         if workflow_id:
             composite_key = f"{workflow_id}:{endpoint_path}"
             store_cached_endpoint_payload(composite_key, endpoint_envelope)
             store_cached_endpoint_payload(str(workflow_id), endpoint_envelope)
 
-        # 5. Build Spec & Preview DataFrame
-        api_v1_url = f"/api/v1/workflows/endpoints/{endpoint_path}"
-        ui_flow_url = f"/api/ui/flow/{{workflow_id}}/endpoints/{endpoint_path}"
-        direct_flow_url = f"/api/ui/flow/{{workflow_id}}/endpoint"
+        # 5. Build Live Clickable URLs
+        api_v1_path = f"/api/v1/workflows/endpoints/{endpoint_path}"
+
+        # Direct Backend URL with auth query parameter
+        backend_live_url = f"{backend_base}{api_v1_path}"
+        if auth_mode == "API Key":
+            backend_live_url = f"{backend_base}{api_v1_path}?api_key={api_key}"
+        elif auth_mode == "Bearer Token / Session" and session_id:
+            backend_live_url = f"{backend_base}{api_v1_path}?session_id={session_id}"
+
+        # Frontend Canvas URL with resolved workflow_id and executionId
+        wf_slug = str(workflow_id).strip() if workflow_id else "default-flow"
+        if execution_id:
+            frontend_canvas_url = f"{frontend_base}/workflows/canvas?workflow_id={wf_slug}&executionId={execution_id}"
+        else:
+            frontend_canvas_url = f"{frontend_base}/workflows/canvas?workflow_id={wf_slug}"
+
+        # Frontend Flow URLs
+        ui_flow_path = f"/api/ui/flow/{wf_slug}/endpoints/{endpoint_path}"
+        ui_flow_full_url = f"{backend_base}{ui_flow_path}"
+        if auth_mode == "API Key":
+            ui_flow_full_url += f"?api_key={api_key}"
+        elif auth_mode == "Bearer Token / Session" and session_id:
+            ui_flow_full_url += f"?session_id={session_id}"
+
+        direct_flow_path = f"/api/ui/flow/{wf_slug}/endpoint"
+        direct_flow_full_url = f"{backend_base}{direct_flow_path}"
+        if auth_mode == "API Key":
+            direct_flow_full_url += f"?api_key={api_key}"
+        elif auth_mode == "Bearer Token / Session" and session_id:
+            direct_flow_full_url += f"?session_id={session_id}"
 
         spec_rows = [
             {"Property": "Endpoint Path", "Configuration / Value": f"/{endpoint_path}", "Category": "Route"},
-            {"Property": "API Endpoint URL", "Configuration / Value": api_v1_url, "Category": "Route"},
-            {"Property": "Frontend Flow URL", "Configuration / Value": ui_flow_url, "Category": "Route"},
-            {"Property": "Direct Flow Endpoint", "Configuration / Value": direct_flow_url, "Category": "Route"},
+            {"Property": "Backend API URL (Clickable)", "Configuration / Value": backend_live_url, "Category": "Route"},
+            {"Property": "Frontend Canvas URL", "Configuration / Value": frontend_canvas_url, "Category": "Route"},
+            {"Property": "Frontend Flow URL", "Configuration / Value": ui_flow_full_url, "Category": "Route"},
+            {"Property": "Direct Flow Endpoint", "Configuration / Value": direct_flow_full_url, "Category": "Route"},
             {"Property": "Allowed HTTP Method", "Configuration / Value": http_method, "Category": "Access"},
             {"Property": "Response Format", "Configuration / Value": response_format, "Category": "Payload"},
             {"Property": "HTTP Status Code", "Configuration / Value": str(status_code), "Category": "Payload"},
@@ -316,39 +378,54 @@ class ApiResponseEndpointRecipe(BaseRecipe):
             {"Property": "Auth Requirement", "Configuration / Value": auth_mode, "Category": "Access"},
             {"Property": "Cache Duration", "Configuration / Value": f"{cache_duration} seconds", "Category": "Caching"},
         ]
-        if auth_mode == "API Key":
+        if auth_mode == "Bearer Token / Session":
+            if session_id:
+                spec_rows.append({"Property": "Active Session ID", "Configuration / Value": session_id, "Category": "Access"})
+                spec_rows.append({"Property": "Authorization Header", "Configuration / Value": f"Bearer {session_id}", "Category": "Access"})
+                spec_rows.append({"Property": "Session Header", "Configuration / Value": f"X-Session-Id: {session_id}", "Category": "Access"})
+            else:
+                spec_rows.append({"Property": "Active Session ID", "Configuration / Value": "(Captured dynamically on execution)", "Category": "Access"})
+        elif auth_mode == "API Key":
             spec_rows.append({"Property": "Required API Key", "Configuration / Value": api_key, "Category": "Access"})
+            spec_rows.append({"Property": "API Key Header", "Configuration / Value": f"X-API-Key: {api_key}", "Category": "Access"})
 
         spec_df = pd.DataFrame(spec_rows)
 
         # Sample snippet for curl / frontend integration
         verb = "POST" if http_method == "POST" else "GET"
         if auth_mode == "API Key":
-            curl_example = f"curl -X {verb} \"https://ml-crt.aiiotgeeks.com{api_v1_url}?api_key={api_key}\" -H \"X-API-Key: {api_key}\""
-            fetch_example = f"fetch('{api_v1_url}?api_key={api_key}', {{ method: '{verb}' }}).then(r => r.json()).then(console.log);"
+            curl_example = f"curl -X {verb} \"{backend_live_url}\" -H \"X-API-Key: {api_key}\""
+            fetch_example = f"fetch('{backend_live_url}', {{ method: '{verb}' }}).then(r => r.json()).then(console.log);"
+        elif auth_mode == "Bearer Token / Session" and session_id:
+            curl_example = f"curl -X {verb} \"{backend_live_url}\" -H \"Authorization: Bearer {session_id}\""
+            fetch_example = f"fetch('{backend_live_url}', {{ method: '{verb}', headers: {{ 'Authorization': 'Bearer {session_id}' }} }}).then(r => r.json()).then(console.log);"
         else:
-            curl_example = f"curl -X {verb} \"https://ml-crt.aiiotgeeks.com{api_v1_url}?limit=10\""
-            fetch_example = f"fetch('{api_v1_url}', {{ method: '{verb}' }}).then(r => r.json()).then(console.log);"
+            curl_example = f"curl -X {verb} \"{backend_live_url}?limit=10\""
+            fetch_example = f"fetch('{backend_live_url}', {{ method: '{verb}' }}).then(r => r.json()).then(console.log);"
 
         return {
             "dataframe": spec_df,
             "json_payload": data_payload,
             "metrics": {
                 "endpoint_path": endpoint_path,
-            "http_method": http_method,
+                "http_method": http_method,
                 "status_code": status_code,
                 "total_upstream_rows": orig_rows,
                 "served_rows": len(raw_records),
                 "columns_count": len(df.columns),
                 "format": response_format,
-                "api_v1_url": api_v1_url,
-                "ui_flow_url": ui_flow_url
+                "api_v1_url": backend_live_url,
+                "ui_flow_url": ui_flow_full_url,
+                "frontend_canvas_url": frontend_canvas_url,
+                "session_id": session_id if auth_mode == "Bearer Token / Session" else None
             },
             "output_summary": {
                 "title": f"API Endpoint: /{endpoint_path}",
-                "endpoint_url": api_v1_url,
-                "frontend_flow_url": ui_flow_url,
+                "endpoint_url": backend_live_url,
+                "frontend_canvas_url": frontend_canvas_url,
+                "frontend_flow_url": ui_flow_full_url,
                 "http_methods": http_method,
+                "session_id": session_id if auth_mode == "Bearer Token / Session" else None,
                 "curl_command": curl_example,
                 "javascript_fetch": fetch_example,
                 "preview_sample": raw_records[:3] if raw_records else []
