@@ -1288,13 +1288,13 @@ def test_cloud_database_warehouse_sso_schema_support():
 
     # 1. Cloud Warehouses & Lakes that support native SSO
     sso_connectors = [
-        (SnowflakeConnectorRecipe(), "connection_mode", ["sso_authenticator", "sso_account", "sso_user", "sso_token"]),
-        (RedshiftConnectorRecipe(), "connection_mode", ["sso_provider", "sso_host", "sso_username", "sso_token"]),
-        (BigQueryConnectorRecipe(), "connection_mode", ["sso_provider", "sso_access_token"]),
-        (AzureDataLakeConnectorRecipe(), "auth_mode", ["tenant_id", "client_id", "sso_token"]),
+        (SnowflakeConnectorRecipe(), "connection_mode", ["sso_authenticator", "sso_token", "idp_url"], ["account", "user", "warehouse", "role"]),
+        (RedshiftConnectorRecipe(), "connection_mode", ["sso_provider", "role_arn", "idp_host", "sso_token"], ["host", "port", "username"]),
+        (BigQueryConnectorRecipe(), "connection_mode", ["sso_provider", "sso_access_token", "workforce_pool_provider"], ["project_id"]),
+        (AzureDataLakeConnectorRecipe(), "auth_mode", ["tenant_id", "client_id", "sso_token"], ["account_name"]),
     ]
 
-    for recipe, mode_field, expected_sso_props in sso_connectors:
+    for recipe, mode_field, expected_sso_props, expected_unified_props in sso_connectors:
         schema = recipe.get_schema()
         props = schema["properties"]
         assert mode_field in props, f"{recipe.recipe_id} missing {mode_field}"
@@ -1308,6 +1308,11 @@ def test_cloud_database_warehouse_sso_schema_support():
             assert p_def.get("visible_when") == {"field": mode_field, "equals": "sso"}, (
                 f"{recipe.recipe_id}.{prop_name} visible_when mismatch: {p_def.get('visible_when')}"
             )
+
+        for prop_name in expected_unified_props:
+            assert prop_name in props, f"{recipe.recipe_id} missing expected unified property '{prop_name}'"
+            p_def = props[prop_name]
+            assert p_def.get("section") == "connection", f"{recipe.recipe_id}.{prop_name} not in 'connection' section"
 
     # 2. Traditional DBs where SSO was excluded to keep standard host/port workflows clean
     traditional_dbs = [
@@ -1329,8 +1334,16 @@ def test_cloud_database_warehouse_sso_validation_and_resolution():
     from backend.app.recipes.ingestion.bigquery_connector import BigQueryConnectorRecipe
     from backend.app.recipes.ingestion.azure_data_lake_connector import AzureDataLakeConnectorRecipe
 
-    # 1. Snowflake SSO
+    # 1. Snowflake SSO (works with both unified 'account'/'user' and legacy 'sso_account'/'sso_user')
     sf = SnowflakeConnectorRecipe()
+    assert sf.validate_config({
+        "connection_mode": "sso",
+        "sso_authenticator": "externalbrowser",
+        "account": "xy12345.us-east-1",
+        "user": "analyst@company.com",
+        "read_mode": "table",
+        "table_name": "ORDERS"
+    }) == []
     assert sf.validate_config({
         "connection_mode": "sso",
         "sso_authenticator": "externalbrowser",
@@ -1344,8 +1357,16 @@ def test_cloud_database_warehouse_sso_validation_and_resolution():
     assert any("Account" in e for e in sf_errs)
     assert any("Username" in e for e in sf_errs)
 
-    # 2. Redshift SSO
+    # 2. Redshift SSO (works with both unified 'host'/'username' and legacy 'sso_host'/'sso_username')
     rs = RedshiftConnectorRecipe()
+    assert rs.validate_config({
+        "connection_mode": "sso",
+        "sso_provider": "aws_iam",
+        "host": "redshift-cluster.amazonaws.com",
+        "username": "awsuser",
+        "read_mode": "table",
+        "table_name": "sales"
+    }) == []
     assert rs.validate_config({
         "connection_mode": "sso",
         "sso_provider": "aws_iam",

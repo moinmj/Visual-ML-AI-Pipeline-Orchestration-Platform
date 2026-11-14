@@ -88,45 +88,6 @@ class RedshiftConnectorRecipe(BaseRecipe):
                         "equals": "sso"
                     }
                 },
-                "sso_host": {
-                    "type": "string",
-                    "title": "Redshift Cluster Endpoint / Host",
-                    "input_type": "text",
-                    "default": "",
-                    "placeholder": "e.g. redshift-cluster-1.abcdef.us-east-1.redshift.amazonaws.com",
-                    "section": "connection",
-                    "description": "Redshift cluster endpoint hostname.",
-                    "visible_when": {
-                        "field": "connection_mode",
-                        "equals": "sso"
-                    }
-                },
-                "sso_port": {
-                    "type": "integer",
-                    "title": "Port",
-                    "input_type": "number",
-                    "default": 5439,
-                    "placeholder": "5439",
-                    "section": "connection",
-                    "description": "Redshift server port (default 5439).",
-                    "visible_when": {
-                        "field": "connection_mode",
-                        "equals": "sso"
-                    }
-                },
-                "sso_username": {
-                    "type": "string",
-                    "title": "Database User / SSO Role",
-                    "input_type": "text",
-                    "default": "",
-                    "placeholder": "e.g. awsuser or analyst@company.com",
-                    "section": "connection",
-                    "description": "Redshift database username or mapped SSO federated user.",
-                    "visible_when": {
-                        "field": "connection_mode",
-                        "equals": "sso"
-                    }
-                },
                 "role_arn": {
                     "type": "string",
                     "title": "IAM Role ARN",
@@ -173,11 +134,7 @@ class RedshiftConnectorRecipe(BaseRecipe):
                     "default": "",
                     "placeholder": "e.g. redshift-cluster-1.abcdef.us-east-1.redshift.amazonaws.com",
                     "section": "connection",
-                    "description": "Amazon Redshift cluster endpoint hostname.",
-                    "visible_when": {
-                        "field": "connection_mode",
-                        "equals": "cluster_credentials"
-                    }
+                    "description": "Amazon Redshift cluster endpoint hostname."
                 },
                 "port": {
                     "type": "integer",
@@ -186,24 +143,16 @@ class RedshiftConnectorRecipe(BaseRecipe):
                     "default": 5439,
                     "placeholder": "5439",
                     "section": "connection",
-                    "description": "Redshift server port (default 5439).",
-                    "visible_when": {
-                        "field": "connection_mode",
-                        "equals": "cluster_credentials"
-                    }
+                    "description": "Redshift server port (default 5439)."
                 },
                 "username": {
                     "type": "string",
-                    "title": "Username",
+                    "title": "Username / Database User",
                     "input_type": "text",
                     "default": "",
                     "placeholder": "e.g. awsuser or master_user",
                     "section": "connection",
-                    "description": "Redshift database master user.",
-                    "visible_when": {
-                        "field": "connection_mode",
-                        "equals": "cluster_credentials"
-                    }
+                    "description": "Redshift database master user or mapped SSO federated user."
                 },
                 "password": {
                     "type": "string",
@@ -374,8 +323,8 @@ class RedshiftConnectorRecipe(BaseRecipe):
                 if not config.get("username"):
                     errors.append("Username is required in 'cluster_credentials' mode.")
             elif conn_mode == "sso":
-                host_val = config.get("sso_host") or config.get("host")
-                user_val = config.get("sso_username") or config.get("username")
+                host_val = config.get("host") or config.get("sso_host")
+                user_val = config.get("username") or config.get("sso_username")
                 if not host_val:
                     errors.append("Redshift cluster endpoint / host is required in 'sso' mode.")
                 if not user_val:
@@ -445,10 +394,10 @@ class RedshiftConnectorRecipe(BaseRecipe):
 
         conn_mode = str(config.get("connection_mode", "cluster_credentials")).strip().lower()
         if conn_mode == "sso":
-            host = str(config.get("sso_host") or config.get("host", "localhost")).strip()
-            port = int(config.get("sso_port") or config.get("port", 5439))
-            user = str(config.get("sso_username") or config.get("username", "awsuser")).strip()
-            password = str(config.get("sso_token") or config.get("password", "")).strip()
+            host = str(config.get("host") or config.get("sso_host", "localhost")).strip()
+            port = int(config.get("port") or config.get("sso_port", 5439))
+            user = str(config.get("username") or config.get("sso_username", "awsuser")).strip()
+            password = str(config.get("password") or config.get("sso_token", "")).strip()
         else:
             host = str(config.get("host", "localhost")).strip()
             port = int(config.get("port", 5439))
