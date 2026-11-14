@@ -27,28 +27,57 @@ class CronScheduleTriggerRecipe(BaseRecipe):
     def get_schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
-            "properties": {
-                "cron_expression": {
-                    "type": "string",
-                    "title": "Cron Schedule Expression",
-                    "default": "0 0 * * *",
-                    "description": "Standard 5-part cron syntax: 'minute hour day month day-of-week' (e.g. '*/15 * * * *' = Every 15 min, '0 0 * * *' = Daily Midnight)"
+            "sections": [
+                {
+                    "id": "schedule",
+                    "title": "Recurrence & Schedule",
+                    "description": "Configure interval presets, custom cron syntax, and evaluation timezone",
                 },
+            ],
+            "properties": {
                 "interval_preset": {
                     "type": "string",
                     "title": "Quick Interval Preset",
-                    "enum": ["Custom Cron", "Every 15 Minutes", "Hourly", "Daily at Midnight", "Weekly on Sunday"],
+                    "input_type": "dropdown",
+                    "section": "schedule",
+                    "enum": [
+                        "Custom Cron",
+                        "Every 15 Minutes",
+                        "Hourly",
+                        "Daily at Midnight",
+                        "Weekly on Sunday",
+                    ],
                     "default": "Every 15 Minutes",
-                    "description": "Preset recurrence interval for automated scheduling (e.g. 'hourly', 'daily', 'weekly')."
+                    "description": "Preset recurrence interval for automated scheduling (e.g. 'hourly', 'daily', 'weekly').",
+                },
+                "cron_expression": {
+                    "type": "string",
+                    "title": "Cron Schedule Expression",
+                    "input_type": "text",
+                    "section": "schedule",
+                    "default": "0 0 * * *",
+                    "description": "Standard 5-part cron syntax: 'minute hour day month day-of-week' (e.g. '*/15 * * * *' = Every 15 min, '0 0 * * *' = Daily Midnight)",
+                    "visible_when": {
+                        "field": "interval_preset",
+                        "equals": "Custom Cron",
+                    },
                 },
                 "timezone": {
                     "type": "string",
                     "title": "Timezone",
-                    "enum": ["UTC", "America/New_York", "Europe/London", "Asia/Kolkata", "Asia/Tokyo"],
+                    "input_type": "dropdown",
+                    "section": "schedule",
+                    "enum": [
+                        "UTC",
+                        "America/New_York",
+                        "Europe/London",
+                        "Asia/Kolkata",
+                        "Asia/Tokyo",
+                    ],
                     "default": "UTC",
-                    "description": "Timezone used to evaluate cron trigger timestamps (e.g. 'UTC', 'America/New_York')."
-                }
-            }
+                    "description": "Timezone used to evaluate cron trigger timestamps (e.g. 'UTC', 'America/New_York').",
+                },
+            },
         }
 
     def _resolve_cron_expression(self, config: Dict[str, Any]) -> str:

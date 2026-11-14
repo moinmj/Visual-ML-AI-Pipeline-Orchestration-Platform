@@ -32,16 +32,7 @@ class WebSocketListenerRecipe(BaseRecipe):
     input_types = ["dataframe"]
     output_types = ["dataframe"]
 
-    inputs = [
-        RecipePort(
-            id="input",
-            label="Trigger / Input Dataset",
-            type="dataframe",
-            required=False,
-            max_connections=1,
-            description="Optional upstream dataset for batch IDs or execution trigger"
-        )
-    ]
+    inputs: List[RecipePort] = []
 
     outputs = [
         RecipePort(
@@ -55,65 +46,90 @@ class WebSocketListenerRecipe(BaseRecipe):
     def get_schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
+            "sections": [
+                {
+                    "id": "connection",
+                    "title": "WebSocket Endpoint & Headers",
+                    "description": "Configure ws:// or wss:// endpoint URL and handshake headers",
+                },
+                {
+                    "id": "subscription",
+                    "title": "Subscription Message",
+                    "description": "Initial handshake payload or subscription command",
+                },
+                {
+                    "id": "runtime_limits",
+                    "title": "Sampling & Batching",
+                    "description": "Message limit, sampling window timeout, and simulation mode",
+                },
+            ],
             "properties": {
                 "url": {
                     "type": "string",
                     "title": "WebSocket URL (ws:// or wss://)",
                     "input_type": "text",
+                    "section": "connection",
                     "default": "wss://stream.binance.com:9443/ws/btcusdt@trade",
-                    "description": "Target WebSocket streaming endpoint (must start with 'ws://' or 'wss://')."
-                },
-                "subscribe_payload": {
-                    "type": "string",
-                    "title": "Subscription Message (JSON / Text)",
-                    "input_type": "textarea",
-                    "default": "",
-                    "description": "Optional payload sent immediately upon connection (e.g. '{\"method\": \"SUBSCRIBE\", \"params\": [\"btcusdt@trade\"], \"id\": 1}')."
+                    "description": "Target WebSocket streaming endpoint (must start with 'ws://' or 'wss://').",
                 },
                 "headers": {
                     "type": "string",
                     "title": "Custom Headers (JSON)",
                     "input_type": "textarea",
+                    "section": "connection",
                     "default": "{}",
-                    "description": "Optional HTTP headers sent during WebSocket handshake (e.g. '{\"Authorization\": \"Bearer token\"}')."
-                },
-                "max_messages": {
-                    "type": "integer",
-                    "title": "Max Messages per Batch",
-                    "input_type": "number",
-                    "default": 100,
-                    "description": "Maximum number of messages to capture before completing the batch (1 to 20,000)."
-                },
-                "timeout_seconds": {
-                    "type": "integer",
-                    "title": "Sampling Window (Seconds)",
-                    "input_type": "number",
-                    "default": 3,
-                    "description": "Maximum time to keep the WebSocket open waiting for incoming events."
-                },
-                "flatten_json": {
-                    "type": "boolean",
-                    "title": "Flatten JSON Payloads",
-                    "input_type": "checkbox",
-                    "default": True,
-                    "description": "Automatically unpack nested JSON object fields into top-level columns."
+                    "description": "Optional HTTP headers sent during WebSocket handshake (e.g. '{\"Authorization\": \"Bearer token\"}').",
                 },
                 "credential_id": {
                     "type": "string",
                     "title": "Connected WebSocket Credential",
                     "input_type": "credential_dropdown",
                     "provider": "websocket",
-                    "description": "Select stored WebSocket API credentials or tokens from platform settings."
+                    "section": "connection",
+                    "description": "Select stored WebSocket API credentials or tokens from platform settings.",
+                },
+                "subscribe_payload": {
+                    "type": "string",
+                    "title": "Subscription Message (JSON / Text)",
+                    "input_type": "textarea",
+                    "section": "subscription",
+                    "default": "",
+                    "description": "Optional payload sent immediately upon connection (e.g. '{\"method\": \"SUBSCRIBE\", \"params\": [\"btcusdt@trade\"], \"id\": 1}').",
+                },
+                "max_messages": {
+                    "type": "integer",
+                    "title": "Max Messages per Batch",
+                    "input_type": "number",
+                    "section": "runtime_limits",
+                    "default": 100,
+                    "description": "Maximum number of messages to capture before completing the batch (1 to 20,000).",
+                },
+                "timeout_seconds": {
+                    "type": "integer",
+                    "title": "Sampling Window (Seconds)",
+                    "input_type": "number",
+                    "section": "runtime_limits",
+                    "default": 3,
+                    "description": "Maximum time to keep the WebSocket open waiting for incoming events.",
+                },
+                "flatten_json": {
+                    "type": "boolean",
+                    "title": "Flatten JSON Payloads",
+                    "input_type": "checkbox",
+                    "section": "runtime_limits",
+                    "default": True,
+                    "description": "Automatically unpack nested JSON object fields into top-level columns.",
                 },
                 "simulation_mode": {
                     "type": "boolean",
                     "title": "Simulation / Demo Mode",
                     "input_type": "checkbox",
+                    "section": "runtime_limits",
                     "default": False,
-                    "description": "When enabled or when WebSocket endpoint is offline, generates realistic market trade stream benchmark records."
-                }
+                    "description": "When enabled or when WebSocket endpoint is offline, generates realistic market trade stream benchmark records.",
+                },
             },
-            "required": ["url"]
+            "required": ["url"],
         }
 
     def validate_config(self, config: Dict[str, Any]) -> List[str]:

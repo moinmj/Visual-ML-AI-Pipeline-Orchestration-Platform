@@ -36,16 +36,7 @@ class FileSystemWatcherRecipe(BaseRecipe):
     input_types = ["dataframe"]
     output_types = ["dataframe"]
 
-    inputs = [
-        RecipePort(
-            id="input",
-            label="Trigger / Input Dataset",
-            type="dataframe",
-            required=False,
-            max_connections=1,
-            description="Optional upstream dataset for batch IDs or execution trigger",
-        )
-    ]
+    inputs: List[RecipePort] = []
 
     outputs = [
         RecipePort(
@@ -59,12 +50,35 @@ class FileSystemWatcherRecipe(BaseRecipe):
     def get_schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
+            "sections": [
+                {
+                    "id": "source",
+                    "title": "Directory & File Matching",
+                    "description": "Configure directory path, pattern matching, recursion, and format parsing",
+                },
+                {
+                    "id": "ordering",
+                    "title": "Sorting & Age Filters",
+                    "description": "File sorting order, batch limits, and minimum file age stabilization",
+                },
+                {
+                    "id": "lifecycle",
+                    "title": "Lifecycle & Metadata",
+                    "description": "Provenance metadata columns and post-ingestion archiving actions",
+                },
+                {
+                    "id": "runtime_limits",
+                    "title": "Simulation & Testing",
+                    "description": "Simulation fallback options when directory is empty or unmounted",
+                },
+            ],
             "properties": {
                 "directory_path": {
                     "type": "string",
                     "title": "Directory Path",
                     "default": "./data/incoming",
                     "input_type": "text",
+                    "section": "source",
                     "description": "Local or mounted file system directory path to scan for data files.",
                 },
                 "file_pattern": {
@@ -72,6 +86,7 @@ class FileSystemWatcherRecipe(BaseRecipe):
                     "title": "File Pattern",
                     "default": "*.csv",
                     "input_type": "text",
+                    "section": "source",
                     "description": "Glob or regex pattern to filter files (e.g. '*.csv', 'events_*.parquet').",
                 },
                 "recursive": {
@@ -79,6 +94,7 @@ class FileSystemWatcherRecipe(BaseRecipe):
                     "title": "Recursive Scan",
                     "default": False,
                     "input_type": "checkbox",
+                    "section": "source",
                     "description": "Scan nested subdirectories recursively when set to true.",
                 },
                 "output_mode": {
@@ -86,7 +102,8 @@ class FileSystemWatcherRecipe(BaseRecipe):
                     "title": "Output Mode",
                     "enum": ["parse_data", "file_manifest"],
                     "default": "parse_data",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "source",
                     "description": "'parse_data' loads row records; 'file_manifest' outputs file paths and metadata.",
                 },
                 "file_format": {
@@ -94,7 +111,8 @@ class FileSystemWatcherRecipe(BaseRecipe):
                     "title": "File Format",
                     "enum": ["auto", "csv", "parquet", "json", "jsonl"],
                     "default": "auto",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "source",
                     "description": "File parsing format. 'auto' automatically detects format by extension.",
                 },
                 "delimiter": {
@@ -102,15 +120,21 @@ class FileSystemWatcherRecipe(BaseRecipe):
                     "title": "CSV Delimiter",
                     "enum": [",", "\t", ";", "|"],
                     "default": ",",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "source",
                     "description": "Field separator for delimited text files.",
+                    "visible_when": {
+                        "field": "file_format",
+                        "equals": "csv",
+                    },
                 },
                 "encoding": {
                     "type": "string",
                     "title": "Encoding",
                     "enum": ["utf-8", "latin-1", "ascii"],
                     "default": "utf-8",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "source",
                     "description": "Character encoding used to decode text files.",
                 },
                 "max_files": {
@@ -120,6 +144,7 @@ class FileSystemWatcherRecipe(BaseRecipe):
                     "minimum": 1,
                     "maximum": 1000,
                     "input_type": "number",
+                    "section": "ordering",
                     "description": "Maximum number of matched files to process in one execution.",
                 },
                 "sort_by": {
@@ -127,7 +152,8 @@ class FileSystemWatcherRecipe(BaseRecipe):
                     "title": "Sort Files By",
                     "enum": ["modified_desc", "modified_asc", "name_asc", "size_desc"],
                     "default": "modified_desc",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "ordering",
                     "description": "Ordering criteria applied before selecting up to max_files.",
                 },
                 "min_age_seconds": {
@@ -137,6 +163,7 @@ class FileSystemWatcherRecipe(BaseRecipe):
                     "minimum": 0,
                     "maximum": 86400,
                     "input_type": "number",
+                    "section": "ordering",
                     "description": "Ignore files modified more recently than this to prevent reading partial writes.",
                 },
                 "include_metadata_columns": {
@@ -144,6 +171,7 @@ class FileSystemWatcherRecipe(BaseRecipe):
                     "title": "Include Metadata Columns",
                     "default": True,
                     "input_type": "checkbox",
+                    "section": "lifecycle",
                     "description": "Appends '_file_path', '_file_name', and '_modified_time' to parsed rows.",
                 },
                 "action_after_read": {
@@ -151,7 +179,8 @@ class FileSystemWatcherRecipe(BaseRecipe):
                     "title": "Action After Read",
                     "enum": ["none", "move", "delete"],
                     "default": "none",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "lifecycle",
                     "description": "Action performed on scanned files after successful ingestion.",
                 },
                 "archive_directory": {
@@ -159,13 +188,19 @@ class FileSystemWatcherRecipe(BaseRecipe):
                     "title": "Archive Directory",
                     "default": "./data/archive",
                     "input_type": "text",
+                    "section": "lifecycle",
                     "description": "Target folder when action_after_read is 'move'.",
+                    "visible_when": {
+                        "field": "action_after_read",
+                        "equals": "move",
+                    },
                 },
                 "simulation_fallback": {
                     "type": "boolean",
                     "title": "Simulation Fallback",
                     "default": True,
                     "input_type": "checkbox",
+                    "section": "runtime_limits",
                     "description": "Generate synthetic batch records if directory is empty or missing.",
                 },
             },

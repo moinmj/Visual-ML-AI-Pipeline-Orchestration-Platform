@@ -40,16 +40,7 @@ class ArchiveUnpackerRecipe(BaseRecipe):
     input_types = ["dataframe"]
     output_types = ["dataframe"]
 
-    inputs = [
-        RecipePort(
-            id="input",
-            label="Trigger / Input Dataset",
-            type="dataframe",
-            required=False,
-            max_connections=1,
-            description="Optional upstream dataset for batch IDs or archive paths",
-        )
-    ]
+    inputs: List[RecipePort] = []
 
     outputs = [
         RecipePort(
@@ -63,12 +54,30 @@ class ArchiveUnpackerRecipe(BaseRecipe):
     def get_schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
+            "sections": [
+                {
+                    "id": "source",
+                    "title": "Archive Location & Filtering",
+                    "description": "Configure archive file path, member pattern, and output mode",
+                },
+                {
+                    "id": "parsing",
+                    "title": "Format & Delimiters",
+                    "description": "Inner file format parsing, CSV delimiters, and text encoding",
+                },
+                {
+                    "id": "runtime_limits",
+                    "title": "Limits & Simulation",
+                    "description": "Member extraction limits, metadata columns, and mock archive injection",
+                },
+            ],
             "properties": {
                 "archive_path": {
                     "type": "string",
                     "title": "Archive File Path",
                     "default": "./data/archives/daily_export.zip",
                     "input_type": "text",
+                    "section": "source",
                     "description": "Path to ZIP, TAR, TAR.GZ, or TGZ archive file on disk.",
                 },
                 "file_pattern": {
@@ -76,6 +85,7 @@ class ArchiveUnpackerRecipe(BaseRecipe):
                     "title": "Contained File Pattern",
                     "default": "*.csv;*.parquet",
                     "input_type": "text",
+                    "section": "source",
                     "description": "Glob pattern(s) to match member files inside the archive (e.g. '*.csv', '*.parquet').",
                 },
                 "output_mode": {
@@ -83,7 +93,8 @@ class ArchiveUnpackerRecipe(BaseRecipe):
                     "title": "Output Mode",
                     "enum": ["parse_data", "archive_manifest"],
                     "default": "parse_data",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "source",
                     "description": "'parse_data' parses table rows; 'archive_manifest' returns a table of archive contents.",
                 },
                 "file_format": {
@@ -91,7 +102,8 @@ class ArchiveUnpackerRecipe(BaseRecipe):
                     "title": "Inner File Format",
                     "enum": ["auto", "csv", "parquet", "json", "jsonl"],
                     "default": "auto",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "parsing",
                     "description": "Data format of files inside the archive. 'auto' infers from member extension.",
                 },
                 "delimiter": {
@@ -99,15 +111,21 @@ class ArchiveUnpackerRecipe(BaseRecipe):
                     "title": "CSV Delimiter",
                     "enum": [",", "\t", ";", "|"],
                     "default": ",",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "parsing",
                     "description": "Field separator for delimited text members.",
+                    "visible_when": {
+                        "field": "file_format",
+                        "equals": "csv",
+                    },
                 },
                 "encoding": {
                     "type": "string",
                     "title": "Text Encoding",
                     "enum": ["utf-8", "latin-1", "ascii"],
                     "default": "utf-8",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "parsing",
                     "description": "Text decoding encoding for CSV and JSON members.",
                 },
                 "max_files": {
@@ -117,6 +135,7 @@ class ArchiveUnpackerRecipe(BaseRecipe):
                     "minimum": 1,
                     "maximum": 500,
                     "input_type": "number",
+                    "section": "runtime_limits",
                     "description": "Upper limit of member files to parse in a single pipeline run.",
                 },
                 "include_metadata_columns": {
@@ -124,6 +143,7 @@ class ArchiveUnpackerRecipe(BaseRecipe):
                     "title": "Include Archive Metadata Columns",
                     "default": True,
                     "input_type": "checkbox",
+                    "section": "runtime_limits",
                     "description": "Appends '_archive_path', '_member_name', and '_member_size' to parsed rows.",
                 },
                 "simulation_fallback": {
@@ -131,6 +151,7 @@ class ArchiveUnpackerRecipe(BaseRecipe):
                     "title": "Simulation Fallback",
                     "default": True,
                     "input_type": "checkbox",
+                    "section": "runtime_limits",
                     "description": "Generate realistic synthetic archive dataset if file path does not exist.",
                 },
                 "mock_archive_base64": {
@@ -138,7 +159,8 @@ class ArchiveUnpackerRecipe(BaseRecipe):
                     "title": "Mock Archive Base64",
                     "default": "",
                     "input_type": "textarea",
-                    "description": "Optional base64-encoded zip/tar archive bytes for testing without files on disk.",
+                    "section": "runtime_limits",
+                    "description": "Optional Base64-encoded ZIP/TAR bytes for in-memory extraction tests.",
                 },
             },
             "required": ["archive_path"],

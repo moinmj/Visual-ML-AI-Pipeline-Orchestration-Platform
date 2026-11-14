@@ -62,12 +62,30 @@ class SubPipelineCallRecipe(BaseRecipe):
     def get_schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
+            "sections": [
+                {
+                    "id": "pipeline_reference",
+                    "title": "Sub-Pipeline Reference",
+                    "description": "Identifier and execution strategy for the target sub-pipeline",
+                },
+                {
+                    "id": "configuration",
+                    "title": "Step & Parameter Overrides",
+                    "description": "Dynamic parameter overrides or sequential inline recipe step definitions",
+                },
+                {
+                    "id": "runtime_limits",
+                    "title": "Limits & Error Policy",
+                    "description": "Timeout limits, error propagation, and simulation fallback",
+                },
+            ],
             "properties": {
                 "pipeline_id": {
                     "type": "string",
                     "title": "Sub-Pipeline ID / Name",
                     "default": "subpipe_feature_engineering_v1",
                     "input_type": "text",
+                    "section": "pipeline_reference",
                     "description": "Identifier or saved name of the sub-pipeline to invoke.",
                 },
                 "execution_mode": {
@@ -75,7 +93,8 @@ class SubPipelineCallRecipe(BaseRecipe):
                     "title": "Execution Mode",
                     "enum": ["synchronous", "inline_steps", "mock_simulation"],
                     "default": "synchronous",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "pipeline_reference",
                     "description": "Execution strategy: synchronous engine run, inline step chain, or simulation.",
                 },
                 "pass_inputs": {
@@ -83,6 +102,7 @@ class SubPipelineCallRecipe(BaseRecipe):
                     "title": "Forward Input Dataset",
                     "default": True,
                     "input_type": "checkbox",
+                    "section": "pipeline_reference",
                     "description": "Forward incoming dataframe to the first node of the sub-pipeline.",
                 },
                 "parameter_overrides": {
@@ -90,20 +110,31 @@ class SubPipelineCallRecipe(BaseRecipe):
                     "title": "Parameter Overrides (JSON)",
                     "default": "{}",
                     "input_type": "textarea",
+                    "section": "configuration",
                     "description": "JSON dictionary of runtime parameter overrides for sub-pipeline recipes.",
+                    "visible_when": {
+                        "field": "execution_mode",
+                        "equals": "synchronous",
+                    },
                 },
                 "sub_pipeline_steps": {
                     "type": "string",
                     "title": "Inline Sub-Pipeline Steps (JSON)",
                     "default": "[]",
                     "input_type": "textarea",
+                    "section": "configuration",
                     "description": "Optional JSON list of sequential recipe steps [{\"recipe_id\": \"...\", \"config\": {...}}] to execute.",
+                    "visible_when": {
+                        "field": "execution_mode",
+                        "equals": "inline_steps",
+                    },
                 },
                 "propagate_errors": {
                     "type": "boolean",
                     "title": "Propagate Sub-Pipeline Errors",
                     "default": True,
                     "input_type": "checkbox",
+                    "section": "runtime_limits",
                     "description": "Raise an exception immediately if any sub-pipeline step fails.",
                 },
                 "timeout_seconds": {
@@ -113,6 +144,7 @@ class SubPipelineCallRecipe(BaseRecipe):
                     "minimum": 1,
                     "maximum": 3600,
                     "input_type": "number",
+                    "section": "runtime_limits",
                     "description": "Maximum seconds allowed for sub-pipeline completion before timeout.",
                 },
                 "simulation_fallback": {
@@ -120,6 +152,7 @@ class SubPipelineCallRecipe(BaseRecipe):
                     "title": "Simulation Fallback",
                     "default": True,
                     "input_type": "checkbox",
+                    "section": "runtime_limits",
                     "description": "Fallback to simulated sub-pipeline execution if target pipeline ID is not found.",
                 },
             },

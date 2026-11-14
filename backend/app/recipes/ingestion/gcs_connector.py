@@ -32,16 +32,7 @@ class GCSConnectorRecipe(BaseRecipe):
     input_types = ["dataframe"]
     output_types = ["dataframe"]
 
-    inputs = [
-        RecipePort(
-            id="input",
-            label="Trigger / Input Dataset",
-            type="dataframe",
-            required=False,
-            max_connections=1,
-            description="Optional upstream dataset for batch IDs or execution trigger",
-        )
-    ]
+    inputs: List[RecipePort] = []
 
     outputs = [
         RecipePort(
@@ -55,13 +46,36 @@ class GCSConnectorRecipe(BaseRecipe):
     def get_schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
+            "sections": [
+                {
+                    "id": "source",
+                    "title": "GCS Storage Source",
+                    "description": "Configure GCS URI, bucket, and object path",
+                },
+                {
+                    "id": "format",
+                    "title": "File Format & Parsing",
+                    "description": "Format specification and CSV delimiter options",
+                },
+                {
+                    "id": "connection",
+                    "title": "Authentication & Access",
+                    "description": "Google Cloud service account credentials and project ID",
+                },
+                {
+                    "id": "runtime_limits",
+                    "title": "Limits & Performance",
+                    "description": "Row limits and execution simulation options",
+                },
+            ],
             "properties": {
                 "source_mode": {
                     "type": "string",
                     "title": "Source Mode",
                     "enum": ["gcs_uri", "bucket_and_blob"],
                     "default": "gcs_uri",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "source",
                     "description": "Specify file location via full 'gs://' URI or individual bucket and blob path.",
                 },
                 "gcs_uri": {
@@ -69,28 +83,44 @@ class GCSConnectorRecipe(BaseRecipe):
                     "title": "GCS URI",
                     "default": "gs://analytics-lakehouse-bucket/raw/events/telemetry_data.parquet",
                     "input_type": "text",
+                    "section": "source",
                     "description": "Full GCS URI (e.g. 'gs://my-bucket/path/to/data.parquet').",
+                    "visible_when": {
+                        "field": "source_mode",
+                        "equals": "gcs_uri",
+                    },
                 },
                 "bucket_name": {
                     "type": "string",
                     "title": "Bucket Name",
                     "default": "analytics-lakehouse-bucket",
                     "input_type": "text",
+                    "section": "source",
                     "description": "GCS bucket name (used when source_mode is 'bucket_and_blob').",
+                    "visible_when": {
+                        "field": "source_mode",
+                        "equals": "bucket_and_blob",
+                    },
                 },
                 "blob_path": {
                     "type": "string",
                     "title": "Blob Path",
                     "default": "raw/events/telemetry_data.parquet",
                     "input_type": "text",
+                    "section": "source",
                     "description": "Blob object path inside the bucket (e.g. 'raw/events/telemetry_data.parquet').",
+                    "visible_when": {
+                        "field": "source_mode",
+                        "equals": "bucket_and_blob",
+                    },
                 },
                 "file_format": {
                     "type": "string",
                     "title": "File Format",
                     "enum": ["auto", "parquet", "csv", "json", "jsonl"],
                     "default": "auto",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "format",
                     "description": "Dataset file format. 'auto' infers format from the file extension.",
                 },
                 "delimiter": {
@@ -98,14 +128,20 @@ class GCSConnectorRecipe(BaseRecipe):
                     "title": "CSV Delimiter",
                     "default": ",",
                     "enum": [",", "\t", ";", "|"],
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "format",
                     "description": "Delimiter separating columns when reading CSV files.",
+                    "visible_when": {
+                        "field": "file_format",
+                        "equals": "csv",
+                    },
                 },
                 "project_id": {
                     "type": "string",
                     "title": "GCP Project ID",
                     "default": "",
                     "input_type": "text",
+                    "section": "connection",
                     "description": "Google Cloud Project ID (leave blank to infer from credentials).",
                 },
                 "service_account_json": {
@@ -113,6 +149,7 @@ class GCSConnectorRecipe(BaseRecipe):
                     "title": "Service Account Key JSON",
                     "default": "",
                     "input_type": "password",
+                    "section": "connection",
                     "description": "Service account key JSON contents (leave blank to use default credentials).",
                 },
                 "credential_id": {
@@ -120,6 +157,8 @@ class GCSConnectorRecipe(BaseRecipe):
                     "title": "Stored GCP Credential",
                     "default": "",
                     "input_type": "credential_dropdown",
+                    "provider": "gcp",
+                    "section": "connection",
                     "description": "Select stored GCP service account credentials from platform settings.",
                 },
                 "limit": {
@@ -127,6 +166,7 @@ class GCSConnectorRecipe(BaseRecipe):
                     "title": "Row Limit",
                     "default": 1000,
                     "input_type": "number",
+                    "section": "runtime_limits",
                     "description": "Maximum number of rows to retrieve (1 to 1,000,000).",
                 },
                 "simulation_mode": {
@@ -134,6 +174,7 @@ class GCSConnectorRecipe(BaseRecipe):
                     "title": "Simulation / Demo Mode",
                     "default": False,
                     "input_type": "checkbox",
+                    "section": "runtime_limits",
                     "description": "When enabled or when GCS is unreachable, returns realistic Lakehouse benchmark telemetry records.",
                 },
             },

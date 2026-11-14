@@ -32,16 +32,7 @@ class KafkaConsumerRecipe(BaseRecipe):
     input_types = ["dataframe"]
     output_types = ["dataframe"]
 
-    inputs = [
-        RecipePort(
-            id="input",
-            label="Trigger / Input Dataset",
-            type="dataframe",
-            required=False,
-            max_connections=1,
-            description="Optional upstream dataset for batch IDs or execution trigger"
-        )
-    ]
+    inputs: List[RecipePort] = []
 
     outputs = [
         RecipePort(
@@ -55,103 +46,145 @@ class KafkaConsumerRecipe(BaseRecipe):
     def get_schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
+            "sections": [
+                {
+                    "id": "connection",
+                    "title": "Kafka Broker & Authentication",
+                    "description": "Configure broker addresses, security protocol, and SASL credentials",
+                },
+                {
+                    "id": "subscription",
+                    "title": "Topic & Consumer Group",
+                    "description": "Target Kafka topic, consumer group ID, and initial offset reset policy",
+                },
+                {
+                    "id": "runtime_limits",
+                    "title": "Batching & Parsing",
+                    "description": "Micro-batch size, poll timeouts, JSON flattening, and simulation mode",
+                },
+            ],
             "properties": {
                 "bootstrap_servers": {
                     "type": "string",
                     "title": "Bootstrap Servers",
                     "input_type": "text",
+                    "section": "connection",
                     "default": "localhost:9092",
-                    "description": "Comma-separated list of Kafka broker host:port addresses (e.g. 'kafka1:9092,kafka2:9092')."
-                },
-                "topic": {
-                    "type": "string",
-                    "title": "Kafka Topic",
-                    "input_type": "text",
-                    "default": "telemetry-events",
-                    "description": "Name of the target Kafka topic to subscribe to."
-                },
-                "group_id": {
-                    "type": "string",
-                    "title": "Consumer Group ID",
-                    "input_type": "text",
-                    "default": "ml-pipeline-consumer-grp",
-                    "description": "Kafka consumer group identifier for offset tracking."
-                },
-                "auto_offset_reset": {
-                    "type": "string",
-                    "title": "Auto Offset Reset",
-                    "input_type": "dropdown",
-                    "enum": ["latest", "earliest"],
-                    "default": "latest",
-                    "description": "Where to start reading when no initial offset exists or current offset is out of range."
+                    "description": "Comma-separated list of Kafka broker host:port addresses (e.g. 'kafka1:9092,kafka2:9092').",
                 },
                 "security_protocol": {
                     "type": "string",
                     "title": "Security Protocol",
                     "input_type": "dropdown",
+                    "section": "connection",
                     "enum": ["PLAINTEXT", "SSL", "SASL_PLAINTEXT", "SASL_SSL"],
                     "default": "PLAINTEXT",
-                    "description": "Protocol used to communicate with brokers."
+                    "description": "Protocol used to communicate with brokers.",
                 },
                 "sasl_mechanism": {
                     "type": "string",
                     "title": "SASL Mechanism",
                     "input_type": "dropdown",
+                    "section": "connection",
                     "enum": ["PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512"],
                     "default": "PLAIN",
-                    "description": "SASL authentication mechanism (when security_protocol is SASL_*)."
+                    "description": "SASL authentication mechanism (when security_protocol is SASL_*).",
+                    "visible_when": {
+                        "field": "security_protocol",
+                        "equals": "SASL_PLAINTEXT",
+                    },
                 },
                 "sasl_username": {
                     "type": "string",
                     "title": "SASL Username",
                     "input_type": "text",
+                    "section": "connection",
                     "default": "",
-                    "description": "Username for SASL authentication."
+                    "description": "Username for SASL authentication.",
+                    "visible_when": {
+                        "field": "security_protocol",
+                        "equals": "SASL_PLAINTEXT",
+                    },
                 },
                 "sasl_password": {
                     "type": "string",
                     "title": "SASL Password",
                     "input_type": "password",
+                    "section": "connection",
                     "default": "",
-                    "description": "Password for SASL authentication."
-                },
-                "max_messages": {
-                    "type": "integer",
-                    "title": "Max Messages per Batch",
-                    "input_type": "number",
-                    "default": 100,
-                    "description": "Maximum number of messages to pull in this micro-batch (1 to 50,000)."
-                },
-                "poll_timeout_ms": {
-                    "type": "integer",
-                    "title": "Poll Timeout (ms)",
-                    "input_type": "number",
-                    "default": 2000,
-                    "description": "Maximum time in milliseconds to wait for records during polling."
-                },
-                "flatten_json": {
-                    "type": "boolean",
-                    "title": "Flatten JSON Payloads",
-                    "input_type": "checkbox",
-                    "default": True,
-                    "description": "Automatically unpack nested JSON object fields into top-level columns."
+                    "description": "Password for SASL authentication.",
+                    "visible_when": {
+                        "field": "security_protocol",
+                        "equals": "SASL_PLAINTEXT",
+                    },
                 },
                 "credential_id": {
                     "type": "string",
                     "title": "Connected Kafka Credential",
                     "input_type": "credential_dropdown",
                     "provider": "kafka",
-                    "description": "Select stored Kafka cluster credentials from platform settings."
+                    "section": "connection",
+                    "description": "Select stored Kafka cluster credentials from platform settings.",
+                },
+                "topic": {
+                    "type": "string",
+                    "title": "Kafka Topic",
+                    "input_type": "text",
+                    "section": "subscription",
+                    "default": "telemetry-events",
+                    "description": "Name of the target Kafka topic to subscribe to.",
+                },
+                "group_id": {
+                    "type": "string",
+                    "title": "Consumer Group ID",
+                    "input_type": "text",
+                    "section": "subscription",
+                    "default": "ml-pipeline-consumer-grp",
+                    "description": "Kafka consumer group identifier for offset tracking.",
+                },
+                "auto_offset_reset": {
+                    "type": "string",
+                    "title": "Auto Offset Reset",
+                    "input_type": "dropdown",
+                    "section": "subscription",
+                    "enum": ["latest", "earliest"],
+                    "default": "latest",
+                    "description": "Where to start reading when no initial offset exists or current offset is out of range.",
+                },
+                "max_messages": {
+                    "type": "integer",
+                    "title": "Max Messages per Batch",
+                    "input_type": "number",
+                    "section": "runtime_limits",
+                    "default": 100,
+                    "description": "Maximum number of messages to pull in this micro-batch (1 to 50,000).",
+                },
+                "poll_timeout_ms": {
+                    "type": "integer",
+                    "title": "Poll Timeout (ms)",
+                    "input_type": "number",
+                    "section": "runtime_limits",
+                    "default": 2000,
+                    "description": "Maximum time in milliseconds to wait for records during polling.",
+                },
+                "flatten_json": {
+                    "type": "boolean",
+                    "title": "Flatten JSON Payloads",
+                    "input_type": "checkbox",
+                    "section": "runtime_limits",
+                    "default": True,
+                    "description": "Automatically unpack nested JSON object fields into top-level columns.",
                 },
                 "simulation_mode": {
                     "type": "boolean",
                     "title": "Simulation / Demo Mode",
                     "input_type": "checkbox",
+                    "section": "runtime_limits",
                     "default": False,
-                    "description": "When enabled or when Kafka broker is offline, generates realistic Kafka event stream benchmark records."
-                }
+                    "description": "When enabled or when Kafka broker is offline, generates realistic Kafka event stream benchmark records.",
+                },
             },
-            "required": ["bootstrap_servers", "topic", "group_id"]
+            "required": ["bootstrap_servers", "topic", "group_id"],
         }
 
     def validate_config(self, config: Dict[str, Any]) -> List[str]:

@@ -69,12 +69,35 @@ class RetryErrorHandlerRecipe(BaseRecipe):
     def get_schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
+            "sections": [
+                {
+                    "id": "target_step",
+                    "title": "Protected Recipe Step",
+                    "description": "Target recipe ID and configuration to execute with fault-tolerance",
+                },
+                {
+                    "id": "retry_policy",
+                    "title": "Retry & Backoff Policy",
+                    "description": "Maximum attempts, initial backoff delay, multiplier, and error pattern matchers",
+                },
+                {
+                    "id": "fallback",
+                    "title": "Fallback Strategy",
+                    "description": "Recovery action and fallback recipe when retries are exhausted",
+                },
+                {
+                    "id": "runtime_limits",
+                    "title": "Simulation & Diagnostics",
+                    "description": "Simulated failure injection for testing retry recovery",
+                },
+            ],
             "properties": {
                 "target_recipe_id": {
                     "type": "string",
                     "title": "Target Recipe to Protect",
                     "default": "custom_python_step",
                     "input_type": "text",
+                    "section": "target_step",
                     "description": "Recipe ID of the node to wrap with retry and fault-tolerance protection.",
                 },
                 "target_recipe_config": {
@@ -82,6 +105,7 @@ class RetryErrorHandlerRecipe(BaseRecipe):
                     "title": "Target Recipe Config (JSON)",
                     "default": "{}",
                     "input_type": "textarea",
+                    "section": "target_step",
                     "description": "JSON dictionary of configuration parameters for the target recipe.",
                 },
                 "max_retries": {
@@ -91,6 +115,7 @@ class RetryErrorHandlerRecipe(BaseRecipe):
                     "minimum": 1,
                     "maximum": 10,
                     "input_type": "number",
+                    "section": "retry_policy",
                     "description": "Maximum number of retry attempts before routing to the fallback strategy.",
                 },
                 "initial_delay_seconds": {
@@ -100,6 +125,7 @@ class RetryErrorHandlerRecipe(BaseRecipe):
                     "minimum": 0.0,
                     "maximum": 60.0,
                     "input_type": "number",
+                    "section": "retry_policy",
                     "description": "Initial wait delay before the first retry attempt.",
                 },
                 "backoff_factor": {
@@ -109,6 +135,7 @@ class RetryErrorHandlerRecipe(BaseRecipe):
                     "minimum": 1.0,
                     "maximum": 5.0,
                     "input_type": "number",
+                    "section": "retry_policy",
                     "description": "Multiplier applied to delay on each subsequent retry (e.g. 2.0 doubles delay each attempt).",
                 },
                 "jitter": {
@@ -116,14 +143,24 @@ class RetryErrorHandlerRecipe(BaseRecipe):
                     "title": "Add Random Jitter",
                     "default": True,
                     "input_type": "checkbox",
+                    "section": "retry_policy",
                     "description": "Add randomized jitter to avoid synchronized retry spikes across workers.",
+                },
+                "retryable_error_patterns": {
+                    "type": "string",
+                    "title": "Retryable Error Patterns",
+                    "default": "*Timeout*;*Connection*;*503*;*RateLimit*;*Temporary*",
+                    "input_type": "text",
+                    "section": "retry_policy",
+                    "description": "Semicolon-separated glob patterns of exception messages that trigger a retry.",
                 },
                 "fallback_strategy": {
                     "type": "string",
                     "title": "Fallback Strategy",
                     "enum": ["return_input", "empty_dataframe", "error_table", "fallback_recipe"],
                     "default": "return_input",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "fallback",
                     "description": "Recovery action when all retries are exhausted without success.",
                 },
                 "fallback_recipe_id": {
@@ -131,21 +168,24 @@ class RetryErrorHandlerRecipe(BaseRecipe):
                     "title": "Fallback Recipe ID",
                     "default": "",
                     "input_type": "text",
+                    "section": "fallback",
                     "description": "Optional recipe ID to execute if fallback_strategy is 'fallback_recipe'.",
+                    "visible_when": {
+                        "field": "fallback_strategy",
+                        "equals": "fallback_recipe",
+                    },
                 },
                 "fallback_recipe_config": {
                     "type": "string",
                     "title": "Fallback Recipe Config (JSON)",
                     "default": "{}",
                     "input_type": "textarea",
+                    "section": "fallback",
                     "description": "Optional configuration for the fallback recipe.",
-                },
-                "retryable_error_patterns": {
-                    "type": "string",
-                    "title": "Retryable Error Patterns",
-                    "default": "*Timeout*;*Connection*;*503*;*RateLimit*;*Temporary*",
-                    "input_type": "text",
-                    "description": "Semicolon-separated glob patterns of exception messages that trigger a retry.",
+                    "visible_when": {
+                        "field": "fallback_strategy",
+                        "equals": "fallback_recipe",
+                    },
                 },
                 "simulate_failure_attempts": {
                     "type": "integer",
@@ -154,6 +194,7 @@ class RetryErrorHandlerRecipe(BaseRecipe):
                     "minimum": 0,
                     "maximum": 10,
                     "input_type": "number",
+                    "section": "runtime_limits",
                     "description": "For testing: forces the first N attempts to fail to verify retry backoff behavior.",
                 },
             },

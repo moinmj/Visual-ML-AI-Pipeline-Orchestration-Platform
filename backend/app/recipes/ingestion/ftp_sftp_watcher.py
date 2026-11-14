@@ -35,16 +35,7 @@ class FTPSFTPWatcherRecipe(BaseRecipe):
     input_types = ["dataframe"]
     output_types = ["dataframe"]
 
-    inputs = [
-        RecipePort(
-            id="input",
-            label="Trigger / Input Dataset",
-            type="dataframe",
-            required=False,
-            max_connections=1,
-            description="Optional upstream dataset for batch IDs or pipeline trigger",
-        )
-    ]
+    inputs: List[RecipePort] = []
 
     outputs = [
         RecipePort(
@@ -58,13 +49,36 @@ class FTPSFTPWatcherRecipe(BaseRecipe):
     def get_schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
+            "sections": [
+                {
+                    "id": "connection",
+                    "title": "FTP/SFTP Connection",
+                    "description": "Configure host, port, protocol, and authentication credentials",
+                },
+                {
+                    "id": "source",
+                    "title": "Remote File & Format",
+                    "description": "Remote directory path, file matching patterns, and format parsing",
+                },
+                {
+                    "id": "lifecycle",
+                    "title": "Lifecycle & Metadata",
+                    "description": "File limits, metadata columns, and post-download archival actions",
+                },
+                {
+                    "id": "runtime_limits",
+                    "title": "Simulation & Testing",
+                    "description": "Offline simulation fallbacks and mock data injection",
+                },
+            ],
             "properties": {
                 "protocol": {
                     "type": "string",
                     "title": "Protocol",
                     "enum": ["sftp", "ftp"],
                     "default": "sftp",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "connection",
                     "description": "Network file transfer protocol (SFTP over SSH or standard FTP).",
                 },
                 "host": {
@@ -72,6 +86,7 @@ class FTPSFTPWatcherRecipe(BaseRecipe):
                     "title": "Host / Server",
                     "default": "sftp.partner.example.com",
                     "input_type": "text",
+                    "section": "connection",
                     "description": "Remote FTP/SFTP server hostname or IP address.",
                 },
                 "port": {
@@ -81,6 +96,7 @@ class FTPSFTPWatcherRecipe(BaseRecipe):
                     "minimum": 1,
                     "maximum": 65535,
                     "input_type": "number",
+                    "section": "connection",
                     "description": "Network port for the service (typically 22 for SFTP, 21 for FTP).",
                 },
                 "username": {
@@ -88,6 +104,7 @@ class FTPSFTPWatcherRecipe(BaseRecipe):
                     "title": "Username",
                     "default": "data_feed",
                     "input_type": "text",
+                    "section": "connection",
                     "description": "Authentication username on the remote server.",
                 },
                 "password": {
@@ -95,6 +112,7 @@ class FTPSFTPWatcherRecipe(BaseRecipe):
                     "title": "Password",
                     "default": "",
                     "input_type": "password",
+                    "section": "connection",
                     "description": "Optional account password for FTP or SFTP authentication.",
                 },
                 "private_key": {
@@ -102,13 +120,19 @@ class FTPSFTPWatcherRecipe(BaseRecipe):
                     "title": "Private Key (SFTP)",
                     "default": "",
                     "input_type": "textarea",
+                    "section": "connection",
                     "description": "Optional PEM-formatted SSH private key string for SFTP key-based authentication.",
+                    "visible_when": {
+                        "field": "protocol",
+                        "equals": "sftp",
+                    },
                 },
                 "remote_directory": {
                     "type": "string",
                     "title": "Remote Directory",
                     "default": "/incoming/feeds",
                     "input_type": "text",
+                    "section": "source",
                     "description": "Target folder on the remote server to scan for incoming files.",
                 },
                 "file_pattern": {
@@ -116,6 +140,7 @@ class FTPSFTPWatcherRecipe(BaseRecipe):
                     "title": "File Name Pattern",
                     "default": "*.csv",
                     "input_type": "text",
+                    "section": "source",
                     "description": "Glob or regex pattern to filter files (e.g. '*.csv', 'transactions_*.parquet').",
                 },
                 "output_mode": {
@@ -123,7 +148,8 @@ class FTPSFTPWatcherRecipe(BaseRecipe):
                     "title": "Output Mode",
                     "enum": ["parse_data", "file_manifest"],
                     "default": "parse_data",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "source",
                     "description": "'parse_data' downloads and parses file rows; 'file_manifest' outputs a file listing.",
                 },
                 "file_format": {
@@ -131,7 +157,8 @@ class FTPSFTPWatcherRecipe(BaseRecipe):
                     "title": "File Format",
                     "enum": ["auto", "csv", "parquet", "json", "jsonl"],
                     "default": "auto",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "source",
                     "description": "Data serialization format. 'auto' detects from file extension.",
                 },
                 "delimiter": {
@@ -139,15 +166,21 @@ class FTPSFTPWatcherRecipe(BaseRecipe):
                     "title": "CSV Delimiter",
                     "enum": [",", "\t", ";", "|"],
                     "default": ",",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "source",
                     "description": "Delimiter character used when parsing CSV files.",
+                    "visible_when": {
+                        "field": "file_format",
+                        "equals": "csv",
+                    },
                 },
                 "encoding": {
                     "type": "string",
                     "title": "Encoding",
                     "enum": ["utf-8", "latin-1", "ascii"],
                     "default": "utf-8",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "source",
                     "description": "Text encoding for parsing text-based files.",
                 },
                 "max_files": {
@@ -157,6 +190,7 @@ class FTPSFTPWatcherRecipe(BaseRecipe):
                     "minimum": 1,
                     "maximum": 500,
                     "input_type": "number",
+                    "section": "lifecycle",
                     "description": "Maximum number of matched files to ingest in a single pipeline run.",
                 },
                 "include_metadata_columns": {
@@ -164,6 +198,7 @@ class FTPSFTPWatcherRecipe(BaseRecipe):
                     "title": "Include Metadata Columns",
                     "default": True,
                     "input_type": "checkbox",
+                    "section": "lifecycle",
                     "description": "When true, appends '_source_file' and '_ingested_at' columns to parsed rows.",
                 },
                 "action_after_download": {
@@ -171,7 +206,8 @@ class FTPSFTPWatcherRecipe(BaseRecipe):
                     "title": "Action After Download",
                     "enum": ["none", "move", "delete"],
                     "default": "none",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "lifecycle",
                     "description": "Lifecycle action to perform on remote files after ingestion.",
                 },
                 "archive_directory": {
@@ -179,13 +215,19 @@ class FTPSFTPWatcherRecipe(BaseRecipe):
                     "title": "Archive Directory",
                     "default": "/incoming/archive",
                     "input_type": "text",
+                    "section": "lifecycle",
                     "description": "Remote target directory when Action After Download is set to 'move'.",
+                    "visible_when": {
+                        "field": "action_after_download",
+                        "equals": "move",
+                    },
                 },
                 "simulation_fallback": {
                     "type": "boolean",
                     "title": "Simulation Fallback",
                     "default": True,
                     "input_type": "checkbox",
+                    "section": "runtime_limits",
                     "description": "Fallback to realistic synthetic feed ingestion if remote server is unreachable.",
                 },
                 "mock_file_entries": {
@@ -193,6 +235,7 @@ class FTPSFTPWatcherRecipe(BaseRecipe):
                     "title": "Mock File Entries (JSON)",
                     "default": "",
                     "input_type": "textarea",
+                    "section": "runtime_limits",
                     "description": "Optional JSON list of mock file entries [{'filename': '...', 'content': '...'}] for deterministic testing.",
                 },
             },

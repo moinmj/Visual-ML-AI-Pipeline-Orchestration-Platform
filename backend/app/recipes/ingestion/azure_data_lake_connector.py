@@ -33,16 +33,7 @@ class AzureDataLakeConnectorRecipe(BaseRecipe):
     input_types = ["dataframe"]
     output_types = ["dataframe"]
 
-    inputs = [
-        RecipePort(
-            id="input",
-            label="Trigger / Input Dataset",
-            type="dataframe",
-            required=False,
-            max_connections=1,
-            description="Optional upstream dataset for batch IDs or execution trigger"
-        )
-    ]
+    inputs: List[RecipePort] = []
 
     outputs = [
         RecipePort(
@@ -56,88 +47,132 @@ class AzureDataLakeConnectorRecipe(BaseRecipe):
     def get_schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
+            "sections": [
+                {
+                    "id": "connection",
+                    "title": "Authentication & Credentials",
+                    "description": "Configure Azure credentials and storage account authentication",
+                },
+                {
+                    "id": "source",
+                    "title": "Storage & File Selection",
+                    "description": "Container, blob path, and file format configuration",
+                },
+                {
+                    "id": "runtime_limits",
+                    "title": "Limits & Performance",
+                    "description": "Row limits and execution simulation options",
+                },
+            ],
             "properties": {
                 "auth_mode": {
                     "type": "string",
                     "title": "Authentication Mode",
                     "input_type": "dropdown",
+                    "section": "connection",
                     "enum": ["connection_string", "sas_token", "account_key", "credential"],
                     "default": "connection_string",
-                    "description": "Choose Azure Storage authentication: Connection String, SAS Token, Account Key, or Stored Credential."
-                },
-                "account_name": {
-                    "type": "string",
-                    "title": "Storage Account Name",
-                    "input_type": "text",
-                    "default": "mystorageaccount",
-                    "description": "Azure Storage account name (e.g. 'analyticsdatalake2026')."
-                },
-                "container_name": {
-                    "type": "string",
-                    "title": "Container / File System Name",
-                    "input_type": "text",
-                    "default": "analytics-container",
-                    "description": "Azure Blob container or ADLS Gen2 filesystem name."
-                },
-                "blob_path": {
-                    "type": "string",
-                    "title": "Blob / File Path",
-                    "input_type": "text",
-                    "default": "raw/telemetry/iot_readings.parquet",
-                    "description": "Path to the target file inside the container (e.g. 'raw/2026/data.parquet')."
-                },
-                "file_format": {
-                    "type": "string",
-                    "title": "File Format",
-                    "input_type": "dropdown",
-                    "enum": ["auto", "parquet", "csv", "json", "jsonl"],
-                    "default": "auto",
-                    "description": "Dataset format. 'auto' infers format from the blob filename extension."
+                    "description": "Choose Azure Storage authentication: Connection String, SAS Token, Account Key, or Stored Credential.",
                 },
                 "connection_string": {
                     "type": "string",
                     "title": "Connection String",
                     "input_type": "password",
+                    "section": "connection",
                     "default": "",
-                    "description": "Azure Storage connection string (e.g. 'DefaultEndpointsProtocol=https;AccountName=...')."
+                    "description": "Azure Storage connection string (e.g. 'DefaultEndpointsProtocol=https;AccountName=...').",
+                    "visible_when": {
+                        "field": "auth_mode",
+                        "equals": "connection_string",
+                    },
                 },
-                "sas_token": {
+                "account_name": {
                     "type": "string",
-                    "title": "SAS Token",
-                    "input_type": "password",
-                    "default": "",
-                    "description": "Shared Access Signature (SAS) token query string."
+                    "title": "Storage Account Name",
+                    "input_type": "text",
+                    "section": "connection",
+                    "default": "mystorageaccount",
+                    "description": "Azure Storage account name (e.g. 'analyticsdatalake2026').",
                 },
                 "account_key": {
                     "type": "string",
                     "title": "Account Access Key",
                     "input_type": "password",
+                    "section": "connection",
                     "default": "",
-                    "description": "Azure Storage account primary or secondary access key."
+                    "description": "Azure Storage account primary or secondary access key.",
+                    "visible_when": {
+                        "field": "auth_mode",
+                        "equals": "account_key",
+                    },
+                },
+                "sas_token": {
+                    "type": "string",
+                    "title": "SAS Token",
+                    "input_type": "password",
+                    "section": "connection",
+                    "default": "",
+                    "description": "Shared Access Signature (SAS) token query string.",
+                    "visible_when": {
+                        "field": "auth_mode",
+                        "equals": "sas_token",
+                    },
                 },
                 "credential_id": {
                     "type": "string",
                     "title": "Connected Azure Credential",
                     "input_type": "credential_dropdown",
+                    "section": "connection",
                     "provider": "azure",
-                    "description": "Select stored Azure credentials from platform settings."
+                    "description": "Select stored Azure credentials from platform settings.",
+                    "visible_when": {
+                        "field": "auth_mode",
+                        "equals": "credential",
+                    },
+                },
+                "container_name": {
+                    "type": "string",
+                    "title": "Container / File System Name",
+                    "input_type": "text",
+                    "section": "source",
+                    "default": "analytics-container",
+                    "description": "Azure Blob container or ADLS Gen2 filesystem name.",
+                },
+                "blob_path": {
+                    "type": "string",
+                    "title": "Blob / File Path",
+                    "input_type": "text",
+                    "section": "source",
+                    "default": "raw/telemetry/iot_readings.parquet",
+                    "description": "Path to the target file inside the container (e.g. 'raw/2026/data.parquet').",
+                },
+                "file_format": {
+                    "type": "string",
+                    "title": "File Format",
+                    "input_type": "dropdown",
+                    "section": "source",
+                    "enum": ["auto", "parquet", "csv", "json", "jsonl"],
+                    "default": "auto",
+                    "description": "Dataset format. 'auto' infers format from the blob filename extension.",
                 },
                 "limit": {
                     "type": "integer",
                     "title": "Row Limit",
                     "input_type": "number",
+                    "section": "runtime_limits",
                     "default": 1000,
-                    "description": "Maximum number of rows to retrieve (1 to 1,000,000)."
+                    "description": "Maximum number of rows to retrieve (1 to 1,000,000).",
                 },
                 "simulation_mode": {
                     "type": "boolean",
                     "title": "Simulation / Demo Mode",
                     "input_type": "checkbox",
+                    "section": "runtime_limits",
                     "default": False,
-                    "description": "When enabled or when Azure driver is offline, generates realistic Azure Lakehouse benchmark records."
-                }
+                    "description": "When enabled or when Azure driver is offline, generates realistic Azure Lakehouse benchmark records.",
+                },
             },
-            "required": ["auth_mode", "container_name", "blob_path"]
+            "required": ["auth_mode", "container_name", "blob_path"],
         }
 
     def validate_config(self, config: Dict[str, Any]) -> List[str]:

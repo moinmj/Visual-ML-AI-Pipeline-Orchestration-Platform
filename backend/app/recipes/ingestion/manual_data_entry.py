@@ -22,7 +22,7 @@ class ManualDataEntryRecipe(BaseRecipe):
     )
     input_types = []
     output_types = ["dataframe"]
-    inputs = []
+    inputs: List[RecipePort] = []
     outputs = [
         RecipePort(
             id="output",
@@ -35,13 +35,31 @@ class ManualDataEntryRecipe(BaseRecipe):
     def get_schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
+            "sections": [
+                {
+                    "id": "data_input",
+                    "title": "Data Input & Format",
+                    "description": "Select payload format and input data content",
+                },
+                {
+                    "id": "csv_options",
+                    "title": "Delimiter & Header Options",
+                    "description": "Configure CSV delimiters, headers, and whitespace handling",
+                },
+                {
+                    "id": "type_mapping",
+                    "title": "Types & Column Mapping",
+                    "description": "Column renaming, data type inference, and missing value tokens",
+                },
+            ],
             "properties": {
                 "data_format": {
                     "type": "string",
                     "title": "Data Format",
                     "enum": ["json_records", "csv_text", "grid_rows"],
                     "default": "json_records",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "data_input",
                     "description": (
                         "Format of the input data: 'json_records' (array of objects), "
                         "'csv_text' (delimited text), or 'grid_rows' (2D array with headers)."
@@ -52,6 +70,7 @@ class ManualDataEntryRecipe(BaseRecipe):
                     "title": "Data / Content",
                     "default": "",
                     "input_type": "textarea",
+                    "section": "data_input",
                     "description": (
                         "Data payload: raw CSV text, JSON array string (e.g. [{\"col1\": \"val1\"}]), "
                         "or list of objects."
@@ -62,21 +81,36 @@ class ManualDataEntryRecipe(BaseRecipe):
                     "title": "Delimiter",
                     "default": ",",
                     "enum": [",", "\t", ";", "|"],
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "csv_options",
                     "description": "Character separating columns when data_format is 'csv_text'.",
+                    "visible_when": {
+                        "field": "data_format",
+                        "equals": "csv_text",
+                    },
                 },
                 "has_header": {
                     "type": "boolean",
                     "title": "First Row Is Header",
                     "default": True,
                     "input_type": "checkbox",
+                    "section": "csv_options",
                     "description": "Whether the CSV text or 2D grid array includes a header row with column names.",
+                },
+                "strip_whitespace": {
+                    "type": "boolean",
+                    "title": "Strip Whitespace",
+                    "default": True,
+                    "input_type": "checkbox",
+                    "section": "csv_options",
+                    "description": "Strip leading and trailing whitespace from string values and column headers.",
                 },
                 "infer_types": {
                     "type": "boolean",
                     "title": "Infer Types",
                     "default": True,
                     "input_type": "checkbox",
+                    "section": "type_mapping",
                     "description": "Automatically infer numeric, boolean, and datetime data types.",
                 },
                 "rename_columns": {
@@ -84,6 +118,7 @@ class ManualDataEntryRecipe(BaseRecipe):
                     "title": "Rename Columns Mapping",
                     "default": {},
                     "input_type": "key_value",
+                    "section": "type_mapping",
                     "description": (
                         "Optional mapping of current column names to new column names "
                         "(e.g. {'old_col': 'new_col'})."
@@ -94,17 +129,11 @@ class ManualDataEntryRecipe(BaseRecipe):
                     "title": "Explicit Column Types",
                     "default": {},
                     "input_type": "key_value",
+                    "section": "type_mapping",
                     "description": (
                         "Optional mapping of column names to target types "
                         "('int', 'float', 'str', 'bool', 'datetime')."
                     ),
-                },
-                "strip_whitespace": {
-                    "type": "boolean",
-                    "title": "Strip Whitespace",
-                    "default": True,
-                    "input_type": "checkbox",
-                    "description": "Strip leading and trailing whitespace from string values and column headers.",
                 },
                 "null_values": {
                     "type": "array",
@@ -112,6 +141,7 @@ class ManualDataEntryRecipe(BaseRecipe):
                     "title": "Null Value Tokens",
                     "default": ["", "null", "NULL", "None", "NaN", "nan", "NA", "N/A"],
                     "input_type": "tags",
+                    "section": "type_mapping",
                     "description": "List of string tokens to treat as null / missing values.",
                 },
                 "coerce_errors": {
@@ -119,6 +149,7 @@ class ManualDataEntryRecipe(BaseRecipe):
                     "title": "Coerce Type Errors",
                     "default": True,
                     "input_type": "checkbox",
+                    "section": "type_mapping",
                     "description": "If True, type conversion errors are converted to null/NaN; if False, an error is raised.",
                 },
             },

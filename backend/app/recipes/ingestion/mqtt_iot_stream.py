@@ -32,16 +32,7 @@ class MQTTStreamRecipe(BaseRecipe):
     input_types = ["dataframe"]
     output_types = ["dataframe"]
 
-    inputs = [
-        RecipePort(
-            id="input",
-            label="Trigger / Input Dataset",
-            type="dataframe",
-            required=False,
-            max_connections=1,
-            description="Optional upstream dataset for batch IDs or execution trigger"
-        )
-    ]
+    inputs: List[RecipePort] = []
 
     outputs = [
         RecipePort(
@@ -55,94 +46,123 @@ class MQTTStreamRecipe(BaseRecipe):
     def get_schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
+            "sections": [
+                {
+                    "id": "connection",
+                    "title": "MQTT Broker & Client",
+                    "description": "Configure broker hostname, port, client ID, and optional credentials",
+                },
+                {
+                    "id": "subscription",
+                    "title": "Topic Subscription & QoS",
+                    "description": "Target topic with wildcard support and Quality of Service level",
+                },
+                {
+                    "id": "runtime_limits",
+                    "title": "Batching & Sampling",
+                    "description": "Batch limits, sampling timeout window, JSON flattening, and simulation mode",
+                },
+            ],
             "properties": {
                 "broker_host": {
                     "type": "string",
                     "title": "MQTT Broker Host",
                     "input_type": "text",
+                    "section": "connection",
                     "default": "broker.emqx.io",
-                    "description": "MQTT broker hostname or IP address (e.g. 'broker.hivemq.com', 'localhost')."
+                    "description": "MQTT broker hostname or IP address (e.g. 'broker.hivemq.com', 'localhost').",
                 },
                 "port": {
                     "type": "integer",
                     "title": "Port",
                     "input_type": "number",
+                    "section": "connection",
                     "default": 1883,
-                    "description": "MQTT port (default 1883 for TCP, 8883 for TLS/SSL)."
-                },
-                "topic": {
-                    "type": "string",
-                    "title": "Topic / Wildcard Filter",
-                    "input_type": "text",
-                    "default": "factory/sensors/telemetry/#",
-                    "description": "MQTT topic to subscribe to. Wildcards like '#' (multi-level) and '+' (single-level) are supported."
+                    "description": "MQTT port (default 1883 for TCP, 8883 for TLS/SSL).",
                 },
                 "client_id": {
                     "type": "string",
                     "title": "Client ID",
                     "input_type": "text",
+                    "section": "connection",
                     "default": "ml_pipeline_iot_subscriber",
-                    "description": "Unique client identifier for the MQTT connection."
-                },
-                "qos": {
-                    "type": "integer",
-                    "title": "QoS Level",
-                    "input_type": "dropdown",
-                    "enum": [0, 1, 2],
-                    "default": 0,
-                    "description": "Quality of Service level: 0 (at most once), 1 (at least once), 2 (exactly once)."
+                    "description": "Unique client identifier for the MQTT connection.",
                 },
                 "username": {
                     "type": "string",
                     "title": "Username (Optional)",
                     "input_type": "text",
+                    "section": "connection",
                     "default": "",
-                    "description": "Username for MQTT broker authentication."
+                    "description": "Username for MQTT broker authentication.",
                 },
                 "password": {
                     "type": "string",
                     "title": "Password (Optional)",
                     "input_type": "password",
+                    "section": "connection",
                     "default": "",
-                    "description": "Password for MQTT broker authentication."
-                },
-                "max_messages": {
-                    "type": "integer",
-                    "title": "Max Messages per Batch",
-                    "input_type": "number",
-                    "default": 100,
-                    "description": "Maximum number of messages to collect before completing the micro-batch (1 to 20,000)."
-                },
-                "timeout_seconds": {
-                    "type": "integer",
-                    "title": "Sampling Window (Seconds)",
-                    "input_type": "number",
-                    "default": 3,
-                    "description": "Time window in seconds to wait for incoming MQTT messages."
-                },
-                "flatten_json": {
-                    "type": "boolean",
-                    "title": "Flatten JSON Payloads",
-                    "input_type": "checkbox",
-                    "default": True,
-                    "description": "Automatically unpack nested JSON object fields into top-level columns."
+                    "description": "Password for MQTT broker authentication.",
                 },
                 "credential_id": {
                     "type": "string",
                     "title": "Connected MQTT Credential",
                     "input_type": "credential_dropdown",
                     "provider": "mqtt",
-                    "description": "Select stored MQTT broker credentials from platform settings."
+                    "section": "connection",
+                    "description": "Select stored MQTT broker credentials from platform settings.",
+                },
+                "topic": {
+                    "type": "string",
+                    "title": "Topic / Wildcard Filter",
+                    "input_type": "text",
+                    "section": "subscription",
+                    "default": "factory/sensors/telemetry/#",
+                    "description": "MQTT topic to subscribe to. Wildcards like '#' (multi-level) and '+' (single-level) are supported.",
+                },
+                "qos": {
+                    "type": "integer",
+                    "title": "QoS Level",
+                    "input_type": "dropdown",
+                    "section": "subscription",
+                    "enum": [0, 1, 2],
+                    "default": 0,
+                    "description": "Quality of Service level: 0 (at most once), 1 (at least once), 2 (exactly once).",
+                },
+                "max_messages": {
+                    "type": "integer",
+                    "title": "Max Messages per Batch",
+                    "input_type": "number",
+                    "section": "runtime_limits",
+                    "default": 100,
+                    "description": "Maximum number of messages to collect before completing the micro-batch (1 to 20,000).",
+                },
+                "timeout_seconds": {
+                    "type": "integer",
+                    "title": "Sampling Window (Seconds)",
+                    "input_type": "number",
+                    "section": "runtime_limits",
+                    "default": 3,
+                    "description": "Time window in seconds to wait for incoming MQTT messages.",
+                },
+                "flatten_json": {
+                    "type": "boolean",
+                    "title": "Flatten JSON Payloads",
+                    "input_type": "checkbox",
+                    "section": "runtime_limits",
+                    "default": True,
+                    "description": "Automatically unpack nested JSON object fields into top-level columns.",
                 },
                 "simulation_mode": {
                     "type": "boolean",
                     "title": "Simulation / Demo Mode",
                     "input_type": "checkbox",
+                    "section": "runtime_limits",
                     "default": False,
-                    "description": "When enabled or when MQTT broker is offline, generates realistic IoT sensor telemetry benchmark records."
-                }
+                    "description": "When enabled or when MQTT broker is offline, generates realistic industrial IoT telemetry records.",
+                },
             },
-            "required": ["broker_host", "topic"]
+            "required": ["broker_host", "topic"],
         }
 
     def validate_config(self, config: Dict[str, Any]) -> List[str]:

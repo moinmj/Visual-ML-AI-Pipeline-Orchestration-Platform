@@ -80,13 +80,31 @@ class DeadLetterQueueRecipe(BaseRecipe):
     def get_schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
+            "sections": [
+                {
+                    "id": "mode",
+                    "title": "DLQ Routing & Categorization",
+                    "description": "Configure operation mode, required clean check columns, and error tags",
+                },
+                {
+                    "id": "storage",
+                    "title": "Quarantine Persistence",
+                    "description": "Configure persistent file storage for audit logs and forensic replay",
+                },
+                {
+                    "id": "runtime_limits",
+                    "title": "Capacity & Simulation",
+                    "description": "Buffer limits and simulation fallback options",
+                },
+            ],
             "properties": {
                 "dlq_mode": {
                     "type": "string",
                     "title": "DLQ Operation Mode",
                     "enum": ["trap_and_isolate", "pass_clean_only", "replay_from_storage"],
                     "default": "trap_and_isolate",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "mode",
                     "description": "'trap_and_isolate' routes failed input to DLQ; 'pass_clean_only' filters corrupt rows from primary; 'replay_from_storage' re-ingests saved DLQ records.",
                 },
                 "validation_column": {
@@ -94,13 +112,19 @@ class DeadLetterQueueRecipe(BaseRecipe):
                     "title": "Required Column (Clean Check)",
                     "default": "",
                     "input_type": "text",
+                    "section": "mode",
                     "description": "Optional column required to be non-null in primary data; null rows are routed to DLQ.",
+                    "visible_when": {
+                        "field": "dlq_mode",
+                        "equals": "pass_clean_only",
+                    },
                 },
                 "error_category_default": {
                     "type": "string",
                     "title": "Default Error Category",
                     "default": "PROCESSING_ERROR",
                     "input_type": "text",
+                    "section": "mode",
                     "description": "Category tag assigned to quarantined records if not already present.",
                 },
                 "persist_to_disk": {
@@ -108,6 +132,7 @@ class DeadLetterQueueRecipe(BaseRecipe):
                     "title": "Persist DLQ to Disk",
                     "default": False,
                     "input_type": "checkbox",
+                    "section": "storage",
                     "description": "Append quarantined records to a persistent JSONL or CSV file on the server.",
                 },
                 "storage_file_path": {
@@ -115,7 +140,12 @@ class DeadLetterQueueRecipe(BaseRecipe):
                     "title": "Storage File Path",
                     "default": "./data/dlq/quarantine_log.jsonl",
                     "input_type": "text",
+                    "section": "storage",
                     "description": "Disk path where quarantined records are stored when persistence is enabled.",
+                    "visible_when": {
+                        "field": "persist_to_disk",
+                        "equals": True,
+                    },
                 },
                 "max_dlq_capacity": {
                     "type": "integer",
@@ -124,6 +154,7 @@ class DeadLetterQueueRecipe(BaseRecipe):
                     "minimum": 100,
                     "maximum": 1000000,
                     "input_type": "number",
+                    "section": "runtime_limits",
                     "description": "Maximum number of quarantined records retained in a single run.",
                 },
                 "simulation_fallback": {
@@ -131,6 +162,7 @@ class DeadLetterQueueRecipe(BaseRecipe):
                     "title": "Simulation Fallback",
                     "default": True,
                     "input_type": "checkbox",
+                    "section": "runtime_limits",
                     "description": "Generate synthetic dirty stream with simulated DLQ traps if inputs are empty.",
                 },
             },

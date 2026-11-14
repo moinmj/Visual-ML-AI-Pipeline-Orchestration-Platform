@@ -37,16 +37,7 @@ class RSSAtomAggregatorRecipe(BaseRecipe):
     input_types = ["dataframe"]
     output_types = ["dataframe"]
 
-    inputs = [
-        RecipePort(
-            id="input",
-            label="Trigger / Feed URLs",
-            type="dataframe",
-            required=False,
-            max_connections=1,
-            description="Optional upstream dataset containing a 'feed_url' column",
-        )
-    ]
+    inputs: List[RecipePort] = []
 
     outputs = [
         RecipePort(
@@ -60,12 +51,30 @@ class RSSAtomAggregatorRecipe(BaseRecipe):
     def get_schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
+            "sections": [
+                {
+                    "id": "sources",
+                    "title": "Feed Sources",
+                    "description": "Configure RSS and Atom feed endpoint URLs",
+                },
+                {
+                    "id": "deduplication",
+                    "title": "Deduplication & Formatting",
+                    "description": "Duplicate detection keys, resolution strategies, and HTML cleanup",
+                },
+                {
+                    "id": "runtime_limits",
+                    "title": "Limits & Simulation",
+                    "description": "Article batch limits, offline simulation fallback, and mock XML injection",
+                },
+            ],
             "properties": {
                 "feed_urls": {
                     "type": "string",
                     "title": "Feed URLs",
                     "default": "https://feeds.bbci.co.uk/news/technology/rss.xml\nhttps://techcrunch.com/feed/",
                     "input_type": "textarea",
+                    "section": "sources",
                     "description": "Newline- or comma-separated list of RSS (2.0/1.0) or Atom feed URLs.",
                 },
                 "deduplication_key": {
@@ -73,7 +82,8 @@ class RSSAtomAggregatorRecipe(BaseRecipe):
                     "title": "Deduplication Key",
                     "enum": ["link_or_guid", "link", "guid", "title"],
                     "default": "link_or_guid",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "deduplication",
                     "description": "Identifier used to identify duplicate articles across feeds.",
                 },
                 "dedup_strategy": {
@@ -81,7 +91,8 @@ class RSSAtomAggregatorRecipe(BaseRecipe):
                     "title": "Duplicate Resolution",
                     "enum": ["keep_newest", "keep_first"],
                     "default": "keep_newest",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "deduplication",
                     "description": "Which record to retain when multiple feeds publish the same article.",
                 },
                 "max_items_per_feed": {
@@ -91,6 +102,7 @@ class RSSAtomAggregatorRecipe(BaseRecipe):
                     "minimum": 1,
                     "maximum": 500,
                     "input_type": "number",
+                    "section": "runtime_limits",
                     "description": "Limit of articles extracted from each individual feed stream.",
                 },
                 "max_total_items": {
@@ -100,6 +112,7 @@ class RSSAtomAggregatorRecipe(BaseRecipe):
                     "minimum": 1,
                     "maximum": 2000,
                     "input_type": "number",
+                    "section": "runtime_limits",
                     "description": "Maximum number of total deduplicated entries in the output dataset.",
                 },
                 "strip_html": {
@@ -107,6 +120,7 @@ class RSSAtomAggregatorRecipe(BaseRecipe):
                     "title": "Clean HTML Markup",
                     "default": True,
                     "input_type": "checkbox",
+                    "section": "deduplication",
                     "description": "Remove HTML tags and unescape entities from summary and content.",
                 },
                 "sort_by_date": {
@@ -114,6 +128,7 @@ class RSSAtomAggregatorRecipe(BaseRecipe):
                     "title": "Sort by Published Date",
                     "default": True,
                     "input_type": "checkbox",
+                    "section": "deduplication",
                     "description": "Sort final dataset in descending order by published timestamp.",
                 },
                 "simulation_fallback": {
@@ -121,6 +136,7 @@ class RSSAtomAggregatorRecipe(BaseRecipe):
                     "title": "Simulation Fallback",
                     "default": True,
                     "input_type": "checkbox",
+                    "section": "runtime_limits",
                     "description": "Return realistic synthetic tech news feed items if remote feeds are unreachable.",
                 },
                 "mock_feeds_xml": {
@@ -128,6 +144,7 @@ class RSSAtomAggregatorRecipe(BaseRecipe):
                     "title": "Mock Feeds XML",
                     "default": "",
                     "input_type": "textarea",
+                    "section": "runtime_limits",
                     "description": "Optional raw RSS or Atom XML content for offline testing without network calls.",
                 },
             },

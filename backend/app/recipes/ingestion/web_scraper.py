@@ -34,16 +34,7 @@ class WebScraperRecipe(BaseRecipe):
     input_types = ["dataframe"]
     output_types = ["dataframe"]
 
-    inputs = [
-        RecipePort(
-            id="input",
-            label="Trigger / Input Dataset",
-            type="dataframe",
-            required=False,
-            max_connections=1,
-            description="Optional upstream dataset providing URLs or execution trigger",
-        )
-    ]
+    inputs: List[RecipePort] = []
 
     outputs = [
         RecipePort(
@@ -57,12 +48,30 @@ class WebScraperRecipe(BaseRecipe):
     def get_schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
+            "sections": [
+                {
+                    "id": "target",
+                    "title": "Target Webpage & HTTP",
+                    "description": "Configure target webpage URL, custom User-Agent, and network timeouts",
+                },
+                {
+                    "id": "extraction",
+                    "title": "Extraction Mode & Selectors",
+                    "description": "HTML table extraction, CSS selectors, links, or text block options",
+                },
+                {
+                    "id": "runtime_limits",
+                    "title": "Metadata & Simulation",
+                    "description": "Provenance metadata, simulation fallbacks, and mock HTML testing",
+                },
+            ],
             "properties": {
                 "url": {
                     "type": "string",
                     "title": "Target Webpage URL",
                     "default": "https://en.wikipedia.org/wiki/List_of_countries_by_GDP_(nominal)",
                     "input_type": "text",
+                    "section": "target",
                     "description": "Full HTTP or HTTPS web URL to scrape data from.",
                 },
                 "extraction_mode": {
@@ -70,7 +79,8 @@ class WebScraperRecipe(BaseRecipe):
                     "title": "Extraction Mode",
                     "enum": ["html_tables", "css_selector_list", "page_links", "raw_text_blocks"],
                     "default": "html_tables",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "extraction",
                     "description": "Method of data extraction: HTML tables, CSS selector matches, page links, or text blocks.",
                 },
                 "table_index": {
@@ -80,20 +90,31 @@ class WebScraperRecipe(BaseRecipe):
                     "minimum": 0,
                     "maximum": 50,
                     "input_type": "number",
+                    "section": "extraction",
                     "description": "Zero-based index of the table to extract when extraction_mode is 'html_tables'.",
+                    "visible_when": {
+                        "field": "extraction_mode",
+                        "equals": "html_tables",
+                    },
                 },
                 "css_selector": {
                     "type": "string",
                     "title": "CSS Selector",
                     "default": "",
                     "input_type": "text",
+                    "section": "extraction",
                     "description": "Target CSS selector when extraction_mode is 'css_selector_list' (e.g. '.product-card', 'article').",
+                    "visible_when": {
+                        "field": "extraction_mode",
+                        "equals": "css_selector_list",
+                    },
                 },
                 "user_agent": {
                     "type": "string",
                     "title": "HTTP User-Agent",
                     "default": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                     "input_type": "text",
+                    "section": "target",
                     "description": "Custom User-Agent header string sent with HTTP request.",
                 },
                 "timeout_seconds": {
@@ -103,6 +124,7 @@ class WebScraperRecipe(BaseRecipe):
                     "minimum": 1,
                     "maximum": 60,
                     "input_type": "number",
+                    "section": "target",
                     "description": "Maximum seconds to wait for network HTTP response.",
                 },
                 "include_metadata_columns": {
@@ -110,6 +132,7 @@ class WebScraperRecipe(BaseRecipe):
                     "title": "Include Metadata Columns",
                     "default": True,
                     "input_type": "checkbox",
+                    "section": "runtime_limits",
                     "description": "When true, appends '_source_url' and '_extracted_at' columns to parsed rows.",
                 },
                 "simulation_fallback": {
@@ -117,6 +140,7 @@ class WebScraperRecipe(BaseRecipe):
                     "title": "Simulation Fallback",
                     "default": True,
                     "input_type": "checkbox",
+                    "section": "runtime_limits",
                     "description": "Generate synthetic dataset if webpage is offline or inaccessible.",
                 },
                 "mock_html": {
@@ -124,6 +148,7 @@ class WebScraperRecipe(BaseRecipe):
                     "title": "Mock HTML Content",
                     "default": "",
                     "input_type": "textarea",
+                    "section": "runtime_limits",
                     "description": "Optional raw HTML string to scrape directly without making network calls.",
                 },
             },

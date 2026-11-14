@@ -32,16 +32,7 @@ class RabbitMQConsumerRecipe(BaseRecipe):
     input_types = ["dataframe"]
     output_types = ["dataframe"]
 
-    inputs = [
-        RecipePort(
-            id="input",
-            label="Trigger / Input Dataset",
-            type="dataframe",
-            required=False,
-            max_connections=1,
-            description="Optional upstream dataset for batch IDs or execution trigger"
-        )
-    ]
+    inputs: List[RecipePort] = []
 
     outputs = [
         RecipePort(
@@ -55,101 +46,159 @@ class RabbitMQConsumerRecipe(BaseRecipe):
     def get_schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
+            "sections": [
+                {
+                    "id": "connection",
+                    "title": "Broker Connection",
+                    "description": "Configure connection mode, broker parameters, or AMQP URI",
+                },
+                {
+                    "id": "queue",
+                    "title": "Queue & Acknowledgment",
+                    "description": "Target queue name and message acknowledgment settings",
+                },
+                {
+                    "id": "runtime_limits",
+                    "title": "Batching & Parsing",
+                    "description": "Batch message limit, JSON flattening, and simulation mode",
+                },
+            ],
             "properties": {
                 "connection_mode": {
                     "type": "string",
                     "title": "Connection Mode",
                     "input_type": "dropdown",
+                    "section": "connection",
                     "enum": ["host_port", "amqp_uri", "credential"],
                     "default": "host_port",
-                    "description": "Choose between host/port parameters, a full AMQP URI, or stored credentials."
+                    "description": "Choose between host/port parameters, a full AMQP URI, or stored credentials.",
                 },
                 "host": {
                     "type": "string",
                     "title": "Broker Host",
                     "input_type": "text",
+                    "section": "connection",
                     "default": "localhost",
-                    "description": "RabbitMQ server hostname or IP address."
+                    "description": "RabbitMQ server hostname or IP address.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "host_port",
+                    },
                 },
                 "port": {
                     "type": "integer",
                     "title": "Port",
                     "input_type": "number",
+                    "section": "connection",
                     "default": 5672,
-                    "description": "RabbitMQ server port (default 5672 for AMQP, 5671 for TLS)."
+                    "description": "RabbitMQ server port (default 5672 for AMQP, 5671 for TLS).",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "host_port",
+                    },
                 },
                 "virtual_host": {
                     "type": "string",
                     "title": "Virtual Host",
                     "input_type": "text",
+                    "section": "connection",
                     "default": "/",
-                    "description": "Target virtual host on the RabbitMQ broker (default '/')."
-                },
-                "queue_name": {
-                    "type": "string",
-                    "title": "Queue Name",
-                    "input_type": "text",
-                    "default": "orders-incoming",
-                    "description": "Target RabbitMQ queue name to consume from."
+                    "description": "Target virtual host on the RabbitMQ broker (default '/').",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "host_port",
+                    },
                 },
                 "username": {
                     "type": "string",
                     "title": "Username",
                     "input_type": "text",
+                    "section": "connection",
                     "default": "guest",
-                    "description": "RabbitMQ user login name."
+                    "description": "RabbitMQ user login name.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "host_port",
+                    },
                 },
                 "password": {
                     "type": "string",
                     "title": "Password",
                     "input_type": "password",
+                    "section": "connection",
                     "default": "guest",
-                    "description": "RabbitMQ user password."
+                    "description": "RabbitMQ user password.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "host_port",
+                    },
                 },
                 "amqp_uri": {
                     "type": "string",
                     "title": "AMQP Connection URI",
                     "input_type": "text",
+                    "section": "connection",
                     "default": "",
-                    "description": "Full AMQP connection string e.g. amqp://guest:guest@localhost:5672/%2F"
-                },
-                "max_messages": {
-                    "type": "integer",
-                    "title": "Max Messages per Batch",
-                    "input_type": "number",
-                    "default": 100,
-                    "description": "Maximum number of messages to drain in this batch (1 to 20,000)."
-                },
-                "auto_ack": {
-                    "type": "boolean",
-                    "title": "Auto Acknowledge (Acknowledge on Read)",
-                    "input_type": "checkbox",
-                    "default": True,
-                    "description": "Automatically acknowledge messages upon pulling them from the queue."
-                },
-                "flatten_json": {
-                    "type": "boolean",
-                    "title": "Flatten JSON Payloads",
-                    "input_type": "checkbox",
-                    "default": True,
-                    "description": "Automatically unpack nested JSON object fields into top-level columns."
+                    "description": "Full AMQP connection string e.g. amqp://guest:guest@localhost:5672/%2F",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "amqp_uri",
+                    },
                 },
                 "credential_id": {
                     "type": "string",
                     "title": "Connected RabbitMQ Credential",
                     "input_type": "credential_dropdown",
                     "provider": "rabbitmq",
-                    "description": "Select stored RabbitMQ broker credentials from platform settings."
+                    "section": "connection",
+                    "description": "Select stored RabbitMQ credentials from platform settings.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "credential",
+                    },
+                },
+                "queue_name": {
+                    "type": "string",
+                    "title": "Queue Name",
+                    "input_type": "text",
+                    "section": "queue",
+                    "default": "orders-incoming",
+                    "description": "Target RabbitMQ queue name to consume from.",
+                },
+                "auto_ack": {
+                    "type": "boolean",
+                    "title": "Auto Acknowledge (Acknowledge on Read)",
+                    "input_type": "checkbox",
+                    "section": "queue",
+                    "default": True,
+                    "description": "Automatically acknowledge messages upon pulling them from the queue.",
+                },
+                "max_messages": {
+                    "type": "integer",
+                    "title": "Max Messages per Batch",
+                    "input_type": "number",
+                    "section": "runtime_limits",
+                    "default": 100,
+                    "description": "Maximum number of messages to drain in this batch (1 to 20,000).",
+                },
+                "flatten_json": {
+                    "type": "boolean",
+                    "title": "Flatten JSON Payloads",
+                    "input_type": "checkbox",
+                    "section": "runtime_limits",
+                    "default": True,
+                    "description": "Automatically unpack nested JSON object fields into top-level columns.",
                 },
                 "simulation_mode": {
                     "type": "boolean",
                     "title": "Simulation / Demo Mode",
                     "input_type": "checkbox",
+                    "section": "runtime_limits",
                     "default": False,
-                    "description": "When enabled or when RabbitMQ is offline, generates realistic queue benchmark records."
-                }
+                    "description": "When enabled or when RabbitMQ broker is offline, generates realistic order event stream benchmark records.",
+                },
             },
-            "required": ["connection_mode", "queue_name"]
+            "required": ["queue_name"],
         }
 
     def validate_config(self, config: Dict[str, Any]) -> List[str]:

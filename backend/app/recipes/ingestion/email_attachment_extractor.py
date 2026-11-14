@@ -37,16 +37,7 @@ class EmailAttachmentExtractorRecipe(BaseRecipe):
     input_types = ["dataframe"]
     output_types = ["dataframe"]
 
-    inputs = [
-        RecipePort(
-            id="input",
-            label="Trigger / Input Dataset",
-            type="dataframe",
-            required=False,
-            max_connections=1,
-            description="Optional upstream dataset for batch IDs or execution trigger",
-        )
-    ]
+    inputs: List[RecipePort] = []
 
     outputs = [
         RecipePort(
@@ -60,12 +51,35 @@ class EmailAttachmentExtractorRecipe(BaseRecipe):
     def get_schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
+            "sections": [
+                {
+                    "id": "connection",
+                    "title": "Mail Server & Credentials",
+                    "description": "Configure IMAP server address, port, and authentication credentials",
+                },
+                {
+                    "id": "filters",
+                    "title": "Mailbox & Message Filters",
+                    "description": "Folder selection, read status, sender, and subject pattern filters",
+                },
+                {
+                    "id": "parsing",
+                    "title": "Attachment Matching & Parsing",
+                    "description": "Attachment filename glob pattern, format parsing, and Excel sheet options",
+                },
+                {
+                    "id": "runtime_limits",
+                    "title": "Execution & Simulation",
+                    "description": "Batch email limits, message flags, and simulation fallback",
+                },
+            ],
             "properties": {
                 "imap_server": {
                     "type": "string",
                     "title": "IMAP Server",
                     "default": "imap.gmail.com",
                     "input_type": "text",
+                    "section": "connection",
                     "description": "Host address of the secure IMAP mail server.",
                 },
                 "port": {
@@ -75,6 +89,7 @@ class EmailAttachmentExtractorRecipe(BaseRecipe):
                     "minimum": 1,
                     "maximum": 65535,
                     "input_type": "number",
+                    "section": "connection",
                     "description": "Network port for secure IMAP SSL/TLS connection (usually 993).",
                 },
                 "username": {
@@ -82,6 +97,7 @@ class EmailAttachmentExtractorRecipe(BaseRecipe):
                     "title": "Email / Username",
                     "default": "data_feed@company.com",
                     "input_type": "text",
+                    "section": "connection",
                     "description": "Email address or username used to authenticate to the mailbox.",
                 },
                 "password": {
@@ -89,6 +105,7 @@ class EmailAttachmentExtractorRecipe(BaseRecipe):
                     "title": "Password / App Password",
                     "default": "",
                     "input_type": "password",
+                    "section": "connection",
                     "description": "Account password or app-specific password for IMAP authentication.",
                 },
                 "folder": {
@@ -96,6 +113,7 @@ class EmailAttachmentExtractorRecipe(BaseRecipe):
                     "title": "Mailbox Folder",
                     "default": "INBOX",
                     "input_type": "text",
+                    "section": "filters",
                     "description": "Mailbox folder to inspect (e.g. 'INBOX', 'Feeds', 'Reports').",
                 },
                 "search_filter": {
@@ -103,7 +121,8 @@ class EmailAttachmentExtractorRecipe(BaseRecipe):
                     "title": "Search Filter",
                     "enum": ["UNSEEN", "ALL"],
                     "default": "UNSEEN",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "filters",
                     "description": "Message search scope in the target folder.",
                 },
                 "sender_filter": {
@@ -111,6 +130,7 @@ class EmailAttachmentExtractorRecipe(BaseRecipe):
                     "title": "Filter By Sender",
                     "default": "",
                     "input_type": "text",
+                    "section": "filters",
                     "description": "Optional sender email address substring or regex pattern.",
                 },
                 "subject_filter": {
@@ -118,6 +138,7 @@ class EmailAttachmentExtractorRecipe(BaseRecipe):
                     "title": "Filter By Subject",
                     "default": "",
                     "input_type": "text",
+                    "section": "filters",
                     "description": "Optional email subject line keyword or pattern.",
                 },
                 "attachment_pattern": {
@@ -125,6 +146,7 @@ class EmailAttachmentExtractorRecipe(BaseRecipe):
                     "title": "Attachment Filename Pattern",
                     "default": "*.csv;*.xlsx;*.parquet;*.json",
                     "input_type": "text",
+                    "section": "parsing",
                     "description": "Glob patterns separated by semicolon for matching attachment files.",
                 },
                 "output_mode": {
@@ -132,7 +154,8 @@ class EmailAttachmentExtractorRecipe(BaseRecipe):
                     "title": "Output Mode",
                     "enum": ["parse_data", "attachment_manifest"],
                     "default": "parse_data",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "parsing",
                     "description": "'parse_data' parses attachment rows; 'attachment_manifest' outputs discovered files listing.",
                 },
                 "excel_sheet_name": {
@@ -140,6 +163,7 @@ class EmailAttachmentExtractorRecipe(BaseRecipe):
                     "title": "Excel Sheet Name / Index",
                     "default": "0",
                     "input_type": "text",
+                    "section": "parsing",
                     "description": "Sheet name or numeric index (e.g. '0' or 'Sheet1') when parsing Excel attachments.",
                 },
                 "delimiter": {
@@ -147,7 +171,8 @@ class EmailAttachmentExtractorRecipe(BaseRecipe):
                     "title": "CSV Delimiter",
                     "enum": [",", "\t", ";", "|"],
                     "default": ",",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "parsing",
                     "description": "Field delimiter character for CSV attachments.",
                 },
                 "max_emails": {
@@ -157,6 +182,7 @@ class EmailAttachmentExtractorRecipe(BaseRecipe):
                     "minimum": 1,
                     "maximum": 100,
                     "input_type": "number",
+                    "section": "runtime_limits",
                     "description": "Maximum number of candidate emails to inspect per run.",
                 },
                 "mark_as_read": {
@@ -164,6 +190,7 @@ class EmailAttachmentExtractorRecipe(BaseRecipe):
                     "title": "Mark Emails as Read",
                     "default": False,
                     "input_type": "checkbox",
+                    "section": "runtime_limits",
                     "description": "Flag scanned emails as read (\\Seen) on the mail server.",
                 },
                 "include_metadata_columns": {
@@ -171,6 +198,7 @@ class EmailAttachmentExtractorRecipe(BaseRecipe):
                     "title": "Include Email Metadata Columns",
                     "default": True,
                     "input_type": "checkbox",
+                    "section": "runtime_limits",
                     "description": "Append '_email_sender', '_email_subject', '_attachment_name', and '_email_date' columns.",
                 },
                 "simulation_fallback": {
@@ -178,6 +206,7 @@ class EmailAttachmentExtractorRecipe(BaseRecipe):
                     "title": "Simulation Fallback",
                     "default": True,
                     "input_type": "checkbox",
+                    "section": "runtime_limits",
                     "description": "Return synthetic email attachment data if server connection fails or inbox is empty.",
                 },
                 "mock_emails": {
@@ -185,6 +214,7 @@ class EmailAttachmentExtractorRecipe(BaseRecipe):
                     "title": "Mock Emails (JSON)",
                     "default": "",
                     "input_type": "textarea",
+                    "section": "runtime_limits",
                     "description": "Optional JSON list of mock email objects with attachments for automated test injection.",
                 },
             },
