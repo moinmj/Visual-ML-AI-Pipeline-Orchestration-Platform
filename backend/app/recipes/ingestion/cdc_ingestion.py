@@ -299,11 +299,11 @@ class CDCIngestionRecipe(BaseRecipe):
                     delivery_status = "LIVE"
                     status_msg = f"Polled {len(raw_events)} live CDC events."
                 except Exception as e:
-                    logger.info(f"Live CDC polling failed ({e}); switching to synthetic benchmark simulation.")
-                    raw_events = self._generate_synthetic_cdc_events(config, batch_size)
-                    status_msg = f"Synthesized {len(raw_events)} CDC events (simulation fallback)."
+                    logger.warning(f"Live CDC polling failed: {e}")
+                    raise ValidationException(f"Live CDC polling failed: {str(e)}")
             else:
                 raw_events = self._generate_synthetic_cdc_events(config, batch_size)
+                delivery_status = "SIMULATED"
                 status_msg = f"Synthesized {len(raw_events)} CDC events."
 
         # 3. Filter and Unpack Events
