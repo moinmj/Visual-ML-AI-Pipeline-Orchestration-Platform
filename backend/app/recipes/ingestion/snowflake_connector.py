@@ -58,10 +58,10 @@ class SnowflakeConnectorRecipe(BaseRecipe):
                     "type": "string",
                     "title": "Connection Mode",
                     "input_type": "dropdown",
-                    "enum": ["account_credentials", "connection_string", "credential"],
+                    "enum": ["account_credentials", "sso", "connection_string", "credential"],
                     "default": "account_credentials",
                     "section": "connection",
-                    "description": "Choose how to connect: Snowflake account credentials, connection string (SQLAlchemy URI), or stored credential."
+                    "description": "Choose how to connect: Snowflake account credentials, Single Sign-On (SSO / OAuth / Okta), connection string (SQLAlchemy URI), or stored credential."
                 },
                 "credential_id": {
                     "type": "string",
@@ -73,6 +73,97 @@ class SnowflakeConnectorRecipe(BaseRecipe):
                     "visible_when": {
                         "field": "connection_mode",
                         "equals": "credential"
+                    }
+                },
+                "sso_authenticator": {
+                    "type": "string",
+                    "title": "SSO Authenticator",
+                    "input_type": "dropdown",
+                    "enum": ["externalbrowser", "oauth", "okta"],
+                    "default": "externalbrowser",
+                    "section": "connection",
+                    "description": "Snowflake SSO authenticator method: 'externalbrowser' (browser-based IdP prompt), 'oauth' (OAuth 2.0 access token), or 'okta' (Okta SAML/SSO URL).",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "sso"
+                    }
+                },
+                "sso_account": {
+                    "type": "string",
+                    "title": "Snowflake Account Identifier",
+                    "input_type": "text",
+                    "default": "",
+                    "placeholder": "e.g. xy12345.us-east-1 or myorg-myaccount",
+                    "section": "connection",
+                    "description": "Snowflake account identifier for SSO routing.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "sso"
+                    }
+                },
+                "sso_user": {
+                    "type": "string",
+                    "title": "Username / SSO Email",
+                    "input_type": "text",
+                    "default": "",
+                    "placeholder": "e.g. user@company.com or analyst",
+                    "section": "connection",
+                    "description": "Snowflake username or SSO identity email.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "sso"
+                    }
+                },
+                "sso_role": {
+                    "type": "string",
+                    "title": "Role",
+                    "input_type": "text",
+                    "default": "PUBLIC",
+                    "placeholder": "PUBLIC",
+                    "section": "connection",
+                    "description": "Snowflake security role to assume (e.g. 'DATA_ANALYST', 'SYSADMIN', 'PUBLIC').",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "sso"
+                    }
+                },
+                "sso_warehouse": {
+                    "type": "string",
+                    "title": "Warehouse",
+                    "input_type": "text",
+                    "default": "",
+                    "placeholder": "e.g. COMPUTE_WH",
+                    "section": "connection",
+                    "description": "Virtual warehouse used to execute queries.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "sso"
+                    }
+                },
+                "sso_token": {
+                    "type": "string",
+                    "title": "OAuth Access Token",
+                    "input_type": "password",
+                    "default": "",
+                    "placeholder": "Enter OAuth Bearer token",
+                    "section": "connection",
+                    "description": "OAuth 2.0 access token used when SSO Authenticator is set to 'oauth'.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "sso"
+                    }
+                },
+                "idp_url": {
+                    "type": "string",
+                    "title": "Okta / IdP URL",
+                    "input_type": "text",
+                    "default": "",
+                    "placeholder": "e.g. https://mycompany.okta.com",
+                    "section": "connection",
+                    "description": "Identity provider endpoint URL (e.g. https://<org>.okta.com) used when SSO Authenticator is set to 'okta'.",
+                    "visible_when": {
+                        "field": "connection_mode",
+                        "equals": "sso"
                     }
                 },
                 "account": {
@@ -296,6 +387,18 @@ class SnowflakeConnectorRecipe(BaseRecipe):
                     errors.append("Snowflake Account identifier is required in 'account_credentials' mode.")
                 if not config.get("user"):
                     errors.append("Username is required in 'account_credentials' mode.")
+            elif conn_mode == "sso":
+                acc = str(config.get("sso_account") or config.get("account", "")).strip()
+                usr = str(config.get("sso_user") or config.get("user", "")).strip()
+                if not acc:
+                    errors.append("Snowflake Account identifier is required in 'sso' mode.")
+                if not usr:
+                    errors.append("Username / SSO Email is required in 'sso' mode.")
+                auth_method = str(config.get("sso_authenticator", "externalbrowser")).strip().lower()
+                if auth_method == "oauth" and not str(config.get("sso_token", "")).strip():
+                    errors.append("OAuth Access Token is required when SSO Authenticator is 'oauth'.")
+                elif auth_method == "okta" and not str(config.get("idp_url", "")).strip():
+                    errors.append("Okta / IdP URL is required when SSO Authenticator is 'okta'.")
             elif conn_mode == "connection_string" and "connection_string" in config:
                 cs = str(config.get("connection_string", "")).strip()
                 if not cs and not config.get("account"):
@@ -330,14 +433,17 @@ class SnowflakeConnectorRecipe(BaseRecipe):
 
     def _resolve_connection_params(self, config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
         conn_mode = str(config.get("connection_mode", "account_credentials")).strip().lower()
-        account = str(config.get("account", "xy12345.us-east-1")).strip()
-        user = str(config.get("user", "analyst")).strip()
+        account = str(config.get("sso_account") if conn_mode == "sso" and config.get("sso_account") else config.get("account", "xy12345.us-east-1")).strip()
+        user = str(config.get("sso_user") if conn_mode == "sso" and config.get("sso_user") else config.get("user", "analyst")).strip()
         password = str(config.get("password", "")).strip()
-        warehouse = str(config.get("warehouse", "COMPUTE_WH")).strip()
+        warehouse = str(config.get("sso_warehouse") if conn_mode == "sso" and config.get("sso_warehouse") else config.get("warehouse", "COMPUTE_WH")).strip()
         database = str(config.get("database", "ANALYTICS_DB")).strip()
         schema_name = str(config.get("schema_name", "PUBLIC")).strip()
-        role = str(config.get("role", "PUBLIC")).strip()
+        role = str(config.get("sso_role") if conn_mode == "sso" and config.get("sso_role") else config.get("role", "PUBLIC")).strip()
         cs = str(config.get("connection_string", "")).strip()
+        sso_authenticator = str(config.get("sso_authenticator", "externalbrowser")).strip().lower()
+        sso_token = str(config.get("sso_token", "")).strip()
+        idp_url = str(config.get("idp_url", "")).strip()
 
         if conn_mode == "credential" and config.get("credential_id") and context:
             cred_id = config.get("credential_id")
@@ -352,6 +458,9 @@ class SnowflakeConnectorRecipe(BaseRecipe):
                     schema_name = cred.get("schema", schema_name)
                     role = cred.get("role", role)
                     cs = cred.get("connection_string", cs)
+                    sso_authenticator = cred.get("sso_authenticator", sso_authenticator)
+                    sso_token = cred.get("sso_token", sso_token)
+                    idp_url = cred.get("idp_url", idp_url)
 
         return {
             "account": account,
@@ -362,7 +471,10 @@ class SnowflakeConnectorRecipe(BaseRecipe):
             "schema": schema_name,
             "role": role,
             "connection_string": cs,
-            "mode": conn_mode
+            "mode": conn_mode,
+            "sso_authenticator": sso_authenticator,
+            "sso_token": sso_token,
+            "idp_url": idp_url
         }
 
     def _generate_benchmark_data(self, config: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -417,12 +529,22 @@ class SnowflakeConnectorRecipe(BaseRecipe):
                 conn_kwargs = {
                     "account": account,
                     "user": params["user"],
-                    "password": params["password"],
                     "warehouse": warehouse,
                     "database": database,
                     "schema": schema,
                     "role": params["role"]
                 }
+                if params.get("mode") == "sso":
+                    auth = params.get("sso_authenticator", "externalbrowser")
+                    if auth == "oauth":
+                        conn_kwargs["authenticator"] = "oauth"
+                        conn_kwargs["token"] = params.get("sso_token", "")
+                    elif auth == "okta":
+                        conn_kwargs["authenticator"] = params.get("idp_url", "")
+                    else:
+                        conn_kwargs["authenticator"] = "externalbrowser"
+                else:
+                    conn_kwargs["password"] = params["password"]
                 conn = snowflake.connector.connect(**conn_kwargs)
                 cur = conn.cursor()
 
@@ -544,16 +666,28 @@ class SnowflakeConnectorRecipe(BaseRecipe):
         if not simulation_mode and params.get("account") and params.get("user"):
             try:
                 import snowflake.connector
-                conn = snowflake.connector.connect(
-                    account=params["account"],
-                    user=params["user"],
-                    password=params["password"],
-                    warehouse=params["warehouse"],
-                    database=params["database"],
-                    schema=params["schema"],
-                    role=params["role"],
-                    login_timeout=int(config.get("timeout", 10)),
-                )
+                inspect_conn_kwargs = {
+                    "account": params["account"],
+                    "user": params["user"],
+                    "warehouse": params["warehouse"],
+                    "database": params["database"],
+                    "schema": params["schema"],
+                    "role": params["role"],
+                    "login_timeout": int(config.get("timeout", 10)),
+                }
+                if params.get("mode") == "sso":
+                    auth = params.get("sso_authenticator", "externalbrowser")
+                    if auth == "oauth":
+                        inspect_conn_kwargs["authenticator"] = "oauth"
+                        inspect_conn_kwargs["token"] = params.get("sso_token", "")
+                    elif auth == "okta":
+                        inspect_conn_kwargs["authenticator"] = params.get("idp_url", "")
+                    else:
+                        inspect_conn_kwargs["authenticator"] = "externalbrowser"
+                else:
+                    inspect_conn_kwargs["password"] = params["password"]
+
+                conn = snowflake.connector.connect(**inspect_conn_kwargs)
                 cur = conn.cursor()
                 cur.execute("SELECT CURRENT_VERSION();")
                 row = cur.fetchone()

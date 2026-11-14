@@ -59,60 +59,84 @@ class EventBusPublisherRecipe(BaseRecipe):
     def get_schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
+            "sections": [
+                {
+                    "id": "target",
+                    "title": "Event Bus Destination",
+                    "description": "Configure message bus target, broker address, and topic/queue destination",
+                },
+                {
+                    "id": "publishing",
+                    "title": "Publishing Options",
+                    "description": "Configure publishing mode, partitioning key column, and credentials",
+                },
+                {
+                    "id": "runtime_limits",
+                    "title": "Simulation & Performance",
+                    "description": "Simulation fallback and delivery telemetry",
+                },
+            ],
             "properties": {
                 "bus_type": {
                     "type": "string",
                     "title": "Event Bus Target",
                     "input_type": "dropdown",
+                    "section": "target",
                     "enum": ["kafka", "rabbitmq", "sns"],
                     "default": "kafka",
-                    "description": "Target message bus service: Apache Kafka, RabbitMQ, or Amazon SNS."
+                    "description": "Target message bus service: Apache Kafka, RabbitMQ, or Amazon SNS.",
                 },
                 "destination": {
                     "type": "string",
                     "title": "Destination (Topic / Queue / ARN)",
                     "input_type": "text",
+                    "section": "target",
                     "default": "processed-pipeline-events",
-                    "description": "Topic name (Kafka), Queue or Exchange name (RabbitMQ), or Topic ARN (Amazon SNS)."
+                    "description": "Topic name (Kafka), Queue or Exchange name (RabbitMQ), or Topic ARN (Amazon SNS).",
                 },
                 "server_address": {
                     "type": "string",
                     "title": "Server / Broker Address",
                     "input_type": "text",
+                    "section": "target",
                     "default": "localhost:9092",
-                    "description": "Broker connection address (e.g. 'localhost:9092' for Kafka, 'localhost:5672' for RabbitMQ, or AWS region for SNS)."
+                    "description": "Broker connection address (e.g. 'localhost:9092' for Kafka, 'localhost:5672' for RabbitMQ, or AWS region for SNS).",
                 },
                 "key_column": {
                     "type": "string",
                     "title": "Message Key Column (Optional)",
                     "input_type": "text",
+                    "section": "publishing",
                     "default": "",
-                    "description": "Name of the column to use as the message partitioning or routing key (e.g. 'customer_id', 'order_id')."
+                    "description": "Name of the column to use as the message partitioning or routing key (e.g. 'customer_id', 'order_id').",
                 },
                 "publish_mode": {
                     "type": "string",
                     "title": "Publish Mode",
                     "input_type": "dropdown",
+                    "section": "publishing",
                     "enum": ["row_by_row", "batch_array"],
                     "default": "row_by_row",
-                    "description": "'row_by_row' publishes individual JSON records for each row; 'batch_array' publishes the entire batch as one JSON array."
+                    "description": "'row_by_row' publishes individual JSON records for each row; 'batch_array' publishes the entire batch as one JSON array.",
                 },
                 "credential_id": {
                     "type": "string",
                     "title": "Connected Event Bus Credential",
                     "input_type": "credential_dropdown",
                     "provider": "event_bus",
-                    "description": "Select stored credentials for the event bus from platform settings."
+                    "section": "publishing",
+                    "description": "Select stored credentials for the event bus from platform settings.",
                 },
                 "simulation_mode": {
                     "type": "boolean",
                     "title": "Simulation / Demo Mode",
                     "input_type": "checkbox",
+                    "section": "runtime_limits",
                     "default": False,
-                    "description": "When enabled or when destination broker is offline, simulates message emission and reports delivery metrics."
-                }
+                    "description": "When enabled or when destination broker is offline, simulates message emission and reports delivery metrics.",
+                },
             },
-            "required": ["bus_type", "destination"]
+            "required": ["bus_type", "destination"],
         }
 
     def validate_config(self, config: Dict[str, Any]) -> List[str]:

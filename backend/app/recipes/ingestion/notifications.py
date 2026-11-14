@@ -49,13 +49,36 @@ class NotificationsRecipe(BaseRecipe):
     def get_schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
+            "sections": [
+                {
+                    "id": "channel",
+                    "title": "Channel & Endpoint",
+                    "description": "Configure notification destination protocol and URL/recipient parameters",
+                },
+                {
+                    "id": "message_content",
+                    "title": "Message Content",
+                    "description": "Configure title, message template, severity, and context summaries",
+                },
+                {
+                    "id": "email_settings",
+                    "title": "SMTP & Email Credentials",
+                    "description": "Configure SMTP host, port, authentication, and encryption",
+                },
+                {
+                    "id": "runtime_limits",
+                    "title": "Timeouts & Error Handling",
+                    "description": "HTTP headers, network timeout, and failure handling",
+                },
+            ],
             "properties": {
                 "channel_type": {
                     "type": "string",
                     "title": "Channel Type",
                     "enum": ["webhook", "slack", "teams", "discord", "email"],
                     "default": "webhook",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "channel",
                     "description": (
                         "Target notification protocol: 'webhook' (generic HTTP POST), "
                         "'slack', 'teams', 'discord', or 'email'."
@@ -66,6 +89,7 @@ class NotificationsRecipe(BaseRecipe):
                     "title": "Webhook / Endpoint URL",
                     "default": "",
                     "input_type": "text",
+                    "section": "channel",
                     "description": (
                         "Destination webhook or HTTP endpoint URL "
                         "(for webhook, Slack, Teams, or Discord)."
@@ -76,6 +100,7 @@ class NotificationsRecipe(BaseRecipe):
                     "title": "Notification Title / Subject",
                     "default": "Pipeline Notification",
                     "input_type": "text",
+                    "section": "message_content",
                     "description": "Headline or subject line for the notification.",
                 },
                 "message": {
@@ -83,6 +108,7 @@ class NotificationsRecipe(BaseRecipe):
                     "title": "Message Body",
                     "default": "Pipeline execution completed successfully.",
                     "input_type": "textarea",
+                    "section": "message_content",
                     "description": (
                         "Message body content. Supports template tokens: "
                         "{title}, {severity}, {row_count}, {col_count}."
@@ -93,7 +119,8 @@ class NotificationsRecipe(BaseRecipe):
                     "title": "Severity Level",
                     "enum": ["info", "success", "warning", "error"],
                     "default": "info",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "message_content",
                     "description": "Severity level of the notification (affects formatting and badges).",
                 },
                 "include_dataset_summary": {
@@ -101,6 +128,7 @@ class NotificationsRecipe(BaseRecipe):
                     "title": "Include Data Summary",
                     "default": True,
                     "input_type": "checkbox",
+                    "section": "message_content",
                     "description": "Automatically append row count, column count, and column names.",
                 },
                 "include_metrics": {
@@ -108,6 +136,7 @@ class NotificationsRecipe(BaseRecipe):
                     "title": "Include Upstream Metrics",
                     "default": True,
                     "input_type": "checkbox",
+                    "section": "message_content",
                     "description": "Automatically append model or step metrics from upstream context.",
                 },
                 "email_recipients": {
@@ -115,55 +144,91 @@ class NotificationsRecipe(BaseRecipe):
                     "title": "Email Recipients",
                     "default": "",
                     "input_type": "text",
+                    "section": "email_settings",
                     "description": "Comma-separated list of recipient email addresses when channel_type is 'email'.",
+                    "visible_when": {
+                        "field": "channel_type",
+                        "equals": "email",
+                    },
                 },
                 "email_sender": {
                     "type": "string",
                     "title": "Email Sender Address",
                     "default": "no-reply@pipeline-platform.local",
                     "input_type": "text",
+                    "section": "email_settings",
                     "description": "From address for outbound email notifications.",
+                    "visible_when": {
+                        "field": "channel_type",
+                        "equals": "email",
+                    },
                 },
                 "smtp_host": {
                     "type": "string",
                     "title": "SMTP Host",
                     "default": "",
                     "input_type": "text",
+                    "section": "email_settings",
                     "description": "SMTP server hostname for email delivery (e.g. smtp.gmail.com).",
+                    "visible_when": {
+                        "field": "channel_type",
+                        "equals": "email",
+                    },
                 },
                 "smtp_port": {
                     "type": "integer",
                     "title": "SMTP Port",
                     "default": 587,
                     "input_type": "number",
+                    "section": "email_settings",
                     "description": "SMTP port (e.g. 587 for STARTTLS, 465 for SSL, 25 for plain).",
+                    "visible_when": {
+                        "field": "channel_type",
+                        "equals": "email",
+                    },
                 },
                 "smtp_username": {
                     "type": "string",
                     "title": "SMTP Username",
                     "default": "",
                     "input_type": "text",
+                    "section": "email_settings",
                     "description": "Username / email for SMTP authentication.",
+                    "visible_when": {
+                        "field": "channel_type",
+                        "equals": "email",
+                    },
                 },
                 "smtp_password": {
                     "type": "string",
                     "title": "SMTP Password",
                     "default": "",
                     "input_type": "password",
+                    "section": "email_settings",
                     "description": "Password or application token for SMTP authentication.",
+                    "visible_when": {
+                        "field": "channel_type",
+                        "equals": "email",
+                    },
                 },
                 "smtp_use_tls": {
                     "type": "boolean",
                     "title": "Use STARTTLS",
                     "default": True,
                     "input_type": "checkbox",
+                    "section": "email_settings",
                     "description": "Whether to initiate STARTTLS encryption on port 587.",
+                    "visible_when": {
+                        "field": "channel_type",
+                        "equals": "email",
+                    },
                 },
                 "custom_headers": {
                     "type": "object",
                     "title": "Custom HTTP Headers",
                     "default": {},
                     "input_type": "key_value",
+                    "section": "runtime_limits",
                     "description": "Optional dictionary of custom HTTP headers for generic webhook POST requests.",
                 },
                 "timeout_seconds": {
@@ -171,6 +236,7 @@ class NotificationsRecipe(BaseRecipe):
                     "title": "Request Timeout (Seconds)",
                     "default": 10.0,
                     "input_type": "number",
+                    "section": "runtime_limits",
                     "description": "Maximum seconds to wait for network responses.",
                 },
                 "fail_on_error": {
@@ -178,6 +244,7 @@ class NotificationsRecipe(BaseRecipe):
                     "title": "Fail Pipeline on Error",
                     "default": False,
                     "input_type": "checkbox",
+                    "section": "runtime_limits",
                     "description": "If True, delivery failures raise an exception; if False, errors are logged and execution continues.",
                 },
             },

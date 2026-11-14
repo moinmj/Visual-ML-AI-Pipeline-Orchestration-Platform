@@ -66,84 +66,127 @@ class ExportWriterRecipe(BaseRecipe):
     def get_schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
+            "sections": [
+                {
+                    "id": "file_settings",
+                    "title": "File Format & Destination",
+                    "description": "Configure output file format, filename, and destination location",
+                },
+                {
+                    "id": "format_options",
+                    "title": "Format Options",
+                    "description": "Delimiters, compression, Excel worksheets, and JSON layouts",
+                },
+                {
+                    "id": "write_options",
+                    "title": "Write Options",
+                    "description": "Index retention and file overwrite behaviors",
+                },
+            ],
             "properties": {
                 "file_format": {
-                    "type": "select",
+                    "type": "string",
                     "title": "File Format",
                     "input_type": "dropdown",
+                    "section": "file_settings",
                     "enum": ["csv", "parquet", "excel", "json", "tsv"],
                     "default": "csv",
-                    "description": "Format of the exported file (CSV, Parquet, Excel .xlsx, JSON, or TSV)."
+                    "description": "Format of the exported file (CSV, Parquet, Excel .xlsx, JSON, or TSV).",
                 },
                 "file_name": {
-                    "type": "text",
+                    "type": "string",
                     "title": "File Name",
                     "input_type": "text",
+                    "section": "file_settings",
                     "default": "exported_dataset",
-                    "description": "Name of the exported file (extension is automatically appended if omitted)."
+                    "description": "Name of the exported file (extension is automatically appended if omitted).",
                 },
                 "destination": {
-                    "type": "radio",
+                    "type": "string",
                     "title": "Destination",
                     "input_type": "dropdown",
+                    "section": "file_settings",
                     "enum": ["export_store", "custom_path"],
                     "default": "export_store",
-                    "description": "Save in platform's standard export store, or specify a custom relative path."
+                    "description": "Save in platform's standard export store, or specify a custom relative path.",
                 },
                 "custom_file_path": {
-                    "type": "text",
+                    "type": "string",
                     "title": "Custom File Path",
                     "input_type": "text",
+                    "section": "file_settings",
                     "default": "",
-                    "description": "Relative file path when using 'custom_path' (e.g. 'exports/my_export.parquet')."
+                    "description": "Relative file path when using 'custom_path' (e.g. 'exports/my_export.parquet').",
+                    "visible_when": {
+                        "field": "destination",
+                        "equals": "custom_path",
+                    },
+                },
+                "delimiter": {
+                    "type": "string",
+                    "title": "Delimiter (CSV / TSV)",
+                    "input_type": "dropdown",
+                    "section": "format_options",
+                    "enum": [",", ";", "\t", "|"],
+                    "default": ",",
+                    "description": "Field separator for delimited text exports.",
+                    "visible_when": {
+                        "field": "file_format",
+                        "equals": "csv",
+                    },
+                },
+                "compression": {
+                    "type": "string",
+                    "title": "Compression",
+                    "input_type": "dropdown",
+                    "section": "format_options",
+                    "enum": ["none", "gzip", "snappy"],
+                    "default": "none",
+                    "description": "Compression algorithm (supported for CSV and Parquet).",
+                },
+                "excel_sheet_name": {
+                    "type": "string",
+                    "title": "Excel Sheet Name",
+                    "input_type": "text",
+                    "section": "format_options",
+                    "default": "Sheet1",
+                    "description": "Name of the worksheet for Excel (.xlsx) exports.",
+                    "visible_when": {
+                        "field": "file_format",
+                        "equals": "excel",
+                    },
+                },
+                "json_orient": {
+                    "type": "string",
+                    "title": "JSON Orientation",
+                    "input_type": "dropdown",
+                    "section": "format_options",
+                    "enum": ["records", "split", "index", "columns"],
+                    "default": "records",
+                    "description": "Layout format for JSON export ('records' is standard list-of-dicts n8n shape).",
+                    "visible_when": {
+                        "field": "file_format",
+                        "equals": "json",
+                    },
                 },
                 "include_index": {
                     "type": "boolean",
                     "title": "Include DataFrame Index",
                     "input_type": "checkbox",
+                    "section": "write_options",
                     "default": False,
-                    "description": "Whether to write the DataFrame row index as a column in the output file."
-                },
-                "delimiter": {
-                    "type": "select",
-                    "title": "Delimiter (CSV / TSV)",
-                    "input_type": "dropdown",
-                    "enum": [",", ";", "\t", "|"],
-                    "default": ",",
-                    "description": "Field separator for delimited text exports."
-                },
-                "compression": {
-                    "type": "select",
-                    "title": "Compression",
-                    "input_type": "dropdown",
-                    "enum": ["none", "gzip", "snappy"],
-                    "default": "none",
-                    "description": "Compression algorithm (supported for CSV and Parquet)."
-                },
-                "excel_sheet_name": {
-                    "type": "text",
-                    "title": "Excel Sheet Name",
-                    "input_type": "text",
-                    "default": "Sheet1",
-                    "description": "Name of the worksheet for Excel (.xlsx) exports."
-                },
-                "json_orient": {
-                    "type": "select",
-                    "title": "JSON Orientation",
-                    "input_type": "dropdown",
-                    "enum": ["records", "split", "index", "columns"],
-                    "default": "records",
-                    "description": "Layout format for JSON export ('records' is standard list-of-dicts n8n shape)."
+                    "description": "Whether to write the DataFrame row index as a column in the output file.",
                 },
                 "overwrite": {
                     "type": "boolean",
                     "title": "Overwrite Existing File",
                     "input_type": "checkbox",
+                    "section": "write_options",
                     "default": True,
-                    "description": "Whether to overwrite the file if a file with the same name already exists."
-                }
+                    "description": "Whether to overwrite the file if a file with the same name already exists.",
+                },
             },
-            "required": ["file_format"]
+            "required": ["file_format"],
         }
 
     def validate_config(self, config: Dict[str, Any]) -> List[str]:

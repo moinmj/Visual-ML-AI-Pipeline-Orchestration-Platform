@@ -69,13 +69,31 @@ class BatchSchedulerRecipe(BaseRecipe):
     def get_schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
+            "sections": [
+                {
+                    "id": "strategy",
+                    "title": "Batching Strategy",
+                    "description": "Configure partitioning columns, chunk sizes, or custom job dependencies",
+                },
+                {
+                    "id": "concurrency",
+                    "title": "Concurrency & Failure Policy",
+                    "description": "Maximum parallel execution workers and failure handling rules",
+                },
+                {
+                    "id": "runtime_limits",
+                    "title": "Simulation & Fallbacks",
+                    "description": "Simulation fallback options when upstream datasets are empty",
+                },
+            ],
             "properties": {
                 "batch_strategy": {
                     "type": "string",
                     "title": "Batching Strategy",
                     "enum": ["partition_column", "fixed_size", "custom_job_dag"],
                     "default": "partition_column",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "strategy",
                     "description": "How batches are formed: partition column values, row count chunks, or explicit job DAG.",
                 },
                 "partition_column": {
@@ -83,7 +101,12 @@ class BatchSchedulerRecipe(BaseRecipe):
                     "title": "Partition Column",
                     "default": "batch_id",
                     "input_type": "text",
+                    "section": "strategy",
                     "description": "Column in input DataFrame used to partition data into individual batches.",
+                    "visible_when": {
+                        "field": "batch_strategy",
+                        "equals": "partition_column",
+                    },
                 },
                 "batch_size": {
                     "type": "integer",
@@ -92,21 +115,36 @@ class BatchSchedulerRecipe(BaseRecipe):
                     "minimum": 1,
                     "maximum": 100000,
                     "input_type": "number",
+                    "section": "strategy",
                     "description": "Number of rows per chunk when batch_strategy is 'fixed_size'.",
+                    "visible_when": {
+                        "field": "batch_strategy",
+                        "equals": "fixed_size",
+                    },
                 },
                 "dependency_graph": {
                     "type": "string",
                     "title": "Dependency Graph (JSON)",
                     "default": "{}",
                     "input_type": "textarea",
+                    "section": "strategy",
                     "description": "JSON mapping of {job_id: [upstream_parent_ids]} to enforce execution prerequisites.",
+                    "visible_when": {
+                        "field": "batch_strategy",
+                        "equals": "custom_job_dag",
+                    },
                 },
                 "custom_job_list": {
                     "type": "string",
                     "title": "Custom Job Definitions (JSON)",
                     "default": "[]",
                     "input_type": "textarea",
+                    "section": "strategy",
                     "description": "JSON array of job objects [{'job_id': 'J1', 'recipe_id': '...', 'depends_on': []}].",
+                    "visible_when": {
+                        "field": "batch_strategy",
+                        "equals": "custom_job_dag",
+                    },
                 },
                 "max_parallel_workers": {
                     "type": "integer",
@@ -115,6 +153,7 @@ class BatchSchedulerRecipe(BaseRecipe):
                     "minimum": 1,
                     "maximum": 16,
                     "input_type": "number",
+                    "section": "concurrency",
                     "description": "Maximum number of batch tasks allowed to execute concurrently in each wave.",
                 },
                 "output_mode": {
@@ -122,7 +161,8 @@ class BatchSchedulerRecipe(BaseRecipe):
                     "title": "Output Mode",
                     "enum": ["execute_batches", "plan_only"],
                     "default": "execute_batches",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "concurrency",
                     "description": "'execute_batches' processes the data; 'plan_only' outputs the topological DAG schedule.",
                 },
                 "on_batch_failure": {
@@ -130,7 +170,8 @@ class BatchSchedulerRecipe(BaseRecipe):
                     "title": "Failure Policy",
                     "enum": ["skip_dependents", "continue_independent", "abort_all"],
                     "default": "skip_dependents",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "concurrency",
                     "description": "Handling strategy when an individual batch task encounters an execution error.",
                 },
                 "simulation_fallback": {
@@ -138,7 +179,8 @@ class BatchSchedulerRecipe(BaseRecipe):
                     "title": "Simulation Fallback",
                     "default": True,
                     "input_type": "checkbox",
-                    "description": "Generate synthetic multi-stage batch DAG when input table is absent.",
+                    "section": "runtime_limits",
+                    "description": "Fallback to synthetic batch dataset if incoming table is empty.",
                 },
             },
             "required": ["batch_strategy"],

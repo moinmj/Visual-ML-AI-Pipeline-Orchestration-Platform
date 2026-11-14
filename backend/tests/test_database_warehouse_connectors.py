@@ -1274,3 +1274,107 @@ def test_connector_schema_property_ordering_consistency():
         # 7. Relational / warehouse connectors with read_mode have visible_when on query
         if "read_mode" in props and "query" in props:
             assert props["query"].get("visible_when") == {"field": "read_mode", "equals": "query"}
+
+
+def test_cloud_database_warehouse_sso_schema_support():
+    """Verify that cloud data warehouses and lakes provide SSO, while traditional DBs maintain clean host/port."""
+    from backend.app.recipes.ingestion.snowflake_connector import SnowflakeConnectorRecipe
+    from backend.app.recipes.ingestion.redshift_connector import RedshiftConnectorRecipe
+    from backend.app.recipes.ingestion.bigquery_connector import BigQueryConnectorRecipe
+    from backend.app.recipes.ingestion.azure_data_lake_connector import AzureDataLakeConnectorRecipe
+    from backend.app.recipes.ingestion.postgresql_connector import PostgreSQLConnectorRecipe
+    from backend.app.recipes.ingestion.mysql_connector import MySQLConnectorRecipe
+    from backend.app.recipes.ingestion.mongodb_connector import MongoDBConnectorRecipe
+
+    # 1. Cloud Warehouses & Lakes that support native SSO
+    sso_connectors = [
+        (SnowflakeConnectorRecipe(), "connection_mode", ["sso_authenticator", "sso_account", "sso_user", "sso_token"]),
+        (RedshiftConnectorRecipe(), "connection_mode", ["sso_provider", "sso_host", "sso_username", "sso_token"]),
+        (BigQueryConnectorRecipe(), "connection_mode", ["sso_provider", "sso_access_token"]),
+        (AzureDataLakeConnectorRecipe(), "auth_mode", ["tenant_id", "client_id", "sso_token"]),
+    ]
+
+    for recipe, mode_field, expected_sso_props in sso_connectors:
+        schema = recipe.get_schema()
+        props = schema["properties"]
+        assert mode_field in props, f"{recipe.recipe_id} missing {mode_field}"
+        mode_def = props[mode_field]
+        assert "sso" in mode_def["enum"], f"{recipe.recipe_id} {mode_field} does not have 'sso' in enum: {mode_def['enum']}"
+
+        for prop_name in expected_sso_props:
+            assert prop_name in props, f"{recipe.recipe_id} missing expected SSO property '{prop_name}'"
+            p_def = props[prop_name]
+            assert p_def.get("section") == "connection", f"{recipe.recipe_id}.{prop_name} not in 'connection' section"
+            assert p_def.get("visible_when") == {"field": mode_field, "equals": "sso"}, (
+                f"{recipe.recipe_id}.{prop_name} visible_when mismatch: {p_def.get('visible_when')}"
+            )
+
+    # 2. Traditional DBs where SSO was excluded to keep standard host/port workflows clean
+    traditional_dbs = [
+        PostgreSQLConnectorRecipe(),
+        MySQLConnectorRecipe(),
+        MongoDBConnectorRecipe()
+    ]
+    for r in traditional_dbs:
+        schema = r.get_schema()
+        mode_enum = schema["properties"]["connection_mode"]["enum"]
+        assert "sso" not in mode_enum, f"{r.recipe_id} should not have 'sso' in connection_mode: {mode_enum}"
+        assert mode_enum == ["host_port", "connection_string", "credential"], f"{r.recipe_id} enum unexpected: {mode_enum}"
+
+
+def test_cloud_database_warehouse_sso_validation_and_resolution():
+    """Verify that SSO configurations validate and resolve correctly for native cloud data warehouses."""
+    from backend.app.recipes.ingestion.snowflake_connector import SnowflakeConnectorRecipe
+    from backend.app.recipes.ingestion.redshift_connector import RedshiftConnectorRecipe
+    from backend.app.recipes.ingestion.bigquery_connector import BigQueryConnectorRecipe
+    from backend.app.recipes.ingestion.azure_data_lake_connector import AzureDataLakeConnectorRecipe
+
+    # 1. Snowflake SSO
+    sf = SnowflakeConnectorRecipe()
+    assert sf.validate_config({
+        "connection_mode": "sso",
+        "sso_authenticator": "externalbrowser",
+        "sso_account": "xy12345.us-east-1",
+        "sso_user": "analyst@company.com",
+        "read_mode": "table",
+        "table_name": "ORDERS"
+    }) == []
+    # Missing user/account in SSO should produce error
+    sf_errs = sf.validate_config({"connection_mode": "sso", "read_mode": "table", "table_name": "ORDERS"})
+    assert any("Account" in e for e in sf_errs)
+    assert any("Username" in e for e in sf_errs)
+
+    # 2. Redshift SSO
+    rs = RedshiftConnectorRecipe()
+    assert rs.validate_config({
+        "connection_mode": "sso",
+        "sso_provider": "aws_iam",
+        "sso_host": "redshift-cluster.amazonaws.com",
+        "sso_username": "awsuser",
+        "read_mode": "table",
+        "table_name": "sales"
+    }) == []
+    rs_errs = rs.validate_config({"connection_mode": "sso", "read_mode": "table", "table_name": "sales"})
+    assert any("Host" in e or "host" in e for e in rs_errs)
+
+    # 3. BigQuery SSO
+    bq = BigQueryConnectorRecipe()
+    assert bq.validate_config({
+        "connection_mode": "sso",
+        "sso_provider": "google_sso",
+        "project_id": "analytics-prod-123",
+        "read_mode": "table",
+        "table_id": "events"
+    }) == []
+
+    # 4. Azure Data Lake SSO
+    adls = AzureDataLakeConnectorRecipe()
+    assert adls.validate_config({
+        "auth_mode": "sso",
+        "account_name": "analyticslake",
+        "tenant_id": "00000000-0000-0000-0000-000000000000",
+        "container_name": "raw",
+        "blob_path": "events/data.parquet"
+    }) == []
+
+

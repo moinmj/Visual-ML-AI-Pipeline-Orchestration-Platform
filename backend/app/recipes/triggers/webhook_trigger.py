@@ -16,32 +16,85 @@ class WebhookTriggerRecipe(BaseRecipe):
     description = "Listens for external HTTP POST webhooks to ingest real-time JSON payloads into the pipeline."
     input_types = []  # Root trigger node, has 0 incoming connections
     output_types = ["dataframe"]
+    inputs = []
+    outputs = []
 
     def get_schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
+            "sections": [
+                {
+                    "id": "endpoint",
+                    "title": "Endpoint Configuration",
+                    "description": "Webhook URL identifier and routing options",
+                },
+                {
+                    "id": "security",
+                    "title": "Authentication & Security",
+                    "description": "Configure inbound header authentication requirements",
+                },
+                {
+                    "id": "payload",
+                    "title": "Payload Format",
+                    "description": "Define expected payload format and structure",
+                },
+            ],
             "properties": {
                 "webhook_path": {
                     "type": "string",
                     "title": "Webhook URL Identifier",
+                    "input_type": "text",
+                    "section": "endpoint",
                     "default": "ml_inbound_stream",
-                    "description": "Unique URL path endpoint: /api/v1/workflows/trigger/{webhook_path}"
+                    "description": "Unique URL path endpoint: /api/v1/workflows/trigger/{webhook_path}",
                 },
                 "auth_header_required": {
                     "type": "string",
                     "title": "Authentication Mode",
+                    "input_type": "dropdown",
+                    "section": "security",
                     "enum": ["None (Public)", "Bearer Token", "API Key"],
                     "default": "None (Public)",
-                    "description": 'Require a valid Bearer or custom authorization header in incoming webhook calls.'
+                    "description": "Require a valid Bearer or custom authorization header in incoming webhook calls.",
+                },
+                "auth_token": {
+                    "type": "string",
+                    "title": "Bearer Token Secret",
+                    "input_type": "password",
+                    "section": "security",
+                    "default": "",
+                    "description": "Expected Bearer authorization token header value.",
+                    "visible_when": {
+                        "field": "auth_header_required",
+                        "equals": "Bearer Token",
+                    },
+                },
+                "api_key": {
+                    "type": "string",
+                    "title": "API Key Secret",
+                    "input_type": "password",
+                    "section": "security",
+                    "default": "",
+                    "description": "Expected X-API-Key header value.",
+                    "visible_when": {
+                        "field": "auth_header_required",
+                        "equals": "API Key",
+                    },
                 },
                 "payload_format": {
                     "type": "string",
                     "title": "Expected Inbound Payload Format",
-                    "enum": ["JSON Array of Objects", "Single JSON Object (Single Row)", "Key-Value Form Data"],
+                    "input_type": "dropdown",
+                    "section": "payload",
+                    "enum": [
+                        "JSON Array of Objects",
+                        "Single JSON Object (Single Row)",
+                        "Key-Value Form Data",
+                    ],
                     "default": "JSON Array of Objects",
-                    "description": "Expected incoming payload content format ('json' or 'form-data')."
-                }
-            }
+                    "description": "Expected incoming payload content format ('json' or 'form-data').",
+                },
+            },
         }
 
     def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:

@@ -55,12 +55,35 @@ class CDCReplicatorRecipe(BaseRecipe):
     def get_schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
+            "sections": [
+                {
+                    "id": "keys",
+                    "title": "Primary Keys & Table",
+                    "description": "Configure primary key column(s) and target replicated table name",
+                },
+                {
+                    "id": "policies",
+                    "title": "Replication Policies",
+                    "description": "Conflict resolution strategies, timestamp columns, and delete handling",
+                },
+                {
+                    "id": "source",
+                    "title": "Replication Source",
+                    "description": "Configure replication source engine, connection, and inline mutation logs",
+                },
+                {
+                    "id": "runtime_limits",
+                    "title": "Batching & Simulation",
+                    "description": "Sync batch size and real-time simulation fallback",
+                },
+            ],
             "properties": {
                 "primary_key": {
                     "type": "string",
                     "title": "Primary Key Column(s)",
                     "default": "id",
                     "input_type": "text",
+                    "section": "keys",
                     "description": "Comma-separated list of primary key columns used to match rows for updates and deletes.",
                 },
                 "target_table": {
@@ -68,6 +91,7 @@ class CDCReplicatorRecipe(BaseRecipe):
                     "title": "Target Table Name",
                     "default": "orders",
                     "input_type": "text",
+                    "section": "keys",
                     "description": "Name of the replicated table.",
                 },
                 "delete_handling": {
@@ -75,7 +99,8 @@ class CDCReplicatorRecipe(BaseRecipe):
                     "title": "Delete Handling Policy",
                     "enum": ["hard_delete", "soft_delete", "keep_with_flag"],
                     "default": "soft_delete",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "policies",
                     "description": (
                         "How DELETE mutations are applied: 'hard_delete' (drops row), "
                         "'soft_delete' (sets _is_deleted=True), or 'keep_with_flag' (retains tombstone metadata)."
@@ -86,7 +111,8 @@ class CDCReplicatorRecipe(BaseRecipe):
                     "title": "Conflict Resolution Strategy",
                     "enum": ["latest_timestamp_wins", "highest_lsn_wins", "always_overwrite"],
                     "default": "latest_timestamp_wins",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "policies",
                     "description": "How concurrent or out-of-order changes are resolved when matching on primary key.",
                 },
                 "timestamp_column": {
@@ -94,14 +120,20 @@ class CDCReplicatorRecipe(BaseRecipe):
                     "title": "Timestamp / Version Column",
                     "default": "updated_at",
                     "input_type": "text",
+                    "section": "policies",
                     "description": "Column used to resolve conflicts when conflict_resolution is 'latest_timestamp_wins'.",
+                    "visible_when": {
+                        "field": "conflict_resolution",
+                        "equals": "latest_timestamp_wins",
+                    },
                 },
                 "replication_source": {
                     "type": "string",
                     "title": "Replication Source Type",
                     "enum": ["debezium_kafka", "postgres_logical", "mysql_binlog", "inline_mutations"],
                     "default": "debezium_kafka",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "source",
                     "description": "Database or streaming engine providing replication events.",
                 },
                 "connection_string": {
@@ -109,6 +141,7 @@ class CDCReplicatorRecipe(BaseRecipe):
                     "title": "Connection URL / Broker",
                     "default": "",
                     "input_type": "text",
+                    "section": "source",
                     "description": "Connection URL or broker address for live replication sync.",
                 },
                 "raw_mutations": {
@@ -116,13 +149,19 @@ class CDCReplicatorRecipe(BaseRecipe):
                     "title": "Inline Mutation Events",
                     "default": "",
                     "input_type": "textarea",
+                    "section": "source",
                     "description": "Optional JSON array of CDC mutation events to replay onto the base state.",
+                    "visible_when": {
+                        "field": "replication_source",
+                        "equals": "inline_mutations",
+                    },
                 },
                 "batch_size": {
                     "type": "integer",
                     "title": "Sync Batch Size",
                     "default": 100,
                     "input_type": "number",
+                    "section": "runtime_limits",
                     "description": "Number of mutation events to process per sync iteration (1 to 50,000).",
                 },
                 "simulation_mode": {
@@ -130,6 +169,7 @@ class CDCReplicatorRecipe(BaseRecipe):
                     "title": "Simulation / Demo Mode",
                     "default": False,
                     "input_type": "checkbox",
+                    "section": "runtime_limits",
                     "description": "When enabled or database is offline, simulates realistic real-time database state replication.",
                 },
             },

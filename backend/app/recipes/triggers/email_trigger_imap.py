@@ -73,58 +73,87 @@ class EmailTriggerIMAPRecipe(BaseRecipe):
         return {
             "type": "object",
             "tabs": ["Connection", "Parameters", "Settings"],
+            "sections": [
+                {
+                    "id": "connection",
+                    "title": "IMAP Server & Credentials",
+                    "description": "Configure host, port, credentials, and SSL encryption",
+                },
+                {
+                    "id": "mailbox",
+                    "title": "Mailbox & Message Filters",
+                    "description": "Folder selection, sender, and subject filtering",
+                },
+                {
+                    "id": "attachments",
+                    "title": "Attachment Processing",
+                    "description": "Extract CSV/Excel attachments into pipeline DataFrames",
+                },
+                {
+                    "id": "settings",
+                    "title": "Node Settings & Error Handling",
+                    "description": "Error handling strategies and execution options",
+                },
+            ],
             "properties": {
-                # ─── 1. Connection Tab (Credentials) ─────────────────────────
+                # ─── 1. Connection Tab / Section ─────────────────────────
                 "host": {
                     "type": "text",
                     "title": "Host",
                     "default": "imap.gmail.com",
                     "tab": "Connection",
-                    "description": "IMAP server hostname (e.g. imap.gmail.com, outlook.office365.com)."
+                    "section": "connection",
+                    "description": "IMAP server hostname (e.g. imap.gmail.com, outlook.office365.com).",
                 },
                 "port": {
                     "type": "number",
                     "title": "Port",
                     "default": 993,
                     "tab": "Connection",
-                    "description": "IMAP port (typically 993 for SSL/TLS, 143 for STARTTLS)."
+                    "section": "connection",
+                    "description": "IMAP port (typically 993 for SSL/TLS, 143 for STARTTLS).",
                 },
                 "user": {
                     "type": "text",
                     "title": "User",
                     "default": "",
                     "tab": "Connection",
-                    "description": "Email address or username."
+                    "section": "connection",
+                    "description": "Email address or username.",
                 },
                 "password": {
                     "type": "password",
                     "title": "Password",
                     "default": "",
                     "tab": "Connection",
-                    "description": "Email password or App Password (recommended for Gmail / Outlook)."
+                    "section": "connection",
+                    "description": "Email password or App Password (recommended for Gmail / Outlook).",
                 },
                 "ssl_tls": {
                     "type": "boolean",
                     "title": "SSL/TLS",
                     "default": True,
                     "tab": "Connection",
-                    "description": "Enable SSL/TLS encrypted connection."
+                    "section": "connection",
+                    "description": "Enable SSL/TLS encrypted connection.",
                 },
                 "allow_self_signed": {
                     "type": "boolean",
                     "title": "Allow Self-Signed Certificates",
                     "default": False,
                     "tab": "Connection",
-                    "description": "Accept self-signed or untrusted SSL/TLS certificates."
+                    "section": "connection",
+                    "description": "Accept self-signed or untrusted SSL/TLS certificates.",
                 },
 
-                # ─── 2. Parameters Tab ───────────────────────────────────────
+                # ─── 2. Parameters Tab / Mailbox Section ───────────────────
                 "mailbox_name": {
                     "type": "text",
                     "title": "Mailbox Name",
                     "default": "INBOX",
                     "tab": "Parameters",
-                    "description": "Mailbox folder to monitor (e.g. INBOX, Archive, Sent)."
+                    "section": "mailbox",
+                    "description": "Mailbox folder to monitor (e.g. INBOX, Archive, Sent).",
                 },
                 "action": {
                     "type": "select",
@@ -132,7 +161,8 @@ class EmailTriggerIMAPRecipe(BaseRecipe):
                     "enum": ["Mark as Read", "None", "Delete"],
                     "default": "Mark as Read",
                     "tab": "Parameters",
-                    "description": "Action to perform on processed emails."
+                    "section": "mailbox",
+                    "description": "Action to perform on processed emails.",
                 },
                 "format": {
                     "type": "select",
@@ -140,21 +170,62 @@ class EmailTriggerIMAPRecipe(BaseRecipe):
                     "enum": ["Simple", "Resolved", "RAW"],
                     "default": "Simple",
                     "tab": "Parameters",
-                    "description": "Simple (structured headers + text), Resolved (attachments parsed to dataset), RAW (raw MIME)."
+                    "section": "mailbox",
+                    "description": "Simple (structured headers + text), Resolved (attachments parsed to dataset), RAW (raw MIME).",
                 },
+                "unread_only": {
+                    "type": "boolean",
+                    "title": "Unread Only",
+                    "default": True,
+                    "tab": "Parameters",
+                    "section": "mailbox",
+                    "description": "Retrieve only unread (UNSEEN) emails.",
+                },
+                "limit": {
+                    "type": "number",
+                    "title": "Max Emails to Fetch",
+                    "default": 10,
+                    "tab": "Parameters",
+                    "section": "mailbox",
+                    "description": "Maximum number of recent messages to process per execution.",
+                },
+                "sender_filter": {
+                    "type": "text",
+                    "title": "Sender Filter (Optional)",
+                    "default": "",
+                    "tab": "Parameters",
+                    "section": "mailbox",
+                    "description": "Filter messages from specific sender or domain (e.g. reports@company.com).",
+                },
+                "subject_filter": {
+                    "type": "text",
+                    "title": "Subject Filter (Optional)",
+                    "default": "",
+                    "tab": "Parameters",
+                    "section": "mailbox",
+                    "description": "Filter messages with matching keywords in the subject line.",
+                },
+
+                # ─── 3. Attachments Section ───────────────────────────────
                 "download_attachments": {
                     "type": "boolean",
                     "title": "Download Attachments",
                     "default": False,
                     "tab": "Parameters",
-                    "description": "If enabled, extracts CSV or Excel attachments and outputs their contents as the pipeline table."
+                    "section": "attachments",
+                    "description": "If enabled, extracts CSV or Excel attachments and outputs their contents as the pipeline table.",
                 },
                 "attachment_name_filter": {
                     "type": "text",
                     "title": "Attachment Name Filter (Optional)",
                     "default": "",
                     "tab": "Parameters",
-                    "description": "Only extract attachments matching this name or keyword (e.g. 'orders', 'sales.csv')."
+                    "section": "attachments",
+                    "description": "Only extract attachments matching this name or keyword (e.g. 'orders', 'sales.csv').",
+                    "visible_when": {
+                        "field": "download_attachments",
+                        "equals": True,
+                    },
                 },
                 "attachment_selection": {
                     "type": "select",
@@ -162,58 +233,38 @@ class EmailTriggerIMAPRecipe(BaseRecipe):
                     "enum": ["Concatenate All", "First Attachment Only", "Last Attachment Only"],
                     "default": "Concatenate All",
                     "tab": "Parameters",
-                    "description": "How to handle multiple attachments: merge them, or pick only the first/last one."
-                },
-                "unread_only": {
-                    "type": "boolean",
-                    "title": "Unread Only",
-                    "default": True,
-                    "tab": "Parameters",
-                    "description": "Retrieve only unread (UNSEEN) emails."
-                },
-                "limit": {
-                    "type": "number",
-                    "title": "Max Emails to Fetch",
-                    "default": 10,
-                    "tab": "Parameters",
-                    "description": "Maximum number of recent messages to process per execution."
-                },
-                "sender_filter": {
-                    "type": "text",
-                    "title": "Sender Filter (Optional)",
-                    "default": "",
-                    "tab": "Parameters",
-                    "description": "Filter messages from specific sender or domain (e.g. reports@company.com)."
-                },
-                "subject_filter": {
-                    "type": "text",
-                    "title": "Subject Filter (Optional)",
-                    "default": "",
-                    "tab": "Parameters",
-                    "description": "Filter messages with matching keywords in the subject line."
+                    "section": "attachments",
+                    "description": "How to handle multiple attachments: merge them, or pick only the first/last one.",
+                    "visible_when": {
+                        "field": "download_attachments",
+                        "equals": True,
+                    },
                 },
 
-                # ─── 3. Settings Tab (n8n Node Controls) ────────────────────
+                # ─── 4. Settings Tab / Section ────────────────────────────
                 "always_output_data": {
                     "type": "boolean",
                     "title": "Always Output Data",
                     "default": False,
                     "tab": "Settings",
-                    "description": "Outputs an empty record if no emails are found instead of halting execution."
+                    "section": "settings",
+                    "description": "Outputs an empty record if no emails are found instead of halting execution.",
                 },
                 "execute_once": {
                     "type": "boolean",
                     "title": "Execute Once",
                     "default": False,
                     "tab": "Settings",
-                    "description": "Execute only once even if triggered multiple times."
+                    "section": "settings",
+                    "description": "Execute only once even if triggered multiple times.",
                 },
                 "retry_on_fail": {
                     "type": "boolean",
                     "title": "Retry On Fail",
                     "default": False,
                     "tab": "Settings",
-                    "description": "Retry connection on transient connection errors."
+                    "section": "settings",
+                    "description": "Retry connection on transient connection errors.",
                 },
                 "on_error": {
                     "type": "select",
@@ -221,10 +272,11 @@ class EmailTriggerIMAPRecipe(BaseRecipe):
                     "enum": ["Stop Workflow", "Continue", "Continue (using error output)"],
                     "default": "Stop Workflow",
                     "tab": "Settings",
-                    "description": "Error handling strategy if connection or mailbox access fails."
-                }
+                    "section": "settings",
+                    "description": "Error handling strategy if connection or mailbox access fails.",
+                },
             },
-            "required": ["host", "mailbox_name"]
+            "required": ["host", "mailbox_name"],
         }
 
     def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:

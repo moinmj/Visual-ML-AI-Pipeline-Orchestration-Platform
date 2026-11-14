@@ -34,16 +34,7 @@ class S3DataLakeConnectorRecipe(BaseRecipe):
     input_types = ["dataframe"]
     output_types = ["dataframe"]
 
-    inputs = [
-        RecipePort(
-            id="input",
-            label="Trigger / Input Dataset",
-            type="dataframe",
-            required=False,
-            max_connections=1,
-            description="Optional upstream dataset for batch IDs or execution trigger"
-        )
-    ]
+    inputs: List[RecipePort] = []
 
     outputs = [
         RecipePort(
@@ -57,13 +48,20 @@ class S3DataLakeConnectorRecipe(BaseRecipe):
     def get_schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
+            "sections": [
+                {"id": "source", "title": "S3 Source & Location", "description": "Configure S3 URI or Bucket and Object Key"},
+                {"id": "connection", "title": "AWS Authentication & Region", "description": "Configure AWS credentials and endpoint"},
+                {"id": "runtime_limits", "title": "Limits & Performance", "description": "Row limits and simulation mode"}
+            ],
             "properties": {
+                # ── 1. S3 Source & Location ──
                 "source_mode": {
                     "type": "string",
                     "title": "Source Mode",
                     "input_type": "dropdown",
                     "enum": ["s3_uri", "bucket_and_key"],
                     "default": "s3_uri",
+                    "section": "source",
                     "description": "Specify file location via full 's3://' URI or individual bucket and file key."
                 },
                 "s3_uri": {
@@ -71,21 +69,36 @@ class S3DataLakeConnectorRecipe(BaseRecipe):
                     "title": "S3 URI",
                     "input_type": "text",
                     "default": "s3://lakehouse-analytics-bucket/raw/events/telemetry_data.parquet",
-                    "description": "Full S3 URI (e.g. 's3://my-bucket/path/to/data.parquet' or 's3://my-bucket/logs/2026/')."
+                    "section": "source",
+                    "description": "Full S3 URI (e.g. 's3://my-bucket/path/to/data.parquet' or 's3://my-bucket/logs/2026/').",
+                    "visible_when": {
+                        "field": "source_mode",
+                        "equals": "s3_uri"
+                    }
                 },
                 "bucket_name": {
                     "type": "string",
                     "title": "Bucket Name",
                     "input_type": "text",
                     "default": "lakehouse-analytics-bucket",
-                    "description": "S3 bucket name (used when source_mode is 'bucket_and_key')."
+                    "section": "source",
+                    "description": "S3 bucket name (used when source_mode is 'bucket_and_key').",
+                    "visible_when": {
+                        "field": "source_mode",
+                        "equals": "bucket_and_key"
+                    }
                 },
                 "file_key": {
                     "type": "string",
                     "title": "Object Key / Path",
                     "input_type": "text",
                     "default": "raw/events/telemetry_data.parquet",
-                    "description": "Object key inside the bucket (e.g. 'raw/events/data.parquet')."
+                    "section": "source",
+                    "description": "Object key inside the bucket (e.g. 'raw/events/data.parquet').",
+                    "visible_when": {
+                        "field": "source_mode",
+                        "equals": "bucket_and_key"
+                    }
                 },
                 "file_format": {
                     "type": "string",
@@ -93,27 +106,25 @@ class S3DataLakeConnectorRecipe(BaseRecipe):
                     "input_type": "dropdown",
                     "enum": ["auto", "parquet", "csv", "json", "jsonl"],
                     "default": "auto",
+                    "section": "source",
                     "description": "Dataset file format. 'auto' infers format from the file extension."
                 },
-                "region_name": {
+
+                # ── 2. AWS Authentication & Region ──
+                "credential_id": {
                     "type": "string",
-                    "title": "AWS Region",
-                    "input_type": "text",
-                    "default": "us-east-1",
-                    "description": "AWS Region (e.g. 'us-east-1', 'eu-west-1', 'ap-south-1')."
-                },
-                "endpoint_url": {
-                    "type": "string",
-                    "title": "Custom Endpoint URL (Optional)",
-                    "input_type": "text",
-                    "default": "",
-                    "description": "Custom S3 endpoint for MinIO, Apache Ozone, LocalStack, or Ceph (e.g. 'http://minio:9000')."
+                    "title": "Connected S3 / AWS Credential",
+                    "input_type": "credential_dropdown",
+                    "provider": "s3",
+                    "section": "connection",
+                    "description": "Select stored AWS S3 credentials from platform settings."
                 },
                 "aws_access_key_id": {
                     "type": "string",
                     "title": "AWS Access Key ID",
                     "input_type": "text",
                     "default": "",
+                    "section": "connection",
                     "description": "AWS access key (leave blank to use environment credentials or IAM role)."
                 },
                 "aws_secret_access_key": {
@@ -121,6 +132,7 @@ class S3DataLakeConnectorRecipe(BaseRecipe):
                     "title": "AWS Secret Access Key",
                     "input_type": "password",
                     "default": "",
+                    "section": "connection",
                     "description": "AWS secret access key."
                 },
                 "aws_session_token": {
@@ -128,20 +140,33 @@ class S3DataLakeConnectorRecipe(BaseRecipe):
                     "title": "Session Token (Optional)",
                     "input_type": "password",
                     "default": "",
+                    "section": "connection",
                     "description": "Temporary session token for STS / assumed roles."
                 },
-                "credential_id": {
+                "region_name": {
                     "type": "string",
-                    "title": "Connected S3 / AWS Credential",
-                    "input_type": "credential_dropdown",
-                    "provider": "s3",
-                    "description": "Select stored AWS S3 credentials from platform settings."
+                    "title": "AWS Region",
+                    "input_type": "text",
+                    "default": "us-east-1",
+                    "section": "connection",
+                    "description": "AWS Region (e.g. 'us-east-1', 'eu-west-1', 'ap-south-1')."
                 },
+                "endpoint_url": {
+                    "type": "string",
+                    "title": "Custom Endpoint URL (Optional)",
+                    "input_type": "text",
+                    "default": "",
+                    "section": "connection",
+                    "description": "Custom S3 endpoint for MinIO, Apache Ozone, LocalStack, or Ceph (e.g. 'http://minio:9000')."
+                },
+
+                # ── 3. Limits & Performance ──
                 "limit": {
                     "type": "integer",
                     "title": "Row Limit",
                     "input_type": "number",
                     "default": 1000,
+                    "section": "runtime_limits",
                     "description": "Maximum number of rows to retrieve (1 to 1,000,000)."
                 },
                 "simulation_mode": {
@@ -149,6 +174,7 @@ class S3DataLakeConnectorRecipe(BaseRecipe):
                     "title": "Simulation / Demo Mode",
                     "input_type": "checkbox",
                     "default": False,
+                    "section": "runtime_limits",
                     "description": "When enabled or when S3 is unreachable, returns realistic Lakehouse benchmark telemetry records."
                 }
             },

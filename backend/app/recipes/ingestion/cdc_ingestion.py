@@ -31,16 +31,7 @@ class CDCIngestionRecipe(BaseRecipe):
     input_types = ["dataframe"]
     output_types = ["dataframe"]
 
-    inputs = [
-        RecipePort(
-            id="input",
-            label="Stream Trigger / State",
-            type="dataframe",
-            required=False,
-            max_connections=1,
-            description="Optional upstream state or checkpoint token",
-        )
-    ]
+    inputs: List[RecipePort] = []
 
     outputs = [
         RecipePort(
@@ -54,42 +45,39 @@ class CDCIngestionRecipe(BaseRecipe):
     def get_schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
+            "sections": [
+                {
+                    "id": "source",
+                    "title": "CDC Source & Stream",
+                    "description": "Configure CDC source engine, replication slot, and connection details",
+                },
+                {
+                    "id": "filtering",
+                    "title": "Table & Mutation Filtering",
+                    "description": "Filter tables and mutation operation types (INSERT, UPDATE, DELETE)",
+                },
+                {
+                    "id": "envelope",
+                    "title": "Payload Unpacking",
+                    "description": "Envelope format, column flattening, and before/after image retention",
+                },
+                {
+                    "id": "runtime_limits",
+                    "title": "Batching & Simulation",
+                    "description": "Micro-batch size, inline event log, and simulation fallback",
+                },
+            ],
             "properties": {
                 "source_type": {
                     "type": "string",
                     "title": "CDC Source Engine",
                     "enum": ["debezium_kafka", "postgres_logical", "mysql_binlog", "inline_changelog"],
                     "default": "debezium_kafka",
-                    "input_type": "select",
+                    "input_type": "dropdown",
+                    "section": "source",
                     "description": (
                         "Source engine providing the change log feed: 'debezium_kafka', "
                         "'postgres_logical' (WAL), 'mysql_binlog', or 'inline_changelog'."
-                    ),
-                },
-                "table_filter": {
-                    "type": "string",
-                    "title": "Table Whitelist Filter",
-                    "default": "*",
-                    "input_type": "text",
-                    "description": "Comma-separated list of table names to capture (e.g. 'orders,customers') or '*' for all tables.",
-                },
-                "operations": {
-                    "type": "string",
-                    "title": "Operation Filter",
-                    "enum": ["all", "inserts_only", "updates_only", "deletes_only", "inserts_and_updates"],
-                    "default": "all",
-                    "input_type": "select",
-                    "description": "Filter mutation operations: 'all' (INSERT, UPDATE, DELETE), 'inserts_only', 'updates_only', etc.",
-                },
-                "payload_format": {
-                    "type": "string",
-                    "title": "Payload Unpack Mode",
-                    "enum": ["flattened_after", "full_envelope", "compact_diff"],
-                    "default": "flattened_after",
-                    "input_type": "select",
-                    "description": (
-                        "How mutations are unpacked into columns: 'flattened_after' (promotes after/before fields), "
-                        "'full_envelope' (keeps raw JSON envelope), or 'compact_diff' (only changed columns)."
                     ),
                 },
                 "connection_string": {
@@ -97,6 +85,7 @@ class CDCIngestionRecipe(BaseRecipe):
                     "title": "Connection URL / Broker",
                     "default": "",
                     "input_type": "text",
+                    "section": "source",
                     "description": "Database connection URL, replication slot host, or Kafka broker for CDC streaming.",
                 },
                 "slot_or_topic": {
@@ -104,34 +93,72 @@ class CDCIngestionRecipe(BaseRecipe):
                     "title": "Replication Slot / Topic",
                     "default": "cdc-events.inventory.orders",
                     "input_type": "text",
+                    "section": "source",
                     "description": "PostgreSQL replication slot, MySQL channel, or Kafka topic name.",
                 },
-                "batch_size": {
-                    "type": "integer",
-                    "title": "Micro-Batch Size",
-                    "default": 100,
-                    "input_type": "number",
-                    "description": "Maximum number of change events to ingest per execution tick (1 to 50,000).",
+                "table_filter": {
+                    "type": "string",
+                    "title": "Table Whitelist Filter",
+                    "default": "*",
+                    "input_type": "text",
+                    "section": "filtering",
+                    "description": "Comma-separated list of table names to capture (e.g. 'orders,customers') or '*' for all tables.",
+                },
+                "operations": {
+                    "type": "string",
+                    "title": "Operation Filter",
+                    "enum": ["all", "inserts_only", "updates_only", "deletes_only", "inserts_and_updates"],
+                    "default": "all",
+                    "input_type": "dropdown",
+                    "section": "filtering",
+                    "description": "Filter mutation operations: 'all' (INSERT, UPDATE, DELETE), 'inserts_only', 'updates_only', etc.",
+                },
+                "payload_format": {
+                    "type": "string",
+                    "title": "Payload Unpack Mode",
+                    "enum": ["flattened_after", "full_envelope", "compact_diff"],
+                    "default": "flattened_after",
+                    "input_type": "dropdown",
+                    "section": "envelope",
+                    "description": (
+                        "How mutations are unpacked into columns: 'flattened_after' (promotes after/before fields), "
+                        "'full_envelope' (keeps raw JSON envelope), or 'compact_diff' (only changed columns)."
+                    ),
                 },
                 "include_before_image": {
                     "type": "boolean",
                     "title": "Include 'Before' State",
                     "default": True,
                     "input_type": "checkbox",
+                    "section": "envelope",
                     "description": "Include previous column values prefixed with '_before_' for UPDATE and DELETE operations.",
+                },
+                "batch_size": {
+                    "type": "integer",
+                    "title": "Micro-Batch Size",
+                    "default": 100,
+                    "input_type": "number",
+                    "section": "runtime_limits",
+                    "description": "Maximum number of change events to ingest per execution tick (1 to 50,000).",
                 },
                 "raw_events": {
                     "type": "string",
                     "title": "Inline CDC Payload / Log",
                     "default": "",
                     "input_type": "textarea",
+                    "section": "runtime_limits",
                     "description": "Optional pasted Debezium or custom change events JSON array for testing and replay.",
+                    "visible_when": {
+                        "field": "source_type",
+                        "equals": "inline_changelog",
+                    },
                 },
                 "simulation_mode": {
                     "type": "boolean",
                     "title": "Simulation / Demo Mode",
                     "default": False,
                     "input_type": "checkbox",
+                    "section": "runtime_limits",
                     "description": "When enabled or when database change stream is offline, generates realistic synthetic CDC events.",
                 },
             },
