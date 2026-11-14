@@ -17,6 +17,7 @@ except ImportError:
     pd = None
 
 from backend.app.recipes.base.recipe import BaseRecipe, RecipePort
+from backend.app.core.exceptions import ValidationException
 from backend.app.core.logging import logger
 from backend.app.core.config import settings
 
@@ -303,17 +304,15 @@ class KafkaConsumerRecipe(BaseRecipe):
                 delivery_status = "LIVE"
                 status_msg = f"Polled {len(records)} live streaming messages from Kafka topic '{topic}' (group: {group_id})."
             except ImportError:
-                status_msg = "kafka-python driver not installed. Using benchmark simulation fallback."
-                logger.info(status_msg)
+                raise ValidationException("kafka-python driver not installed. Please install 'kafka-python' to connect to Kafka.")
             except Exception as e:
                 logger.warning(f"Kafka consumer connection failed: {e}")
-                status_msg = f"Kafka connection failed ({e}). Using benchmark simulation fallback."
+                raise ValidationException(f"Kafka connection failed: {str(e)}")
 
-        # Fallback to realistic benchmark data
-        if not records:
+        # Simulation Mode (ONLY when simulation_mode is True)
+        if simulation_mode:
             records = self._generate_benchmark_data(config)
-            if not status_msg:
-                status_msg = f"Loaded {len(records)} benchmark streaming messages for Kafka topic '{topic}'."
+            status_msg = f"Loaded {len(records)} benchmark streaming messages for Kafka topic '{topic}'."
 
         if pd is not None and records:
             if flatten_json:

@@ -313,17 +313,15 @@ class RabbitMQConsumerRecipe(BaseRecipe):
                 delivery_status = "LIVE"
                 status_msg = f"Drained {len(records)} live messages from RabbitMQ queue '{queue_name}'."
             except ImportError:
-                status_msg = "pika driver not installed. Using benchmark simulation fallback."
-                logger.info(status_msg)
+                raise ValidationException("pika driver not installed. Please install 'pika' to connect to RabbitMQ.")
             except Exception as e:
                 logger.warning(f"RabbitMQ connection failed: {e}")
-                status_msg = f"RabbitMQ connection failed ({e}). Using benchmark simulation fallback."
+                raise ValidationException(f"RabbitMQ connection failed: {str(e)}")
 
-        # Fallback to realistic benchmark data
-        if not records:
+        # Simulation Mode (ONLY when simulation_mode is True)
+        if simulation_mode:
             records = self._generate_benchmark_data(config)
-            if not status_msg:
-                status_msg = f"Loaded {len(records)} benchmark queue messages for RabbitMQ queue '{queue_name}'."
+            status_msg = f"Loaded {len(records)} benchmark queue messages for RabbitMQ queue '{queue_name}'."
 
         if pd is not None and records:
             if flatten_json:

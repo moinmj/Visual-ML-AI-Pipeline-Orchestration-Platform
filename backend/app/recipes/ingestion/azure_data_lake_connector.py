@@ -354,17 +354,15 @@ class AzureDataLakeConnectorRecipe(BaseRecipe):
                     delivery_status = "LIVE"
                     status_msg = f"Successfully read {len(records)} records from Azure container '{container}' blob '{blob_path}'."
             except ImportError:
-                status_msg = "azure-storage-blob driver not installed. Using benchmark simulation fallback."
-                logger.info(status_msg)
+                raise ValidationException("azure-storage-blob driver not installed. Please install 'azure-storage-blob' to connect to Azure Data Lake.")
             except Exception as e:
                 logger.warning(f"Azure Data Lake connection failed: {e}")
-                status_msg = f"Azure Data Lake connection failed ({e}). Using benchmark simulation fallback."
+                raise ValidationException(f"Azure Data Lake Storage connection failed: {str(e)}")
 
-        # Fallback to realistic benchmark data
-        if not records:
+        # Simulation Mode (ONLY when simulation_mode is True)
+        if simulation_mode:
             records = self._generate_benchmark_data(config)
-            if not status_msg:
-                status_msg = f"Loaded {len(records)} benchmark records for Azure Data Lake ({container}/{blob_path})."
+            status_msg = f"Loaded {len(records)} benchmark records for Azure Data Lake ({container}/{blob_path})."
 
         df_out = pd.DataFrame(records) if pd is not None else records
         duration_ms = int((time.time() - start_time) * 1000)

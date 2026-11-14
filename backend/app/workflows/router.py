@@ -2794,8 +2794,17 @@ async def _get_execution_node_dataframe(
     # only used if the full table cannot be found in memory or on disk (steps 1-3).
     snapshot_fallback: Optional[pd.DataFrame] = None
 
-    # 1. In-memory recent executions cache
+    # 0. Early failure check: if node failed in this execution, never return stale/fallback data
     recent_res = _RECENT_EXECUTION_RESULTS.get(execution_id)
+    if recent_res:
+        n_res = getattr(recent_res, "node_results", []) if not isinstance(recent_res, dict) else recent_res.get("node_results", [])
+        for nr in n_res:
+            nr_nid = getattr(nr, "node_id", None) or (isinstance(nr, dict) and nr.get("node_id"))
+            nr_stat = getattr(nr, "status", None) or (isinstance(nr, dict) and nr.get("status"))
+            if str(nr_nid) == str(node_id) and str(nr_stat).upper() == "FAILED":
+                return None
+
+    # 1. In-memory recent executions cache
     if recent_res:
         node_outs = getattr(recent_res, "node_outputs", {}) if not isinstance(recent_res, dict) else recent_res.get("node_outputs", {})
         df = _extract_df(node_outs)
@@ -2810,6 +2819,12 @@ async def _get_execution_node_dataframe(
     if job:
         res = job.get("results") or job.get("result")
         if res:
+            n_res = getattr(res, "node_results", []) if not isinstance(res, dict) else res.get("node_results", [])
+            for nr in n_res:
+                nr_nid = getattr(nr, "node_id", None) or (isinstance(nr, dict) and nr.get("node_id"))
+                nr_stat = getattr(nr, "status", None) or (isinstance(nr, dict) and nr.get("status"))
+                if str(nr_nid) == str(node_id) and str(nr_stat).upper() == "FAILED":
+                    return None
             node_outs = getattr(res, "node_outputs", {}) if not isinstance(res, dict) else res.get("node_outputs", {})
             df = _extract_df(node_outs)
             if df is not None:
@@ -3183,64 +3198,59 @@ async def get_test_step_table_preview(
                 df = v
                 break
 
-    has_mock_data = (
-        isinstance(df, pd.DataFrame)
-        and ("_email_source" in df.columns or ("status" in df.columns and (df["status"] == "SIMULATED").any()))
-    )
+    # 1. Early failure checks: If this node or execution recorded a failure, NEVER show fallback/stale data!
+    meta = NodeStepExecutor.load_node_meta(session_id=session_id, node_id=node_id)
+    if meta and meta.get("status") == "FAILED":
+        err_msg = meta.get("error_message") or "Node execution failed"
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Node '{node_id}' execution failed: {err_msg}. No database records were retrieved."
+        )
 
-    # If the draft session contains mock/simulated data or no data, check for a fresh real workflow execution
-    if df is None or not isinstance(df, pd.DataFrame) or has_mock_data:
+    rec_res = _RECENT_EXECUTION_RESULTS.get(session_id)
+    if rec_res:
+        node_results = getattr(rec_res, "node_results", []) if not isinstance(rec_res, dict) else rec_res.get("node_results", [])
+        for nr in node_results:
+            nid = getattr(nr, "node_id", None) or (isinstance(nr, dict) and nr.get("node_id"))
+            stat = getattr(nr, "status", None) or (isinstance(nr, dict) and nr.get("status"))
+            if str(nid) == str(node_id) and str(stat).upper() == "FAILED":
+                err_m = getattr(nr, "error_message", None) or (isinstance(nr, dict) and nr.get("error_message")) or "Node execution failed"
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Node '{node_id}' execution failed: {err_m}. No database records were retrieved."
+                )
+
+    if db is not None:
         try:
-            from backend.app.core.tenant_context import tenant_cache_dir
-            from backend.app.infrastructure.storage.storage_manager import storage_manager
-            for rec_id, rec_res in reversed(list(_RECENT_EXECUTION_RESULTS.items())):
-                snaps = getattr(rec_res, "step_snapshots", {}) if not isinstance(rec_res, dict) else rec_res.get("step_snapshots", {})
-                if node_id in snaps:
-                    rec_df = None
-                    for subpath in [
-                        f"{tenant_cache_dir()}/executions/{rec_id}/{node_id}.parquet",
-                        f"t_none/executions/{rec_id}/{node_id}.parquet",
-                        f"executions/{rec_id}/{node_id}.parquet",
-                        f"{tenant_cache_dir()}/test_sessions/{rec_id}/node_{node_id}_df.parquet",
-                        f"t_none/test_sessions/{rec_id}/node_{node_id}_df.parquet",
-                    ]:
-                        p_abs = storage_manager.get_absolute_path(subpath)
-                        if p_abs.exists():
-                            try:
-                                rec_df = pd.read_parquet(p_abs)
-                                break
-                            except Exception:
-                                pass
-                    if rec_df is None:
-                        node_outs = getattr(rec_res, "node_outputs", {}) if not isinstance(rec_res, dict) else rec_res.get("node_outputs", {})
-                        target_out = node_outs.get(node_id) if isinstance(node_outs, dict) else None
-                        if isinstance(target_out, dict) and isinstance(target_out.get("dataframe"), pd.DataFrame):
-                            rec_df = target_out["dataframe"]
-                    if rec_df is None:
-                        snap = snaps[node_id]
-                        if snap and isinstance(snap, dict) and snap.get("preview_rows"):
-                            rec_df = pd.DataFrame(snap["preview_rows"])
-                            cols = snap.get("columns")
-                            if cols and isinstance(cols, list) and all(c in rec_df.columns for c in cols):
-                                rec_df = rec_df[cols]
+            from backend.app.workflows.models import WorkflowExecution
+            res_we = await db.execute(select(WorkflowExecution).where(WorkflowExecution.execution_id == session_id))
+            we = res_we.scalar_one_or_none()
+            if we and we.reports and isinstance(we.reports, dict):
+                for nr in we.reports.get("node_results", []):
+                    if isinstance(nr, dict) and str(nr.get("node_id")) == str(node_id) and str(nr.get("status")).upper() == "FAILED":
+                        err_m = nr.get("error_message") or "Node execution failed"
+                        raise HTTPException(
+                            status_code=status.HTTP_404_NOT_FOUND,
+                            detail=f"Node '{node_id}' execution failed: {err_m}. No database records were retrieved."
+                        )
+        except HTTPException:
+            raise
+        except Exception:
+            pass
 
-                    if rec_df is not None:
-                        df = rec_df
-                        if session_id.startswith("draft_"):
-                            try:
-                                NodeStepExecutor.save_node_output(
-                                    session_id=session_id,
-                                    node_id=node_id,
-                                    recipe_id="",
-                                    outputs={"dataframe": df}
-                                )
-                            except Exception:
-                                pass
-                        break
-        except Exception as ex:
-            logger.debug(f"Could not load recent execution for preview: {ex}")
+    # 2. Check current execution result in memory for session_id ONLY
+    if (df is None or not isinstance(df, pd.DataFrame)) and rec_res:
+        node_outs = getattr(rec_res, "node_outputs", {}) if not isinstance(rec_res, dict) else rec_res.get("node_outputs", {})
+        target_out = node_outs.get(node_id) if isinstance(node_outs, dict) else None
+        if isinstance(target_out, dict) and isinstance(target_out.get("dataframe"), pd.DataFrame):
+            df = target_out["dataframe"]
+        if df is None:
+            snaps = getattr(rec_res, "step_snapshots", {}) if not isinstance(rec_res, dict) else rec_res.get("step_snapshots", {})
+            snap = snaps.get(node_id) if isinstance(snaps, dict) else None
+            if snap and isinstance(snap, dict) and snap.get("preview_rows"):
+                df = pd.DataFrame(snap["preview_rows"])
 
-    # Graceful fallback for full workflow execution runs (parquet caches)
+    # 3. Graceful fallback for full workflow execution runs (parquet caches for session_id ONLY)
     if df is None or not isinstance(df, pd.DataFrame):
         try:
             from backend.app.core.tenant_context import tenant_cache_dir
@@ -3264,7 +3274,7 @@ async def get_test_step_table_preview(
         except Exception as ex:
             logger.debug(f"Could not load execution parquet for preview: {ex}")
 
-    # Graceful fallback for governance, tracker, and evaluator nodes
+    # 4. Graceful fallback for governance, tracker, and evaluator nodes
     if df is None or not isinstance(df, pd.DataFrame):
         if outputs.get("governance_record") and isinstance(outputs["governance_record"], dict):
             df = pd.DataFrame([outputs["governance_record"]])
@@ -3272,25 +3282,23 @@ async def get_test_step_table_preview(
             scalar_m = {k: v for k, v in outputs["metrics"].items() if isinstance(v, (int, float, str, bool))}
             if scalar_m:
                 df = pd.DataFrame([scalar_m])
-        else:
-            meta = NodeStepExecutor.load_node_meta(session_id=session_id, node_id=node_id)
-            if meta:
-                if meta.get("preview_rows"):
-                    df = pd.DataFrame(meta["preview_rows"])
-                elif meta.get("output_summary") and isinstance(meta["output_summary"], dict) and meta["output_summary"].get("governance_record"):
-                    df = pd.DataFrame([meta["output_summary"]["governance_record"]])
-                elif meta.get("metrics") and isinstance(meta["metrics"], dict) and len(meta["metrics"]) > 0:
-                    scalar_m = {k: v for k, v in meta["metrics"].items() if isinstance(v, (int, float, str, bool))}
-                    if scalar_m:
-                        df = pd.DataFrame([scalar_m])
+        elif meta and meta.get("status") == "SUCCESS":
+            if meta.get("preview_rows"):
+                df = pd.DataFrame(meta["preview_rows"])
+            elif meta.get("output_summary") and isinstance(meta["output_summary"], dict) and meta["output_summary"].get("governance_record"):
+                df = pd.DataFrame([meta["output_summary"]["governance_record"]])
+            elif meta.get("metrics") and isinstance(meta["metrics"], dict) and len(meta["metrics"]) > 0:
+                scalar_m = {k: v for k, v in meta["metrics"].items() if isinstance(v, (int, float, str, bool))}
+                if scalar_m:
+                    df = pd.DataFrame([scalar_m])
 
-    # Check database WorkflowExecution snapshot as last resort
+    # 5. Check database WorkflowExecution snapshot as last resort (for session_id ONLY)
     if (df is None or not isinstance(df, pd.DataFrame)) and db is not None:
         try:
             from backend.app.workflows.models import WorkflowExecution
             res_we = await db.execute(select(WorkflowExecution).where(WorkflowExecution.execution_id == session_id))
             we = res_we.scalar_one_or_none()
-            if we and we.step_snapshots and isinstance(we.step_snapshots, dict):
+            if we and we.status != "FAILED" and we.step_snapshots and isinstance(we.step_snapshots, dict):
                 node_snap = we.step_snapshots.get(node_id)
                 if node_snap and isinstance(node_snap, dict) and node_snap.get("preview_rows"):
                     df = pd.DataFrame(node_snap["preview_rows"])
@@ -3300,7 +3308,7 @@ async def get_test_step_table_preview(
     if df is None or not isinstance(df, pd.DataFrame):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No tabular test output found for node '{node_id}' in session '{session_id}'."
+            detail=f"No tabular test output found for node '{node_id}' in session '{session_id}'. Database query did not return data."
         )
 
     total_rows = len(df)
