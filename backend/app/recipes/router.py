@@ -57,7 +57,29 @@ async def get_recipe_schema(recipe_id: str):
         "media_type": meta.media_type,
         "parameters_schema": meta.parameters_schema,
         "enabled": meta.enabled,
+        "icon": meta.icon,
+        "icon_url": meta.icon_url,
     }
+
+
+@router.get("/{recipe_id}/icon")
+async def get_recipe_icon(recipe_id: str):
+    """
+    Directly stream the official SVG icon for a recipe.
+    """
+    from fastapi.responses import FileResponse
+    from backend.app.main import ROOT_DIR
+    meta = recipe_registry.get_metadata(recipe_id)
+    if meta.icon_url and meta.icon_url.startswith("/static/"):
+        rel_path = meta.icon_url.replace("/static/", "", 1)
+        full_path = os.path.join(ROOT_DIR, "backend", "app", "static", rel_path)
+        if os.path.exists(full_path):
+            return FileResponse(full_path, media_type="image/svg+xml")
+
+    default_path = os.path.join(ROOT_DIR, "backend", "app", "static", "icons", "recipes", "default.svg")
+    if os.path.exists(default_path):
+        return FileResponse(default_path, media_type="image/svg+xml")
+    raise HTTPException(status_code=404, detail="Icon not found")
 
 
 # ---------------------------------------------------------------------------

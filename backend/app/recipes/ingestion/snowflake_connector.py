@@ -27,6 +27,7 @@ class SnowflakeConnectorRecipe(BaseRecipe):
     name = "Snowflake Connector"
     version = "1.0.0"
     category = "ingestion"
+    icon = "snowflake"
     group = "Ingestion & Orchestration"
     subgroup = "Database & Warehouse Connectors"
     description = "Reads tables or analytical query results from Snowflake Cloud Data Warehouse."

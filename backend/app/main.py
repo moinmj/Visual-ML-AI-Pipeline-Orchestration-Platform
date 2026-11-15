@@ -9,6 +9,7 @@ if ROOT_DIR not in sys.path:
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 
 from backend.app.core.config import settings
@@ -170,3 +171,8 @@ app.include_router(tenant_data_router, prefix=settings.API_V1_STR)
 app.include_router(credentials_router, prefix=settings.API_V1_STR)
 app.include_router(endpoint_router)
 app.include_router(endpoint_router, prefix=settings.API_V1_STR)
+
+# Mount static files directory for official recipe icons & UI assets
+static_dir = os.path.join(ROOT_DIR, "backend", "app", "static")
+if os.path.exists(static_dir):
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")

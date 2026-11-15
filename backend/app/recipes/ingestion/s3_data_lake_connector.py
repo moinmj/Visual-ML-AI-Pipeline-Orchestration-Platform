@@ -28,6 +28,7 @@ class S3DataLakeConnectorRecipe(BaseRecipe):
     name = "Amazon S3 Data Lake Connector"
     version = "1.0.0"
     category = "ingestion"
+    icon = "amazon-s3"
     group = "Ingestion & Orchestration"
     subgroup = "Data Lake & Object Storage"
     description = "Ingests Parquet, CSV, or JSON datasets from Amazon S3 and S3-compatible Data Lakes (MinIO, Ozone)."

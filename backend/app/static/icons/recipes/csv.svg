@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
+  <rect width="24" height="24" rx="5" fill="#F0FDF4"/>
+  <path d="M6 3.5h8.5l4.5 4.5V20a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 20V5A1.5 1.5 0 0 1 6 3.5z" fill="#107C41" fill-opacity="0.15" stroke="#107C41" stroke-width="1.4" stroke-linejoin="round"/>
+  <path d="M14.5 3.5V8H19" stroke="#107C41" stroke-width="1.4"/>
+  <text x="6" y="16.5" font-family="monospace" font-size="6.5" font-weight="bold" fill="#107C41">CSV</text>
+</svg>

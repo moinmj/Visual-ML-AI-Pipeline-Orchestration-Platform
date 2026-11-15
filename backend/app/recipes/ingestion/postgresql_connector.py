@@ -30,6 +30,7 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
     name = "PostgreSQL Connector"
     version = "1.1.0"
     category = "ingestion"
+    icon = "postgresql"
     group = "Ingestion & Orchestration"
     subgroup = "Database & Warehouse Connectors"
     description = "Reads tables or query results from a PostgreSQL database."
