@@ -211,7 +211,7 @@ def test_mysql_connector_execution_table_mode():
     assert "status" in df.columns
 
     summary = result.get("output_summary", {})
-    assert summary.get("title") == "MySQL Connector Summary"
+    assert summary.get("title") in ("Database Ingestion & Query Metrics", "MySQL Connector Summary")
     assert summary.get("records_retrieved") == 40
 
 

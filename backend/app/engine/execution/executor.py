@@ -152,6 +152,13 @@ def diagnose_execution_error(
             "message": err_str,
             "suggestion": "Verify that the table exists in the database and check for exact case-sensitivity."
         }
+    # SQL Syntax Error (e.g. MySQL 1064, PostgreSQL 42601)
+    if any(k in err_str for k in ["1064", "42601", "syntax error", "SyntaxError"]) or "check the manual that corresponds to your MySQL" in err_str:
+        return {
+            "title": "SQL Syntax Error",
+            "message": err_str,
+            "suggestion": "Check the custom SQL query for syntax issues. Ensure there are no dangling semicolons, unclosed quotes, or invalid clauses before pagination limits."
+        }
     if any(k in err_str for k in ["Can't connect to MySQL server", "could not connect to server", "Connection refused", "OperationalError"]):
         return {
             "title": "Database Server Unreachable",
@@ -206,11 +213,23 @@ def make_json_safe(obj: Any) -> Any:
         return str(obj)
     if isinstance(obj, uuid.UUID):
         return str(obj)
-    if isinstance(obj, bytes):
+    if isinstance(obj, (bytes, bytearray)):
+        if obj == b"\x01":
+            return True
+        if obj == b"\x00":
+            return False
         try:
-            return obj.decode("utf-8")
+            decoded = obj.decode("utf-8")
+            if decoded.isprintable():
+                return decoded
         except Exception:
-            return obj.hex()
+            pass
+        try:
+            if len(obj) <= 8:
+                return int.from_bytes(obj, byteorder="big")
+        except Exception:
+            pass
+        return obj.hex()
     if isinstance(obj, pd.DataFrame):
         clean_df = obj.copy()
         for c in clean_df.select_dtypes(include=["datetime", "datetimetz"]).columns:
