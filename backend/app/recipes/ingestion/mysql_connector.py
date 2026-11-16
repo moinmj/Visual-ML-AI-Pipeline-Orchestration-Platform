@@ -13,6 +13,8 @@ import os
 import time
 from typing import Dict, Any, List, Optional
 from urllib.parse import urlparse, unquote, parse_qs, quote_plus
+from decimal import Decimal
+from datetime import datetime, date, time as dt_time, timedelta
 
 try:
     import pandas as pd
@@ -25,6 +27,80 @@ from backend.app.core.config import settings
 from backend.app.core.exceptions import ValidationException
 
 
+def _clean_mysql_value(val: Any) -> Any:
+    """
+    Normalizes MySQL data types into clean Python / JSON primitives:
+    - BIT / binary boolean fields (e.g. b'\\x01', b'\\x00') -> bool (True / False)
+    - Multi-byte BIT or small binary -> integer or printable string
+    - Decimal objects -> int or float
+    - time objects -> ISO formatted strings ('HH:MM:SS')
+    """
+    if val is None:
+        return None
+    if isinstance(val, (bytes, bytearray)):
+        if val == b"\x01":
+            return True
+        if val == b"\x00":
+            return False
+        # Try UTF-8 string decoding if printable
+        try:
+            decoded = val.decode("utf-8")
+            if decoded.isprintable():
+                return decoded
+        except Exception:
+            pass
+        # If integer bitfield (e.g. BIT(2..64))
+        try:
+            if len(val) <= 8:
+                return int.from_bytes(val, byteorder="big")
+        except Exception:
+            pass
+        return val.hex()
+    if isinstance(val, Decimal):
+        try:
+            if val.is_nan() or val.is_infinite():
+                return None
+            val_f = float(val)
+            return int(val_f) if val_f.is_integer() else val_f
+        except Exception:
+            return float(val)
+    if isinstance(val, dt_time):
+        return val.isoformat()
+    return val
+
+
+def _clean_mysql_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Cleans all fields in a database row dictionary."""
+    return {k: _clean_mysql_value(v) for k, v in row.items()}
+
+
+def _sanitize_mysql_query(query: str, limit: int) -> str:
+    """
+    Sanitizes user SQL queries before execution:
+    1. Trims whitespace and removes trailing semicolons (preventing '; LIMIT X' syntax error 1064).
+    2. Strips multi-statement prefixes like 'USE db_name;' if present.
+    3. Safely appends 'LIMIT {limit}' only when no LIMIT clause already exists.
+    """
+    clean = str(query or "").strip()
+    if not clean:
+        return ""
+
+    # Strip any trailing semicolons or trailing whitespace
+    clean = re.sub(r";+\s*$", "", clean).strip()
+
+    # Strip USE database statement prefix if user included it
+    use_match = re.match(r"^\s*USE\s+[`\"]?([a-zA-Z0-9_$]+)[`\"]?\s*;\s*", clean, re.IGNORECASE)
+    if use_match:
+        clean = clean[use_match.end():].strip()
+        clean = re.sub(r";+\s*$", "", clean).strip()
+
+    # Append LIMIT clause if not already present in the SQL query
+    if not re.search(r"\blimit\b", clean, re.IGNORECASE):
+        clean = f"{clean} LIMIT {limit}"
+
+    return clean
+
+
 class MySQLConnectorRecipe(BaseRecipe):
     recipe_id = "mysql_connector"
     name = "MySQL Connector"
@@ -33,7 +109,7 @@ class MySQLConnectorRecipe(BaseRecipe):
     group = "Ingestion & Orchestration"
     subgroup = "Database & Warehouse Connectors"
     description = "Reads tables or query results from a MySQL / MariaDB database."
-    input_types = ["dataframe"]
+    input_types: List[str] = []
     output_types = ["dataframe"]
 
     inputs: List[RecipePort] = []
@@ -501,6 +577,8 @@ class MySQLConnectorRecipe(BaseRecipe):
         offset_val = max(0, int(config.get("offset", 0)))
         simulation_mode = bool(config.get("simulation_mode", False))
         params = self._resolve_connection_params(config, context)
+        database = str(config.get("database", "shop_db")).strip() or "shop_db"
+        select_all_tables = bool(config.get("select_all_tables", False))
 
         # 1. Resolve columns
         cols_raw = config.get("columns", [])
@@ -510,15 +588,16 @@ class MySQLConnectorRecipe(BaseRecipe):
         elif isinstance(cols_raw, str) and cols_raw.strip():
             cols_list = [c.strip().strip('`') for c in cols_raw.split(",") if c.strip() and c.strip() != "*"]
 
-        if cols_list:
+        # If select_all_tables is enabled, force wildcard selection to avoid cross-table column mismatches
+        if select_all_tables:
+            cols_str = "*"
+            cols_list = []
+        elif cols_list:
             cols_str = ", ".join(f"`{c}`" if not c.startswith("`") else c for c in cols_list)
         else:
             cols_str = "*"
 
         # 2. Resolve tables
-        database = str(config.get("database", "shop_db")).strip() or "shop_db"
-        select_all_tables = bool(config.get("select_all_tables", False))
-
         target_tables: List[str] = []
         raw_tables = config.get("tables")
         if isinstance(raw_tables, list):
@@ -582,8 +661,17 @@ class MySQLConnectorRecipe(BaseRecipe):
                         is_multi = len(target_tables) > 1
                         for tbl in target_tables:
                             q = f"SELECT {cols_str} FROM `{tbl}`{where_sql}{order_sql} LIMIT {limit}{offset_sql}"
-                            cur.execute(q)
-                            rows = cur.fetchall()
+                            try:
+                                cur.execute(q)
+                            except Exception as q_err:
+                                err_msg = str(q_err)
+                                if "1054" in err_msg or "Unknown column" in err_msg:
+                                    raise ValidationException(
+                                        f"Column selection mismatch in table '{tbl}': requested column(s) ({cols_str}) do not exist in '{database}.{tbl}'. "
+                                        "Verify selected columns or use wildcard (*) when querying multiple tables."
+                                    )
+                                raise
+                            rows = [_clean_mysql_row(dict(r)) for r in cur.fetchall()]
                             if rows and not columns_retrieved:
                                 columns_retrieved = list(rows[0].keys())
                             if is_multi:
@@ -605,10 +693,19 @@ class MySQLConnectorRecipe(BaseRecipe):
                         if not query:
                             raise ValidationException("SQL Query is required when Read Mode is set to 'query'.")
                         target_desc = "Custom Query"
-                        if "limit" not in query.lower():
-                            query = f"{query} LIMIT {limit}"
-                        cur.execute(query)
-                        rows = cur.fetchall()
+
+                        # Handle multi-statement USE prefix if user included it
+                        use_match = re.match(r"^\s*USE\s+[`\"]?([a-zA-Z0-9_$]+)[`\"]?\s*;\s*", query, re.IGNORECASE)
+                        if use_match:
+                            target_db = use_match.group(1)
+                            try:
+                                cur.execute(f"USE `{target_db}`")
+                            except Exception:
+                                pass
+
+                        sanitized_query = _sanitize_mysql_query(query, limit)
+                        cur.execute(sanitized_query)
+                        rows = [_clean_mysql_row(dict(r)) for r in cur.fetchall()]
                         if rows:
                             columns_retrieved = list(rows[0].keys())
                         records = rows
@@ -629,10 +726,14 @@ class MySQLConnectorRecipe(BaseRecipe):
         # Simulation Mode (ONLY when explicitly enabled)
         if simulation_mode:
             if not target_tables:
-                target_tables = ["orders"]
+                if select_all_tables:
+                    target_tables = ["orders", "products", "customers"]
+                else:
+                    target_tables = ["orders"]
             is_multi = len(target_tables) > 1
             for tbl in target_tables:
-                sim_recs = self._generate_benchmark_data(config)
+                sim_recs = self._generate_benchmark_data({"table_name": tbl, "limit": limit})
+                sim_recs = [_clean_mysql_row(r) for r in sim_recs]
                 if cols_list:
                     filtered = []
                     for r in sim_recs:
@@ -658,19 +759,24 @@ class MySQLConnectorRecipe(BaseRecipe):
         duration_ms = int((time.time() - start_time) * 1000)
 
         summary = {
-            "title": "MySQL Connector Summary",
+            "title": "Database Ingestion & Query Metrics",
             "message": status_msg,
             "status": delivery_status,
             "target": target_desc,
-            "records_retrieved": len(records),
-            "columns_count": len(columns_retrieved),
-            "duration_ms": duration_ms
+            "database": database,
+            "tables_retrieved": target_tables,
+            "tables_count": int(len(target_tables)),
+            "records_retrieved": int(len(records)),
+            "columns_count": int(len(columns_retrieved)),
+            "columns": columns_retrieved,
+            "duration_ms": int(duration_ms)
         }
 
         metrics = {
-            "records_retrieved": len(records),
-            "columns_count": len(columns_retrieved),
-            "duration_ms": duration_ms,
+            "records_retrieved": int(len(records)),
+            "tables_count": int(len(target_tables)),
+            "columns_count": int(len(columns_retrieved)),
+            "duration_ms": int(duration_ms),
             "delivery_status": delivery_status
         }
 
@@ -694,7 +800,7 @@ class MySQLConnectorRecipe(BaseRecipe):
         if read_mode == "table":
             sql_stmt = f"SELECT * FROM `{table_name}` LIMIT {limit}"
         else:
-            sql_stmt = query
+            sql_stmt = _sanitize_mysql_query(query, limit)
 
         return (
             f"# MySQL Ingestion Pipeline Code\n"

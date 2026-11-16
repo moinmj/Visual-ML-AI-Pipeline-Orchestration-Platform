@@ -2,7 +2,9 @@ import time
 import re
 import traceback
 from typing import Dict, Any, List, Optional, Callable
-from datetime import datetime, timezone, date
+from datetime import datetime, timezone, date, time as dt_time, timedelta
+from decimal import Decimal
+import uuid
 import pandas as pd
 import numpy as np
 from pydantic import BaseModel, Field
@@ -135,11 +137,27 @@ def diagnose_execution_error(
             "message": f"The database specified does not exist on the database server.",
             "suggestion": "Check the database name in the connector configuration."
         }
+    # Database Column Not Found (must precede general "does not exist" table check)
+    if any(k in err_str for k in ["42703", "1054", "UndefinedColumn", "Unknown column"]) or (
+        "column" in err_str.lower() and any(k in err_str.lower() for k in ["does not exist", "not found", "unknown column"])
+    ):
+        return {
+            "title": "Database Column Not Found",
+            "message": err_str,
+            "suggestion": "Verify that the selected column(s) exist in the specified table. When selecting multiple tables or an entire schema, select all columns (*) to avoid cross-table column mismatches."
+        }
     if any(k in err_str for k in ["doesn't exist", "relation", "does not exist", "42P01", "1146", "Object does not exist"]):
         return {
             "title": "Database Table Not Found",
             "message": err_str,
             "suggestion": "Verify that the table exists in the database and check for exact case-sensitivity."
+        }
+    # SQL Syntax Error (e.g. MySQL 1064, PostgreSQL 42601)
+    if any(k in err_str for k in ["1064", "42601", "syntax error", "SyntaxError"]) or "check the manual that corresponds to your MySQL" in err_str:
+        return {
+            "title": "SQL Syntax Error",
+            "message": err_str,
+            "suggestion": "Check the custom SQL query for syntax issues. Ensure there are no dangling semicolons, unclosed quotes, or invalid clauses before pagination limits."
         }
     if any(k in err_str for k in ["Can't connect to MySQL server", "could not connect to server", "Connection refused", "OperationalError"]):
         return {
@@ -177,12 +195,41 @@ class WorkflowExecutionResult(BaseModel):
 def make_json_safe(obj: Any) -> Any:
     """
     Recursively converts arbitrary Python/ML objects (DataFrames, Timestamps, ndarrays, numpy scalars,
-    models) into standard, JSON-serializable primitives for FastAPI Pydantic responses.
+    models, Decimals, times) into standard, JSON-serializable primitives for FastAPI Pydantic responses.
     """
     if obj is None:
         return None
-    if isinstance(obj, (pd.Timestamp, datetime, date)):
+    if isinstance(obj, Decimal):
+        try:
+            if obj.is_nan() or obj.is_infinite():
+                return None
+            val_f = float(obj)
+            return int(val_f) if val_f.is_integer() else val_f
+        except Exception:
+            return float(obj)
+    if isinstance(obj, (pd.Timestamp, datetime, date, dt_time)):
         return obj.isoformat()
+    if isinstance(obj, timedelta):
+        return str(obj)
+    if isinstance(obj, uuid.UUID):
+        return str(obj)
+    if isinstance(obj, (bytes, bytearray)):
+        if obj == b"\x01":
+            return True
+        if obj == b"\x00":
+            return False
+        try:
+            decoded = obj.decode("utf-8")
+            if decoded.isprintable():
+                return decoded
+        except Exception:
+            pass
+        try:
+            if len(obj) <= 8:
+                return int.from_bytes(obj, byteorder="big")
+        except Exception:
+            pass
+        return obj.hex()
     if isinstance(obj, pd.DataFrame):
         clean_df = obj.copy()
         for c in clean_df.select_dtypes(include=["datetime", "datetimetz"]).columns:
@@ -707,8 +754,8 @@ class DAGExecutor:
                     snapshot_info["columns"] = list(primary_df.columns)
                     if not is_chart_recipe:
                         try:
-                            clean_v = primary_df.head(5).replace({float("nan"): None, float("inf"): None, float("-inf"): None})
-                            snapshot_info["preview_rows"] = clean_v.to_dict(orient="records")
+                            clean_v = primary_df.head(50).replace({float("nan"): None, float("inf"): None, float("-inf"): None})
+                            snapshot_info["preview_rows"] = [make_json_safe(r) for r in clean_v.to_dict(orient="records")]
                         except Exception:
                             pass
                     else:

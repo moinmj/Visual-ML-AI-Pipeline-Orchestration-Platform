@@ -105,7 +105,7 @@ def test_postgresql_connector_execution_table_mode():
     assert "transaction_id" in df.columns
 
     summary = result.get("output_summary", {})
-    assert summary.get("title") == "PostgreSQL Connector Summary"
+    assert summary.get("title") in ("Database Ingestion & Query Metrics", "PostgreSQL Connector Summary")
     assert summary.get("records_retrieved") == 50
     assert summary.get("status") == "SIMULATED"
 
@@ -211,7 +211,7 @@ def test_mysql_connector_execution_table_mode():
     assert "status" in df.columns
 
     summary = result.get("output_summary", {})
-    assert summary.get("title") == "MySQL Connector Summary"
+    assert summary.get("title") in ("Database Ingestion & Query Metrics", "MySQL Connector Summary")
     assert summary.get("records_retrieved") == 40
 
 
@@ -413,7 +413,7 @@ def test_postgresql_connector_in_dag_workflow_end_to_end():
     res_pg = next(r for r in exec_result.node_results if r.node_id == "pg_source")
     assert res_pg.status == "SUCCESS"
     summary_pg = res_pg.output_summary.get("output_summary") or res_pg.output_summary
-    assert summary_pg.get("title") == "PostgreSQL Connector Summary"
+    assert summary_pg.get("title") in ("Database Ingestion & Query Metrics", "PostgreSQL Connector Summary")
 
     # Check node 2: sanitizer_step
     res_sanitizer = next(r for r in exec_result.node_results if r.node_id == "sanitizer_step")

@@ -453,12 +453,32 @@ OFFICIAL_RECIPE_ICONS: Dict[str, Dict[str, Any]] = {
         "color": "#0284C7",
         "label": "Dataset Join / Merge",
     },
+    # ── Flow Control & Sub-Workflows ──
+    "add_workflow": {
+        "icon": "sub-workflow",
+        "svg": "api.svg",
+        "color": "#6366F1",
+        "label": "Sub-Workflow Runner",
+    },
+    "workflow_start": {
+        "icon": "workflow-start",
+        "svg": "clock.svg",
+        "color": "#10B981",
+        "label": "Workflow Start Anchor",
+    },
+    "workflow_end": {
+        "icon": "workflow-end",
+        "svg": "target.svg",
+        "color": "#EF4444",
+        "label": "Workflow End Anchor",
+    },
 }
 
 # Category fallback icon mapping
 CATEGORY_FALLBACK_ICONS: Dict[str, Tuple[str, str, str]] = {
     "ingestion": ("database", "csv.svg", "#0284C7"),
     "triggers": ("zap", "webhook.svg", "#F43F5E"),
+    "flow_control": ("sub-workflow", "api.svg", "#6366F1"),
     "preprocessing": ("sliders", "sparkles.svg", "#8B5CF6"),
     "feature_engineering": ("sparkles", "sparkles.svg", "#EC4899"),
     "splitting": ("scissors", "scissors.svg", "#0D9488"),
