@@ -580,17 +580,25 @@ def is_generic_workbook_name(name: Optional[str]) -> bool:
     return False
 
 
-def strip_run_label_from_name(name: Optional[str]) -> str:
+def clean_workbook_name(name: Optional[str]) -> str:
     """Strips repeated or trailing execution labels like '(Run #1)', '(Run #2)', or '(Version 1)' from pipeline names."""
     if not name:
         return ""
     cleaned = str(name).strip()
     while True:
-        new_cleaned = re.sub(r"\s*\((?:Run\s*#\d+|Version\s*\d+)\)\s*$", "", cleaned, flags=re.IGNORECASE).strip()
+        new_cleaned = re.sub(
+            r"\s*\((?:Run\s*#\d+.*?|Version\s*\d+.*?)\)\s*$",
+            "",
+            cleaned,
+            flags=re.IGNORECASE
+        ).strip()
         if new_cleaned == cleaned:
             break
         cleaned = new_cleaned
     return cleaned
+
+
+strip_run_label_from_name = clean_workbook_name
 
 
 def normalize_history_status(status_str: Optional[str]) -> str:
@@ -926,6 +934,7 @@ async def save_workflow(
         edges=wf.edges or []
     )
     wf.workflow_id = wf.id
+    wf.name = clean_workbook_name(wf.name) or wf.name
     return wf
 
 
@@ -1089,6 +1098,7 @@ async def _execute_workflow_import(
         edges=wf.edges or []
     )
     wf.workflow_id = wf.id
+    wf.name = clean_workbook_name(wf.name) or wf.name
     return wf
 
 
@@ -1326,7 +1336,7 @@ async def list_workflows(
             WorkflowListItemResponse(
                 id=wf.id,
                 workflow_id=wf.id,
-                name=wf.name,
+                name=clean_workbook_name(wf.name) or wf.name,
                 description=wf.description,
                 dataset_id=wf.dataset_id,
                 dataset_name=wf.dataset_name,
@@ -1596,6 +1606,7 @@ async def get_workflow(
         edges=wf.edges or []
     )
     wf.workflow_id = wf.id
+    wf.name = clean_workbook_name(wf.name) or wf.name
     return wf
 
 
@@ -1814,6 +1825,7 @@ async def upsert_workflow(
         edges=wf.edges or []
     )
     wf.workflow_id = wf.id
+    wf.name = clean_workbook_name(wf.name) or wf.name
     return wf
 
 
@@ -1888,6 +1900,7 @@ async def save_workflow_execution_report(
         edges=wf.edges or []
     )
     wf.workflow_id = wf.id
+    wf.name = clean_workbook_name(wf.name) or wf.name
     return wf
 
 
@@ -1955,6 +1968,7 @@ async def restore_workflow(
         edges=wf.edges or []
     )
     wf.workflow_id = wf.id
+    wf.name = clean_workbook_name(wf.name) or wf.name
     return wf
 
 
