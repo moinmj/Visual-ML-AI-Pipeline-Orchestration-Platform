@@ -400,7 +400,11 @@ class NodeStepExecutor:
                 )
 
             # Build Node Config
-            merged_config = {**n_obj.get("config", {}), **node_configs.get(nid, {})}
+            override_cfg = node_configs.get(nid, {})
+            if isinstance(override_cfg, dict) and "config" in override_cfg and isinstance(override_cfg["config"], dict):
+                inner_cfg = override_cfg["config"]
+                override_cfg = {**override_cfg, **inner_cfg}
+            merged_config = {**n_obj.get("config", {}), **override_cfg}
             if dry_run and is_target:
                 merged_config["dry_run"] = True
 

@@ -21,6 +21,7 @@ except ImportError:
     pd = None
 
 from backend.app.recipes.base.recipe import BaseRecipe, RecipePort
+from backend.app.core.exceptions import ValidationException
 from backend.app.core.logging import logger
 from backend.app.core.config import settings
 
@@ -248,11 +249,10 @@ class EventBusPublisherRecipe(BaseRecipe):
                     status_msg = f"Published {published_count} records to Amazon SNS ARN '{destination}'."
 
             except ImportError:
-                status_msg = f"{bus_type} driver not installed. Using benchmark simulation fallback."
-                logger.info(status_msg)
+                raise ValidationException(f"{bus_type} driver not installed. Please install the required driver to publish to {bus_type.upper()}.")
             except Exception as e:
                 logger.warning(f"Event bus publish failed: {e}")
-                status_msg = f"Event bus publish failed ({e}). Using benchmark simulation fallback."
+                raise ValidationException(f"Event bus publish failed: {str(e)}")
 
         if delivery_status == "SIMULATED":
             published_count = total_rows

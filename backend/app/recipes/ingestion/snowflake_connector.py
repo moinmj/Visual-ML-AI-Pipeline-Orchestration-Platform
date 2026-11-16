@@ -27,6 +27,7 @@ class SnowflakeConnectorRecipe(BaseRecipe):
     name = "Snowflake Connector"
     version = "1.0.0"
     category = "ingestion"
+    icon = "snowflake"
     group = "Ingestion & Orchestration"
     subgroup = "Database & Warehouse Connectors"
     description = "Reads tables or analytical query results from Snowflake Cloud Data Warehouse."
@@ -482,7 +483,12 @@ class SnowflakeConnectorRecipe(BaseRecipe):
 
                 if read_mode == "table":
                     cols = str(config.get("columns", "*")).strip() or "*"
-                    sql = f'SELECT {cols} FROM "{database}"."{schema}"."{table_name}" LIMIT {limit}'
+                    filter_cond = str(config.get("filter_condition", "")).strip()
+                    where_clause = f" WHERE {filter_cond}" if filter_cond else ""
+                    db_id = database if database.startswith('"') and database.endswith('"') else f'"{database.upper()}"'
+                    schema_id = schema if schema.startswith('"') and schema.endswith('"') else f'"{schema.upper()}"'
+                    tbl_id = table_name if table_name.startswith('"') and table_name.endswith('"') else f'"{table_name.upper()}"'
+                    sql = f'SELECT {cols} FROM {db_id}.{schema_id}.{tbl_id}{where_clause} LIMIT {limit}'
                 else:
                     sql = str(config.get("query", "")).strip()
                     if limit and "limit" not in sql.lower():
@@ -554,7 +560,12 @@ class SnowflakeConnectorRecipe(BaseRecipe):
         if read_mode == "table":
             table_name = config.get("table_name", "FCT_ORDERS")
             cols = config.get("columns", "*") or "*"
-            sql = f'SELECT {cols} FROM "{database}"."{schema}"."{table_name}" LIMIT {limit}'
+            filter_cond = str(config.get("filter_condition", "")).strip()
+            where_clause = f" WHERE {filter_cond}" if filter_cond else ""
+            db_id = database if database.startswith('"') and database.endswith('"') else f'"{database.upper()}"'
+            schema_id = schema if schema.startswith('"') and schema.endswith('"') else f'"{schema.upper()}"'
+            tbl_id = table_name if table_name.startswith('"') and table_name.endswith('"') else f'"{table_name.upper()}"'
+            sql = f'SELECT {cols} FROM {db_id}.{schema_id}.{tbl_id}{where_clause} LIMIT {limit}'
         else:
             sql = config.get("query", "SELECT * FROM FCT_ORDERS LIMIT 100")
 

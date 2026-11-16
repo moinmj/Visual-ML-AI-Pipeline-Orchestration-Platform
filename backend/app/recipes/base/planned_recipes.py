@@ -234,6 +234,8 @@ def _build() -> Dict[str, RecipeMetadata]:
             if recipe_id in catalog:
                 raise ValueError(f"Duplicate planned recipe_id '{recipe_id}'")
             inputs, outputs = _PORTS[kind]
+            from backend.app.recipes.base.icons import resolve_recipe_icon
+            icon_slug, icon_url = resolve_recipe_icon(recipe_id=recipe_id, category=category)
             catalog[recipe_id] = RecipeMetadata(
                 recipe_id=recipe_id,
                 name=name,
@@ -248,6 +250,8 @@ def _build() -> Dict[str, RecipeMetadata]:
                 outputs=[p.model_copy() for p in outputs],
                 parameters_schema={"type": "object", "properties": {}},
                 enabled=False,
+                icon=icon_slug,
+                icon_url=icon_url,
             )
     return catalog
 

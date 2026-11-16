@@ -595,6 +595,14 @@ class RecipeRegistry:
         group, subgroup = _RECIPE_GROUPS.get(recipe.recipe_id, (None, None))
         meta.group = group
         meta.subgroup = subgroup
+        if not meta.icon:
+            from backend.app.recipes.base.icons import resolve_recipe_icon
+            meta.icon, meta.icon_url = resolve_recipe_icon(
+                recipe_id=recipe.recipe_id,
+                category=recipe.category,
+                existing_icon=getattr(recipe, "icon", None),
+                existing_icon_url=getattr(recipe, "icon_url", None),
+            )
         return meta
 
     def _planned(self) -> Dict[str, RecipeMetadata]:

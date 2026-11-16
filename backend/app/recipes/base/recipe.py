@@ -31,6 +31,9 @@ class RecipeMetadata(BaseModel):
     # True = implemented and usable. False = planned / "coming soon": listed so the
     # frontend can show it, but it cannot be run, tested or validated yet.
     enabled: bool = True
+    # Official recipe icon slug and static asset URL
+    icon: Optional[str] = None
+    icon_url: Optional[str] = None
 
 class BaseRecipe(ABC):
     """
@@ -48,6 +51,8 @@ class BaseRecipe(ABC):
     output_types: List[str]
     inputs: Optional[List[RecipePort]] = None
     outputs: Optional[List[RecipePort]] = None
+    icon: Optional[str] = None
+    icon_url: Optional[str] = None
 
     def get_inputs(self) -> List[RecipePort]:
         """
@@ -204,6 +209,13 @@ class BaseRecipe(ABC):
     def to_metadata(self) -> RecipeMetadata:
         schema = self.get_schema()
         schema = self.enrich_schema_input_types(schema)
+        from backend.app.recipes.base.icons import resolve_recipe_icon
+        icon_slug, icon_url = resolve_recipe_icon(
+            recipe_id=self.recipe_id,
+            category=self.category,
+            existing_icon=getattr(self, "icon", None),
+            existing_icon_url=getattr(self, "icon_url", None),
+        )
         return RecipeMetadata(
             recipe_id=self.recipe_id,
             name=self.name,
@@ -217,7 +229,9 @@ class BaseRecipe(ABC):
             output_types=self.output_types,
             inputs=self.get_inputs(),
             outputs=self.get_outputs(),
-            parameters_schema=schema
+            parameters_schema=schema,
+            icon=icon_slug,
+            icon_url=icon_url,
         )
 
     def inspect(

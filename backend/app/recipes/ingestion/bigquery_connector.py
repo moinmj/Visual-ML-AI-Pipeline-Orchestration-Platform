@@ -28,6 +28,7 @@ class BigQueryConnectorRecipe(BaseRecipe):
     name = "Google BigQuery Connector"
     version = "1.0.0"
     category = "ingestion"
+    icon = "google-bigquery"
     group = "Ingestion & Orchestration"
     subgroup = "Database & Warehouse Connectors"
     description = "Reads analytical tables or Standard SQL queries from Google BigQuery."
