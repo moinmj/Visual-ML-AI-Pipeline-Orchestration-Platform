@@ -1143,6 +1143,10 @@ async def import_workflow_file(
 @router.get("/", response_model=WorkflowListPaginatedResponse)
 async def list_workflows(
     include_deleted: bool = False,
+    sub_workflow_eligible: bool = Query(
+        False,
+        description="If True, only returns workflows containing both Start and End anchor nodes and a SUCCESS execution status"
+    ),
     limit: int = Query(10, ge=1, le=200, description="Max workbooks to retrieve per page"),
     skip: int = Query(0, ge=0, description="Number of records to skip (offset)"),
     offset: Optional[int] = Query(None, ge=0, description="Alias for skip"),
@@ -1155,7 +1159,7 @@ async def list_workflows(
 ):
     """
     List all saved pipeline workbooks with pagination, execution status filtering ('success', 'failed', 'unrun'),
-    and keyword search.
+    keyword search, and sub-workflow eligibility filtering (sub_workflow_eligible=true).
     Returns: total_records, skip, limit, current_page, total_pages, and data array.
     """
     actual_skip = skip
@@ -1178,46 +1182,92 @@ async def list_workflows(
         ))
 
     # 2. Execution status filter ('success', 'failed', 'unrun')
-    status_raw = filters.value if isinstance(filters, WorkflowStatusFilter) else (filters or status or filter)
-    if status_raw and str(status_raw).strip():
-        s = str(status_raw).strip().lower()
-        if s == "success":
-            conditions.append(
-                func.lower(func.json_extract(Workflow.last_execution, '$.status')) == 'success'
-            )
-        elif s == "failed":
-            conditions.append(
-                or_(
-                    func.lower(func.json_extract(Workflow.last_execution, '$.status')) == 'failed',
-                    func.lower(func.json_extract(Workflow.last_execution, '$.status')) == 'error'
+    if sub_workflow_eligible:
+        # Eligible sub-workflows must have a successful execution record
+        conditions.append(
+            func.lower(func.json_extract(Workflow.last_execution, '$.status')) == 'success'
+        )
+    else:
+        status_raw = filters.value if isinstance(filters, WorkflowStatusFilter) else (filters or status or filter)
+        if status_raw and str(status_raw).strip():
+            s = str(status_raw).strip().lower()
+            if s == "success":
+                conditions.append(
+                    func.lower(func.json_extract(Workflow.last_execution, '$.status')) == 'success'
                 )
-            )
-        elif s in ("unrun", "never_run", "draft", "not_run"):
-            conditions.append(
-                or_(
-                    Workflow.last_execution == None,
-                    func.json_extract(Workflow.last_execution, '$.status') == None,
-                    func.json_extract(Workflow.last_execution, '$.status') == ""
+            elif s == "failed":
+                conditions.append(
+                    or_(
+                        func.lower(func.json_extract(Workflow.last_execution, '$.status')) == 'failed',
+                        func.lower(func.json_extract(Workflow.last_execution, '$.status')) == 'error'
+                    )
                 )
-            )
+            elif s in ("unrun", "never_run", "draft", "not_run"):
+                conditions.append(
+                    or_(
+                        Workflow.last_execution == None,
+                        func.json_extract(Workflow.last_execution, '$.status') == None,
+                        func.json_extract(Workflow.last_execution, '$.status') == ""
+                    )
+                )
 
-    # Count total records matching filter conditions
-    count_stmt = select(func.count(Workflow.id))
-    for cond in conditions:
-        count_stmt = count_stmt.where(cond)
-    total_res = await db.execute(count_stmt)
-    total_records = total_res.scalar() or 0
+    if sub_workflow_eligible:
+        # Query candidate workflows meeting base status & search filters
+        cand_query = select(Workflow)
+        for cond in conditions:
+            cand_query = cand_query.where(cond)
+        cand_query = cand_query.order_by(Workflow.updated_at.desc())
+        cand_res = await db.execute(cand_query)
+        all_candidates = cand_res.scalars().all()
 
-    current_page = (actual_skip // limit) + 1 if limit > 0 else 1
-    total_pages = math.ceil(total_records / limit) if (limit > 0 and total_records > 0) else (1 if total_records == 0 else 1)
+        start_aliases = {"workflow_start", "start_anchor", "sub_process_start", "workflow_input"}
+        end_aliases = {"workflow_end", "end_anchor", "sub_process_end", "workflow_output"}
 
-    # Retrieve matching records
-    query = select(Workflow)
-    for cond in conditions:
-        query = query.where(cond)
-    query = query.order_by(Workflow.updated_at.desc()).offset(actual_skip).limit(limit)
-    result = await db.execute(query)
-    workflows = result.scalars().all()
+        def has_both_anchors(wf_nodes) -> bool:
+            if not wf_nodes:
+                return False
+            nodes_list = wf_nodes
+            if isinstance(nodes_list, str):
+                try:
+                    nodes_list = _json.loads(nodes_list)
+                except Exception:
+                    return False
+            if not isinstance(nodes_list, list):
+                return False
+            has_s = False
+            has_e = False
+            for n in nodes_list:
+                if isinstance(n, dict):
+                    r_id = str(n.get("recipe_id") or n.get("type") or "").strip().lower()
+                    if r_id in start_aliases:
+                        has_s = True
+                    elif r_id in end_aliases:
+                        has_e = True
+            return has_s and has_e
+
+        eligible = [wf for wf in all_candidates if has_both_anchors(wf.nodes)]
+        total_records = len(eligible)
+        current_page = (actual_skip // limit) + 1 if limit > 0 else 1
+        total_pages = math.ceil(total_records / limit) if (limit > 0 and total_records > 0) else (1 if total_records == 0 else 1)
+        workflows = eligible[actual_skip : actual_skip + limit]
+    else:
+        # Count total records matching filter conditions
+        count_stmt = select(func.count(Workflow.id))
+        for cond in conditions:
+            count_stmt = count_stmt.where(cond)
+        total_res = await db.execute(count_stmt)
+        total_records = total_res.scalar() or 0
+
+        current_page = (actual_skip // limit) + 1 if limit > 0 else 1
+        total_pages = math.ceil(total_records / limit) if (limit > 0 and total_records > 0) else (1 if total_records == 0 else 1)
+
+        # Retrieve matching records
+        query = select(Workflow)
+        for cond in conditions:
+            query = query.where(cond)
+        query = query.order_by(Workflow.updated_at.desc()).offset(actual_skip).limit(limit)
+        result = await db.execute(query)
+        workflows = result.scalars().all()
 
     items = []
     all_needed_ds_ids = set()

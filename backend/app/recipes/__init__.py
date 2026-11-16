@@ -119,6 +119,9 @@ from backend.app.recipes.flow_control.sub_pipeline_call import SubPipelineCallRe
 from backend.app.recipes.flow_control.retry_error_handler import RetryErrorHandlerRecipe
 from backend.app.recipes.flow_control.batch_scheduler import BatchSchedulerRecipe
 from backend.app.recipes.flow_control.dead_letter_queue import DeadLetterQueueRecipe
+from backend.app.recipes.flow_control.workflow_start import WorkflowStartRecipe
+from backend.app.recipes.flow_control.workflow_end import WorkflowEndRecipe
+from backend.app.recipes.flow_control.add_workflow import AddWorkflowRecipe
 from backend.app.recipes.reporting.scheduled_report_generator import ScheduledReportGeneratorRecipe
 from backend.app.recipes.reporting.dashboard_publisher import DashboardPublisherRecipe
 from backend.app.recipes.reporting.threshold_alert_monitor import ThresholdAlertMonitorRecipe
@@ -384,6 +387,9 @@ def register_all_recipes():
     recipe_registry.register(RetryErrorHandlerRecipe())
     recipe_registry.register(BatchSchedulerRecipe())
     recipe_registry.register(DeadLetterQueueRecipe())
+    recipe_registry.register(WorkflowStartRecipe())
+    recipe_registry.register(WorkflowEndRecipe())
+    recipe_registry.register(AddWorkflowRecipe())
     # Reporting & Delivery
     recipe_registry.register(ScheduledReportGeneratorRecipe())
     recipe_registry.register(DashboardPublisherRecipe())
