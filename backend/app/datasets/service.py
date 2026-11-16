@@ -20,6 +20,28 @@ from backend.app.core.logging import logger
 TABULAR_FORMATS = {"csv", "xlsx", "xls", "json", "parquet"}
 # Files saved as datasets/{dataset_id}_{name}: the UUID prefix is the dataset id.
 UUID_PREFIX = re.compile(r"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})_")
+# Landing files are named {timestamp}_{uuid} or just {uuid}: nothing a user can read.
+_MACHINE_NAME = re.compile(r"^(\d{8,14}_)?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+_SKIP_FOLDERS = {"landing", "db", "ml-workflow", "datasets", "unstructured"}
+
+
+def ozone_display_name(key: str, stem: str, file_name: str) -> str:
+    """
+    Readable name for the UI. `key` and `file_name` are NOT changed; only `name` is.
+      ml-workflow/t4/datasets/05033d74-..._sales.csv        -> "sales"            (UUID prefix removed)
+      landing/db/t4/u5_postgresql/retail_sales/2026..._uuid.parquet -> "retail_sales" (the table folder)
+    """
+    name = UUID_PREFIX.sub("", stem) or stem
+    if _MACHINE_NAME.match(name):
+        # Name is just a timestamp/uuid: the folder it sits in is the real name (the table / source).
+        for seg in reversed(key.strip("/").split("/")[:-1]):
+            low = seg.lower()
+            if seg == file_name or low.rsplit(".", 1)[-1] in TABULAR_FORMATS and "." in seg:
+                continue  # e.g. retail_sales/x.parquet/x.parquet
+            if low in _SKIP_FOLDERS or re.fullmatch(r"t\d+", low):
+                break     # reached the tenant/root folders: no useful name up here
+            return seg
+    return name
 
 
 class DatasetService:
@@ -210,7 +232,7 @@ class DatasetService:
             )
             results.append({
                 "id": key,
-                "name": stem,
+                "name": stem if is_folder else ozone_display_name(key, stem, file_name),
                 "description": f"Ozone {'folder' if is_folder else 'object'} [{folder_label}]",
                 "file_name": file_name,
                 "file_format": ext,
@@ -228,6 +250,102 @@ class DatasetService:
                 "scope": scope,
             })
         return results
+
+    @staticmethod
+    def group_ozone_items(
+        tenant_id: int,
+        scope: str,
+        items: List[Dict[str, Any]],
+        folder: str = "all",
+        truncated: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Turns the flat browse list into folders for the frontend. The scope you browse decides which
+        folders come back, so picking a scope is never meaningless:
+
+            scope=ml_workflow  ->  ML workflow
+                                     Structured datasets   (.../datasets/)
+                                     Unstructured data     (.../unstructured/)
+                                     Other                 (e.g. outputs/; only when it has files)
+            scope=landing      ->  Data lake
+                                     Database              (landing/db/t<id>/)
+            scope=all_tenant_data / bucket -> Data lake + ML workflow (+ Other for anything else)
+
+        With scope=ml_workflow, folder=datasets / unstructured shows only that sub-folder.
+        Grouping is by key prefix only; no extra Ozone calls. Items keep every field they already have.
+        """
+        from backend.app.infrastructure.storage.ozone_client import (
+            tenant_landing_prefix,
+            tenant_ml_workflow_prefix,
+        )
+
+        landing = tenant_landing_prefix(tenant_id)
+        ml = tenant_ml_workflow_prefix(tenant_id)
+
+        def leaf(node_id: str, label: str, path: Optional[str]) -> Dict[str, Any]:
+            return {"id": node_id, "label": label, "path": path, "count": 0, "total_size_bytes": 0,
+                    "sub_groups": {}, "items": [], "children": []}
+
+        database = leaf("database", "Database", landing)
+        structured = leaf("structured_datasets", "Structured datasets", f"{ml}datasets/")
+        unstructured = leaf("unstructured_data", "Unstructured data", f"{ml}unstructured/")
+        ml_other = leaf("ml_other", "Other", ml)       # inside ML workflow, e.g. outputs/
+        other = leaf("other", "Other", None)           # anywhere else in the bucket
+
+        for it in items:
+            key = (it.get("key") or "").lstrip("/")
+            if key.startswith(landing):
+                target = database
+            elif key.startswith(f"{ml}datasets/"):
+                target = structured
+            elif key.startswith(f"{ml}unstructured/"):
+                target = unstructured
+            elif key.startswith(ml):
+                target = ml_other
+            else:
+                target = other
+            target["items"].append(it)
+            if it.get("media_type") != "folder":   # folder entries are listed but not counted
+                target["count"] += 1
+                target["total_size_bytes"] += int(it.get("file_size_bytes") or 0)
+                kind = it.get("media_type") or "other"
+                target["sub_groups"][kind] = target["sub_groups"].get(kind, 0) + 1
+
+        def parent(node_id: str, label: str, path: Optional[str], children: List[Dict[str, Any]]) -> Dict[str, Any]:
+            return {"id": node_id, "label": label, "path": path,
+                    "count": sum(c["count"] for c in children),
+                    "total_size_bytes": sum(c["total_size_bytes"] for c in children),
+                    "sub_groups": None, "items": [], "children": children}
+
+        # ML workflow children: honour folder=datasets / unstructured; Other only when it has files.
+        if folder == "datasets":
+            ml_children = [structured]
+        elif folder == "unstructured":
+            ml_children = [unstructured]
+        else:
+            ml_children = [structured, unstructured]
+        if ml_other["items"]:
+            ml_children.append(ml_other)
+
+        data_lake = parent("data_lake", "Data lake", landing, [database])
+        ml_workflow = parent("ml_workflow", "ML workflow", ml, ml_children)
+
+        if scope == "landing":
+            groups = [data_lake]
+        elif scope == "ml_workflow":
+            groups = [ml_workflow]
+        else:  # all_tenant_data, bucket
+            groups = [data_lake, ml_workflow]
+            if other["items"]:
+                groups.append(other)
+
+        return {
+            "source": "bucket",
+            "scope": scope,
+            "total": sum(g["count"] for g in groups),
+            "truncated": truncated,
+            "groups": groups,
+        }
 
     @staticmethod
     async def register_from_ozone(

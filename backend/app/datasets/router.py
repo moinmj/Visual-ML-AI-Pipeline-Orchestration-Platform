@@ -1,4 +1,4 @@
-from typing import Annotated, List, Literal, Optional
+from typing import Annotated, List, Literal, Optional, Union
 from backend.app.datasets.unstructured import UnstructuredUploadResponse, unstructured_service
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,6 +10,7 @@ from backend.app.datasets.schemas import (
     DatasetPreviewResponse,
     DatasetProfileResponse,
     OzoneObjectResponse,
+    OzoneBrowseGroupedResponse,
 )
 from backend.app.datasets.service import dataset_service
 
@@ -90,7 +91,7 @@ async def upload_unstructured_files(
     return await unstructured_service.upload(tenant_id=user.tenant_id, files=real_files)
 
 
-@router.get("/ozone/browse", response_model=List[OzoneObjectResponse])
+@router.get("/ozone/browse", response_model=Union[OzoneBrowseGroupedResponse, List[OzoneObjectResponse]])
 async def browse_ozone_datasets(
     user: CurrentUser,
     scope: Literal["all_tenant_data", "ml_workflow", "landing", "bucket"] = Query(
@@ -113,14 +114,23 @@ async def browse_ozone_datasets(
     prefix: str = Query("", description="Optional key prefix to filter by, relative to the selected scope/folder"),
     include_folders: bool = Query(False, description="Also return the folders (media_type='folder')"),
     limit: int = Query(1000, ge=1, le=5000, description="Most items returned"),
+    group_by: Literal["none", "category"] = Query(
+        "none",
+        description="'none' (default): the flat list. 'category': the same files grouped into folders. "
+                    "The `scope` you pick decides which folders come back: ml_workflow -> ML workflow "
+                    "(Structured datasets / Unstructured data), landing -> Data lake > Database, "
+                    "all_tenant_data or bucket -> both.",
+    ),
     db: AsyncSession = Depends(get_db),
 ):
     """
     Lists files sitting in the caller's tenant folder in Ozone.
-    Returns objects matching the DatasetResponse JSON shape so the frontend can consume them directly.
+    Default: a flat list of objects matching the DatasetResponse JSON shape.
+    With `group_by=category`: the same objects grouped into folders for the frontend.
     """
     if scope == "bucket" and not user.has_role("Tenant Admin"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only a Tenant Admin can browse the whole bucket.")
+    meta: dict = {}
     items = dataset_service.browse_ozone(
         tenant_id=user.tenant_id,
         scope=scope,
@@ -129,9 +139,19 @@ async def browse_ozone_datasets(
         prefix=prefix,
         include_folders=include_folders,
         limit=limit,
+        meta=meta,
     )
     # Adds dataset_id (UUID if already registered, else null) and can_register to each item.
-    return await dataset_service.annotate_ozone_items(db, user.tenant_id, items)
+    items = await dataset_service.annotate_ozone_items(db, user.tenant_id, items)
+    if group_by == "category":
+        return dataset_service.group_ozone_items(
+            tenant_id=user.tenant_id,
+            scope=scope,
+            items=items,
+            folder=folder,
+            truncated=bool(meta.get("truncated")),
+        )
+    return items
 
 
 @router.get("/media/preview")
