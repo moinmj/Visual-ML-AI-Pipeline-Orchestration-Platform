@@ -108,3 +108,4 @@ class WorkflowEndRecipe(BaseRecipe):
                 "anchor_type": "end"
             }
         }
+

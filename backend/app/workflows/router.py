@@ -580,6 +580,27 @@ def is_generic_workbook_name(name: Optional[str]) -> bool:
     return False
 
 
+def clean_workbook_name(name: Optional[str]) -> str:
+    """Strips repeated or trailing execution labels like '(Run #1)', '(Run #2)', or '(Version 1)' from pipeline names."""
+    if not name:
+        return ""
+    cleaned = str(name).strip()
+    while True:
+        new_cleaned = re.sub(
+            r"\s*\((?:Run\s*#\d+.*?|Version\s*\d+.*?)\)\s*$",
+            "",
+            cleaned,
+            flags=re.IGNORECASE
+        ).strip()
+        if new_cleaned == cleaned:
+            break
+        cleaned = new_cleaned
+    return cleaned
+
+
+strip_run_label_from_name = clean_workbook_name
+
+
 def normalize_history_status(status_str: Optional[str]) -> str:
     """Normalizes status strings to standard 'SUCCESS', 'FAILED', or 'UNRUN'."""
     if not status_str:
@@ -823,9 +844,13 @@ async def save_workflow(
         workflow_id=target_id
     )
 
+    clean_incoming_name = strip_run_label_from_name(payload.name) if payload.name else None
+
     if wf:
         # Update existing - protect custom name from being overwritten by generic recommender placeholders
-        if payload.name and not (is_generic_workbook_name(payload.name) and not is_generic_workbook_name(wf.name)):
+        if clean_incoming_name and not (is_generic_workbook_name(clean_incoming_name) and not is_generic_workbook_name(wf.name)):
+            wf.name = clean_incoming_name
+        elif payload.name and not (is_generic_workbook_name(payload.name) and not is_generic_workbook_name(wf.name)):
             wf.name = payload.name
         if payload.description is not None:
             wf.description = payload.description
@@ -849,7 +874,7 @@ async def save_workflow(
         target_id = await _unused_id(db, Workflow, target_id)
         wf = Workflow(
             id=target_id,
-            name=payload.name,
+            name=clean_incoming_name or payload.name,
             description=payload.description,
             dataset_id=ds_id,
             dataset_name=ds_name,
@@ -909,6 +934,7 @@ async def save_workflow(
         edges=wf.edges or []
     )
     wf.workflow_id = wf.id
+    wf.name = clean_workbook_name(wf.name) or wf.name
     return wf
 
 
@@ -1072,6 +1098,7 @@ async def _execute_workflow_import(
         edges=wf.edges or []
     )
     wf.workflow_id = wf.id
+    wf.name = clean_workbook_name(wf.name) or wf.name
     return wf
 
 
@@ -1309,7 +1336,7 @@ async def list_workflows(
             WorkflowListItemResponse(
                 id=wf.id,
                 workflow_id=wf.id,
-                name=wf.name,
+                name=clean_workbook_name(wf.name) or wf.name,
                 description=wf.description,
                 dataset_id=wf.dataset_id,
                 dataset_name=wf.dataset_name,
@@ -1552,10 +1579,11 @@ async def get_workflow(
             edges=exec_rec.snapshot_edges or []
         )
 
+        clean_base_name = strip_run_label_from_name(wf.name) or wf.name
         return WorkflowResponse(
             id=wf.id,
             workflow_id=wf.id,
-            name=f"{wf.name} ({exec_rec.run_label or f'Version {exec_rec.version_number}'})",
+            name=f"{clean_base_name} ({exec_rec.run_label or f'Version {exec_rec.version_number}'})",
             description=wf.description,
             dataset_id=wf.dataset_id,
             dataset_name=wf.dataset_name,
@@ -1578,6 +1606,7 @@ async def get_workflow(
         edges=wf.edges or []
     )
     wf.workflow_id = wf.id
+    wf.name = clean_workbook_name(wf.name) or wf.name
     return wf
 
 
@@ -1706,9 +1735,13 @@ async def upsert_workflow(
         workflow_id=target_id
     )
 
+    clean_incoming_name = strip_run_label_from_name(payload.name) if payload.name else None
+
     if wf:
         # Update existing - protect custom name from being overwritten by generic recommender placeholders
-        if payload.name and not (is_generic_workbook_name(payload.name) and not is_generic_workbook_name(wf.name)):
+        if clean_incoming_name and not (is_generic_workbook_name(clean_incoming_name) and not is_generic_workbook_name(wf.name)):
+            wf.name = clean_incoming_name
+        elif payload.name and not (is_generic_workbook_name(payload.name) and not is_generic_workbook_name(wf.name)):
             wf.name = payload.name
         if payload.description is not None:
             wf.description = payload.description
@@ -1732,7 +1765,7 @@ async def upsert_workflow(
         target_id = await _unused_id(db, Workflow, target_id)
         wf = Workflow(
             id=target_id,
-            name=payload.name or "Untitled Pipeline",
+            name=clean_incoming_name or payload.name or "Untitled Pipeline",
             description=payload.description,
             dataset_id=ds_id,
             dataset_name=ds_name,
@@ -1792,6 +1825,7 @@ async def upsert_workflow(
         edges=wf.edges or []
     )
     wf.workflow_id = wf.id
+    wf.name = clean_workbook_name(wf.name) or wf.name
     return wf
 
 
@@ -1866,6 +1900,7 @@ async def save_workflow_execution_report(
         edges=wf.edges or []
     )
     wf.workflow_id = wf.id
+    wf.name = clean_workbook_name(wf.name) or wf.name
     return wf
 
 
@@ -1933,6 +1968,7 @@ async def restore_workflow(
         edges=wf.edges or []
     )
     wf.workflow_id = wf.id
+    wf.name = clean_workbook_name(wf.name) or wf.name
     return wf
 
 
@@ -2151,7 +2187,10 @@ async def _autosave_workflow(
     wf = result.scalar_one_or_none()
     if wf:
         incoming_name = workflow_name or workflow.name
-        if incoming_name and not (is_generic_workbook_name(incoming_name) and not is_generic_workbook_name(wf.name)):
+        clean_incoming_name = strip_run_label_from_name(incoming_name) if incoming_name else None
+        if clean_incoming_name and not (is_generic_workbook_name(clean_incoming_name) and not is_generic_workbook_name(wf.name)):
+            wf.name = clean_incoming_name
+        elif incoming_name and not (is_generic_workbook_name(incoming_name) and not is_generic_workbook_name(wf.name)):
             wf.name = incoming_name
         if ds_id is not None:
             wf.dataset_id = ds_id
@@ -2166,9 +2205,11 @@ async def _autosave_workflow(
     else:
         # never reuse an ID that exists in another tenant
         target_id = await _unused_id(db, Workflow, target_id)
+        raw_name = workflow.name or workflow_name
+        clean_name = strip_run_label_from_name(raw_name) if raw_name else None
         wf = Workflow(
             id=target_id,
-            name=workflow.name or workflow_name or "Auto-Saved Pipeline",
+            name=clean_name or raw_name or "Auto-Saved Pipeline",
             description="Auto-saved during execution run",
             dataset_id=ds_id,
             dataset_name=ds_name,

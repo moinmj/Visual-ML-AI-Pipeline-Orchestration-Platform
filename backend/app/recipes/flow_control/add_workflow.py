@@ -282,7 +282,6 @@ class AddWorkflowRecipe(BaseRecipe):
             failed_recipe = "unknown"
             failed_reason = "Internal step execution error"
 
-            # 1. Search in node_results
             for nr in (child_result.node_results or []):
                 nr_status = getattr(nr, "status", None) if hasattr(nr, "status") else (nr.get("status") if isinstance(nr, dict) else None)
                 if nr_status in ("FAILED", "ERROR"):
@@ -291,7 +290,6 @@ class AddWorkflowRecipe(BaseRecipe):
                     failed_reason = getattr(nr, "error_message", None) if hasattr(nr, "error_message") else (nr.get("error_message") if isinstance(nr, dict) else "Unknown step failure")
                     break
 
-            # 2. If node_results did not capture it (e.g. DAG resolution or config validation error), parse logs
             if failed_node_id == "unknown" and child_result.logs:
                 import re
                 for log_line in child_result.logs:
@@ -403,3 +401,4 @@ class AddWorkflowRecipe(BaseRecipe):
             "output_summary": output_summary,
             "metrics": telemetry,
         }
+

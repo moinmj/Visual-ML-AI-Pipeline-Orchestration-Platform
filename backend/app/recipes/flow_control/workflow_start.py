@@ -74,7 +74,7 @@ class WorkflowStartRecipe(BaseRecipe):
                     in_df = inputs[k]
                     break
 
-        if in_df is None and context is not None and isinstance(context, dict):
+        if in_df is None and context and isinstance(context, dict):
             for k in ("sub_workflow_input", "parent_dataframe", "dataframe"):
                 val = context.get(k)
                 if isinstance(val, pd.DataFrame) and not val.empty:
@@ -116,3 +116,4 @@ class WorkflowStartRecipe(BaseRecipe):
                 "anchor_type": "start"
             }
         }
+
