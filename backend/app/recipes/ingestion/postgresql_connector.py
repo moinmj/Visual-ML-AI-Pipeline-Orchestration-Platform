@@ -13,6 +13,9 @@ import os
 import time
 from typing import Dict, Any, List, Optional, Tuple, Union
 from urllib.parse import urlparse, unquote, parse_qs, quote_plus
+from decimal import Decimal
+from datetime import time as dt_time, timedelta, datetime, date
+import uuid
 
 try:
     import pandas as pd
@@ -25,6 +28,36 @@ from backend.app.core.config import settings
 from backend.app.core.exceptions import ValidationException
 
 
+def _clean_sql_value(v: Any) -> Any:
+    """Safely converts SQL Decimals, times, and binary values to standard JSON primitives."""
+    if v is None:
+        return None
+    if isinstance(v, Decimal):
+        try:
+            if v.is_nan() or v.is_infinite():
+                return None
+            val_f = float(v)
+            return int(val_f) if val_f.is_integer() else val_f
+        except Exception:
+            return float(v)
+    if isinstance(v, (dt_time, datetime, date)):
+        return v.isoformat()
+    if isinstance(v, timedelta):
+        return str(v)
+    if isinstance(v, uuid.UUID):
+        return str(v)
+    if isinstance(v, bytes):
+        try:
+            return v.decode("utf-8")
+        except Exception:
+            return v.hex()
+    return v
+
+
+def _clean_sql_row(row_dict: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: _clean_sql_value(v) for k, v in row_dict.items()}
+
+
 class PostgreSQLConnectorRecipe(BaseRecipe):
     recipe_id = "postgresql_connector"
     name = "PostgreSQL Connector"
@@ -34,7 +67,7 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
     group = "Ingestion & Orchestration"
     subgroup = "Database & Warehouse Connectors"
     description = "Reads tables or query results from a PostgreSQL database."
-    input_types = ["dataframe"]
+    input_types: List[str] = []
     output_types = ["dataframe"]
 
     inputs: List[RecipePort] = []
@@ -625,17 +658,21 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
         elif isinstance(cols_raw, str) and cols_raw.strip():
             cols_list = [c.strip().strip('"').strip("'") for c in cols_raw.split(",") if c.strip() and c.strip() != "*"]
 
-        # If user explicitly specified one or more columns, ALWAYS query ONLY those columns!
-        if cols_list:
+        # 2. Resolve tables
+        schema_name = str(config.get("schema_name", "public")).strip() or "public"
+        select_all_tables = bool(config.get("select_all_tables", False))
+
+        # When "Select All Tables in Schema (*)" is checked, multi-table schema ingestion must
+        # pull all columns (*) per table to prevent cross-table column selection mismatches.
+        if select_all_tables:
+            cols_str = "*"
+            is_select_all_cols = True
+        elif cols_list:
             cols_str = ", ".join(f'"{c}"' if not c.startswith('"') else c for c in cols_list)
             is_select_all_cols = False
         else:
             cols_str = "*"
             is_select_all_cols = True
-
-        # 2. Resolve tables
-        schema_name = str(config.get("schema_name", "public")).strip() or "public"
-        select_all_tables = bool(config.get("select_all_tables", False))
 
         target_tables: List[str] = []
         raw_tables = config.get("tables")
@@ -726,12 +763,20 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                                 t_schema = p[0].strip() or t_schema
                                 t_name = p[1].strip()
 
-                            q = f'SELECT {cols_str} FROM "{t_schema}"."{t_name}"{where_sql}{order_sql} LIMIT {limit}{offset_sql}'
-                            res = conn.execute(sqlalchemy.text(q))
+                            try:
+                                res = conn.execute(sqlalchemy.text(q))
+                            except Exception as q_err:
+                                err_msg = str(q_err)
+                                if "42703" in err_msg or "UndefinedColumn" in err_msg or "does not exist" in err_msg:
+                                    raise ValidationException(
+                                        f"Column selection mismatch in table '{t_name}': requested column(s) ({cols_str}) do not exist in '{t_schema}.{t_name}'. "
+                                        "Verify selected columns or use wildcard (*) when querying multiple tables."
+                                    )
+                                raise
                             t_cols = list(res.keys())
                             if not columns_retrieved:
                                 columns_retrieved = list(t_cols)
-                            rows = [dict(zip(t_cols, r)) for r in res.fetchall()]
+                            rows = [_clean_sql_row(dict(zip(t_cols, r))) for r in res.fetchall()]
                             if is_multi:
                                 for r in rows:
                                     r["_table"] = t_name
@@ -753,7 +798,7 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                             query = f"{query} LIMIT {limit}"
                         res = conn.execute(sqlalchemy.text(query))
                         columns_retrieved = list(res.keys())
-                        records = [dict(zip(columns_retrieved, r)) for r in res.fetchall()]
+                        records = [_clean_sql_row(dict(zip(columns_retrieved, r))) for r in res.fetchall()]
                         delivery_status = "LIVE"
                         status_msg = f"Retrieved {len(records)} live rows from custom query."
             except Exception as sql_e:
@@ -799,9 +844,17 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                                     t_schema = p[0].strip() or t_schema
                                     t_name = p[1].strip()
 
-                                q = f'SELECT {cols_str} FROM "{t_schema}"."{t_name}"{where_sql}{order_sql} LIMIT {limit}{offset_sql}'
-                                cur.execute(q)
-                                rows = [dict(r) for r in cur.fetchall()]
+                                try:
+                                    cur.execute(q)
+                                except Exception as q_err:
+                                    err_msg = str(q_err)
+                                    if "42703" in err_msg or "UndefinedColumn" in err_msg or "does not exist" in err_msg:
+                                        raise ValidationException(
+                                            f"Column selection mismatch in table '{t_name}': requested column(s) ({cols_str}) do not exist in '{t_schema}.{t_name}'. "
+                                            "Verify selected columns or use wildcard (*) when querying multiple tables."
+                                        )
+                                    raise
+                                rows = [_clean_sql_row(dict(r)) for r in cur.fetchall()]
                                 if rows and not columns_retrieved:
                                     columns_retrieved = list(rows[0].keys())
                                 if is_multi:
@@ -819,12 +872,12 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                                 status_msg = f"Retrieved {len(records)} live rows from PostgreSQL via psycopg2 ({schema_name}.{target_tables[0]})."
                         else:
                             query = str(config.get("query", "")).strip()
-                        if not query:
-                            raise ValidationException("SQL Query is required when Read Mode is set to 'query'.")
+                            if not query:
+                                raise ValidationException("SQL Query is required when Read Mode is set to 'query'.")
                             if "limit" not in query.lower():
                                 query = f"{query} LIMIT {limit}"
                             cur.execute(query)
-                            records = [dict(r) for r in cur.fetchall()]
+                            records = [_clean_sql_row(dict(r)) for r in cur.fetchall()]
                             if records:
                                 columns_retrieved = list(records[0].keys())
                             delivery_status = "LIVE"
@@ -879,25 +932,25 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
         target_name = target_desc if 'target_desc' in locals() else (f"{schema_name}.{target_tables[0]}" if target_tables else "PostgreSQL")
 
         summary = {
-            "title": "PostgreSQL Connector Summary",
+            "title": "Database Ingestion & Query Metrics",
             "message": status_msg,
             "status": delivery_status,
             "target": target_name,
             "database": params.get("database"),
             "schema": schema_name,
             "tables_retrieved": target_tables,
-            "tables_count": len(target_tables),
-            "records_retrieved": len(records),
-            "columns_count": len(columns_retrieved),
+            "tables_count": int(len(target_tables)),
+            "records_retrieved": int(len(records)),
+            "columns_count": int(len(columns_retrieved)),
             "columns": columns_retrieved,
-            "duration_ms": duration_ms,
+            "duration_ms": int(duration_ms),
         }
 
         metrics = {
-            "records_retrieved": len(records),
-            "tables_count": len(target_tables),
-            "columns_count": len(columns_retrieved),
-            "duration_ms": duration_ms,
+            "records_retrieved": int(len(records)),
+            "tables_count": int(len(target_tables)),
+            "columns_count": int(len(columns_retrieved)),
+            "duration_ms": int(duration_ms),
             "delivery_status": delivery_status,
         }
 

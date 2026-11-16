@@ -59,7 +59,7 @@ class BaseRecipe(ABC):
         Returns structured input port definitions for canvas handle rendering.
         Defaults to generating ports from input_types for backward compatibility.
         """
-        if getattr(self, "inputs", None):
+        if getattr(self, "inputs", None) is not None:
             return self.inputs
         ports: List[RecipePort] = []
         for i, t in enumerate(self.input_types or []):
@@ -73,7 +73,7 @@ class BaseRecipe(ABC):
         Returns structured output port definitions for canvas handle rendering.
         Defaults to generating ports from output_types for backward compatibility.
         """
-        if getattr(self, "outputs", None):
+        if getattr(self, "outputs", None) is not None:
             return self.outputs
         ports: List[RecipePort] = []
         for i, t in enumerate(self.output_types or []):
