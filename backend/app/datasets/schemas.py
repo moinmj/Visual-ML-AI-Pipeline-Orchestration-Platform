@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, ForwardRef
 from datetime import datetime
 
 
@@ -48,6 +48,32 @@ class OzoneObjectResponse(DatasetResponse):
         description="True when this is a tabular file inside the caller's own tenant folders and can be "
                     "registered with POST /datasets/ozone/register.",
     )
+
+
+class OzoneGroupNode(BaseModel):
+    """
+    One folder in the grouped browse view. A folder either holds files (`items`) or sub-folders (`children`).
+    Example: 'Data lake' -> 'Database'; 'ML workflow' -> 'Structured datasets' / 'Unstructured data'.
+    """
+    id: str = Field(..., description="Stable id for the frontend: data_lake, database, ml_workflow, structured_datasets, unstructured_data, other")
+    label: str = Field(..., description="Display name of the folder")
+    path: Optional[str] = Field(None, description="Ozone key prefix this folder maps to")
+    count: int = Field(0, description="Number of files in this folder, including its sub-folders (Ozone 'folder' entries are not counted)")
+    total_size_bytes: int = Field(0, description="Total size of the files counted in `count`")
+    sub_groups: Optional[Dict[str, int]] = Field(None, description="File counts by media_type (image/audio/video/tabular/other); only set on leaf folders")
+    items: List[OzoneObjectResponse] = Field(default_factory=list, description="Files directly in this folder (leaf folders only)")
+    children: List["OzoneGroupNode"] = Field(default_factory=list, description="Sub-folders")
+
+
+OzoneGroupNode.model_rebuild()
+
+
+class OzoneBrowseGroupedResponse(BaseModel):
+    source: str = Field("bucket", description="Where the folders live: the Ozone bucket. Data lake and ML workflow are both in it.")
+    scope: str = Field(..., description="The scope that was browsed (ml_workflow, landing, all_tenant_data, bucket). It decides which folders are returned.")
+    total: int = Field(..., description="Files across all folders")
+    truncated: bool = Field(False, description="True when more files exist than `limit`; raise `limit` or narrow with `prefix`")
+    groups: List[OzoneGroupNode]
 
 
 class ColumnSchemaItem(BaseModel):
