@@ -13,6 +13,7 @@ import time
 import math
 import json
 import traceback
+import contextlib
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
@@ -93,14 +94,12 @@ def _execute_snippet(
     sandbox_locals: Dict[str, Any] = {}
 
     start_time = time.perf_counter()
-    saved_stdout = sys.stdout
 
     try:
-        sys.stdout = stdout_buffer
-
-        # Compile snippet to check syntax first
-        compiled = compile(clean_code, "<sandbox>", "exec")
-        exec(compiled, sandbox_globals, sandbox_locals)
+        with contextlib.redirect_stdout(stdout_buffer):
+            # Compile snippet to check syntax first
+            compiled = compile(clean_code, "<sandbox>", "exec")
+            exec(compiled, sandbox_globals, sandbox_locals)
 
         elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
         captured_stdout = stdout_buffer.getvalue()
@@ -138,8 +137,6 @@ def _execute_snippet(
             "error": err_msg,
             "execution_time_ms": elapsed_ms
         }
-    finally:
-        sys.stdout = saved_stdout
 
 
 class CodeExecutionSandboxRecipe(BaseRecipe):
