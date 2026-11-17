@@ -57,7 +57,8 @@ class NodeStepExecutor:
     def is_node_cached(cls, session_id: str, node_id: str) -> bool:
         """Checks if a node has successfully executed and cached its outputs in this session."""
         sdir = cls.get_session_dir(session_id)
-        meta_file = sdir / f"node_{node_id}_meta.json"
+        clean_nid = "".join(c for c in str(node_id) if c.isalnum() or c in ("-", "_")).strip() or "node"
+        meta_file = sdir / f"node_{clean_nid}_meta.json"
         if not meta_file.exists():
             return False
         try:
@@ -102,6 +103,7 @@ class NodeStepExecutor:
         Saves DataFrames to Parquet, ML artifacts to joblib, and summary metadata to JSON.
         """
         sdir = cls.get_session_dir(session_id)
+        clean_nid = "".join(c for c in str(node_id) if c.isalnum() or c in ("-", "_")).strip() or "node"
         
         # 1. Save Primary DataFrame
         primary_df = outputs.get("dataframe")
@@ -121,7 +123,7 @@ class NodeStepExecutor:
                     primary_df = pd.DataFrame([scalar_m])
 
         if isinstance(primary_df, pd.DataFrame):
-            df_file = sdir / f"node_{node_id}_df.parquet"
+            df_file = sdir / f"node_{clean_nid}_df.parquet"
             storage_manager.safe_to_parquet(primary_df, df_file)
 
         # 2. Save Port-Specific DataFrames
@@ -134,14 +136,14 @@ class NodeStepExecutor:
         }
         for out_key, port_name in port_mappings.items():
             if out_key in outputs and isinstance(outputs[out_key], pd.DataFrame):
-                p_file = sdir / f"node_{node_id}_port_{port_name}.parquet"
+                p_file = sdir / f"node_{clean_nid}_port_{port_name}.parquet"
                 storage_manager.safe_to_parquet(outputs[out_key], p_file)
 
         # Also save any other named DataFrames
         for k, v in outputs.items():
             if isinstance(v, pd.DataFrame) and k not in port_mappings and k != "dataframe":
                 clean_k = "".join(c for c in k if c.isalnum() or c == "_")
-                p_file = sdir / f"node_{node_id}_port_{clean_k}.parquet"
+                p_file = sdir / f"node_{clean_nid}_port_{clean_k}.parquet"
                 storage_manager.safe_to_parquet(v, p_file)
 
         # 3. Save Non-DataFrame ML Artifacts via Joblib
@@ -158,7 +160,7 @@ class NodeStepExecutor:
                     artifacts[key] = val
 
         if artifacts:
-            art_file = sdir / f"node_{node_id}_artifacts.joblib"
+            art_file = sdir / f"node_{clean_nid}_artifacts.joblib"
             try:
                 joblib.dump(artifacts, art_file)
             except Exception as e:
@@ -205,7 +207,7 @@ class NodeStepExecutor:
             "timestamp": time.time()
         }
 
-        meta_file = sdir / f"node_{node_id}_meta.json"
+        meta_file = sdir / f"node_{clean_nid}_meta.json"
         with open(meta_file, "w", encoding="utf-8") as f:
             json.dump(make_json_safe(meta), f, indent=2, default=str)
 
@@ -217,10 +219,11 @@ class NodeStepExecutor:
         Reconstructs the outputs dictionary for a cached node from disk.
         """
         sdir = cls.get_session_dir(session_id)
+        clean_nid = "".join(c for c in str(node_id) if c.isalnum() or c in ("-", "_")).strip() or "node"
         outputs: Dict[str, Any] = {}
 
         # 1. Primary DataFrame
-        df_file = sdir / f"node_{node_id}_df.parquet"
+        df_file = sdir / f"node_{clean_nid}_df.parquet"
         if df_file.exists():
             try:
                 outputs["dataframe"] = pd.read_parquet(df_file)
@@ -228,8 +231,8 @@ class NodeStepExecutor:
                 logger.warning(f"Error loading primary parquet {df_file}: {e}")
 
         # 2. Port DataFrames
-        for p_file in sdir.glob(f"node_{node_id}_port_*.parquet"):
-            port_name = p_file.stem.replace(f"node_{node_id}_port_", "")
+        for p_file in sdir.glob(f"node_{clean_nid}_port_*.parquet"):
+            port_name = p_file.stem.replace(f"node_{clean_nid}_port_", "")
             try:
                 p_df = pd.read_parquet(p_file)
                 if port_name == "train":
@@ -248,7 +251,7 @@ class NodeStepExecutor:
                 logger.warning(f"Error loading port parquet {p_file}: {e}")
 
         # 3. Artifacts (joblib)
-        art_file = sdir / f"node_{node_id}_artifacts.joblib"
+        art_file = sdir / f"node_{clean_nid}_artifacts.joblib"
         if art_file.exists():
             try:
                 artifacts = joblib.load(art_file)
@@ -262,7 +265,8 @@ class NodeStepExecutor:
     def load_node_meta(cls, session_id: str, node_id: str) -> Optional[Dict[str, Any]]:
         """Reads node metadata JSON if cached."""
         sdir = cls.get_session_dir(session_id)
-        meta_file = sdir / f"node_{node_id}_meta.json"
+        clean_nid = "".join(c for c in str(node_id) if c.isalnum() or c in ("-", "_")).strip() or "node"
+        meta_file = sdir / f"node_{clean_nid}_meta.json"
         if meta_file.exists():
             try:
                 with open(meta_file, "r", encoding="utf-8") as f:
@@ -310,6 +314,13 @@ class NodeStepExecutor:
                 status="FAILED",
                 error_message=f"Target node '{target_node_id}' does not exist in workflow."
             )
+
+        target_recipe_id = str(node_map[target_node_id].get("recipe_id", "")).lower().strip()
+        try:
+            target_recipe = recipe_registry.get(target_recipe_id)
+            target_recipe_name = target_recipe.name
+        except Exception:
+            target_recipe_name = target_recipe_id
 
         # 1. Build Graph Dependency Maps
         in_degree: Dict[str, int] = {nid: 0 for nid in node_map}
@@ -359,10 +370,20 @@ class NodeStepExecutor:
                     if sub_in_degree[tgt] == 0:
                         sub_queue.append(tgt)
 
-        # Add any disconnected ancestors
-        for nid in subgraph_nodes:
-            if nid not in topo_order:
-                topo_order.append(nid)
+        # Check for cycles in ancestor graph
+        if len(topo_order) < len(subgraph_nodes):
+            cyclic_nodes = [nid for nid in subgraph_nodes if nid not in topo_order]
+            return NodeTestStepResponse(
+                success=False,
+                session_id=session_id,
+                node_id=target_node_id,
+                recipe_id=target_recipe_id,
+                recipe_name=target_recipe_name,
+                status="FAILED",
+                error_message=f"Cycle detected in workflow graph ancestors: {cyclic_nodes}. Workflows must be Directed Acyclic Graphs (DAGs).",
+                error_title="Circular Dependency Error",
+                error_suggestion="Remove or reverse the cyclic connection among the upstream nodes leading to this step."
+            )
 
         # 4. Check Ancestors Execution & Auto-Run Unexecuted Ancestors
         ancestors_to_run: List[str] = []

@@ -3223,7 +3223,8 @@ async def infer_workflow_schema(
 async def test_workflow_node_step(
     node_id: str,
     payload: NodeTestStepRequest,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: TokenData = Depends(get_current_user)
 ):
     """
     Executes a single visual canvas node in isolation (n8n/Boomi-style 'Test Step').
@@ -3232,13 +3233,21 @@ async def test_workflow_node_step(
     """
     from backend.app.engine.execution.step_executor import NodeStepExecutor
 
+    if getattr(current_user, "tenant_id", None) is not None:
+        set_current_tenant_id(current_user.tenant_id)
+
     nodes = payload.nodes or []
     edges = payload.edges or []
     node_configs = payload.node_configs or {}
 
     wf_id = getattr(payload, "workflow_id", None)
     if (not nodes or len(nodes) == 0) and wf_id:
-        result = await db.execute(select(Workflow).where(Workflow.id == wf_id))
+        q = select(Workflow).where(Workflow.id == wf_id)
+        if getattr(current_user, "tenant_id", None) is not None:
+            q = q.where(
+                (Workflow.tenant_id == current_user.tenant_id) | (Workflow.tenant_id.is_(None))
+            )
+        result = await db.execute(q)
         wf = result.scalar_one_or_none()
         if wf:
             nodes = wf.nodes or []
@@ -3273,13 +3282,17 @@ async def get_test_step_table_preview(
     node_id: str,
     page: int = Query(1, ge=1, description="1-indexed page number"),
     limit: int = Query(50, ge=1, le=500, description="Records per page"),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: TokenData = Depends(get_current_user)
 ):
     """
     Renders server-side paginated tabular data from a previously executed test step in this session.
     """
     from backend.app.engine.execution.step_executor import NodeStepExecutor
     from backend.app.engine.execution.executor import make_json_safe
+
+    if getattr(current_user, "tenant_id", None) is not None:
+        set_current_tenant_id(current_user.tenant_id)
 
     outputs = NodeStepExecutor.load_node_output(session_id=session_id, node_id=node_id)
     df = outputs.get("dataframe")
