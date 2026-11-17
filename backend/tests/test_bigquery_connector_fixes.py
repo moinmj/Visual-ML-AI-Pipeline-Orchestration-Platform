@@ -108,16 +108,17 @@ def test_bigquery_resilient_fallback_on_missing_db_dtypes():
     assert list(df["word"]) == ["king", "queen"]
 
 
-def test_bigquery_inspect_datasets_includes_public():
-    """Verify inspect action 'datasets' includes public datasets so empty projects never show 'No options found'."""
+def test_bigquery_inspect_datasets_strictly_real():
+    """Verify inspect action 'datasets' strictly returns genuine datasets from the project without injecting fake data."""
     r = BigQueryConnectorRecipe()
 
-    # In simulation mode
+    # In simulation mode (only when explicitly requested)
     sim_res = r.inspect(action="datasets", config={"simulation_mode": True})
     assert sim_res["success"] is True
-    assert "bigquery-public-data.samples" in sim_res["datasets"]
+    assert sim_res["source"] == "SIMULATED"
+    assert "analytics_data" in sim_res["datasets"]
 
-    # In live mode with mock client having zero local datasets
+    # In live mode with mock client having zero local datasets: MUST return empty list, NOT fake data
     mock_client = MagicMock()
     mock_client.list_datasets.return_value = []
 
@@ -125,8 +126,10 @@ def test_bigquery_inspect_datasets_includes_public():
         live_res = r.inspect(action="datasets", config={"simulation_mode": False, "project_id": "empty-proj"})
 
     assert live_res["success"] is True
-    assert "bigquery-public-data.samples" in live_res["datasets"]
-    assert live_res["count"] >= 1
+    assert live_res["source"] == "LIVE"
+    assert live_res["datasets"] == []
+    assert live_res["count"] == 0
+    assert "No datasets found in project 'empty-proj'" in live_res["message"]
 
 
 def test_bigquery_clean_records_serialization():

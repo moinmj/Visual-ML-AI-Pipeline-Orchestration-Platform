@@ -179,37 +179,6 @@ class BigQueryConnectorRecipe(BaseRecipe):
                     "section": "query_selection",
                     "description": "Read an entire table/view or run a custom read-only Standard SQL query."
                 },
-                "is_public_dataset": {
-                    "type": "boolean",
-                    "title": "Use Public / Sample Dataset",
-                    "input_type": "checkbox",
-                    "default": False,
-                    "section": "query_selection",
-                    "description": "Enable to query Google Cloud Public Datasets without local project datasets.",
-                    "visible_when": {
-                        "field": "read_mode",
-                        "equals": "table"
-                    }
-                },
-                "public_dataset": {
-                    "type": "string",
-                    "title": "Public Dataset Preset",
-                    "input_type": "dropdown",
-                    "enum": [
-                        "bigquery-public-data.samples",
-                        "bigquery-public-data.covid19_open_data",
-                        "bigquery-public-data.usa_names",
-                        "bigquery-public-data.google_trends",
-                        "bigquery-public-data.austin_bikeshare"
-                    ],
-                    "default": "bigquery-public-data.samples",
-                    "section": "query_selection",
-                    "description": "Select from well-known Google Cloud public datasets.",
-                    "visible_when": {
-                        "field": "is_public_dataset",
-                        "equals": True
-                    }
-                },
                 "dataset_id": {
                     "type": "string",
                     "title": "Dataset ID",
@@ -217,7 +186,7 @@ class BigQueryConnectorRecipe(BaseRecipe):
                     "default": "",
                     "placeholder": "e.g. analytics_data or bigquery-public-data:samples",
                     "section": "query_selection",
-                    "description": "Target BigQuery dataset name. Enter local dataset or cross-project path (e.g. 'bigquery-public-data.samples' or 'bigquery-public-data:samples')."
+                    "description": "Target BigQuery dataset name. Enter your local dataset or any cross-project dataset path (e.g. 'bigquery-public-data:samples' or 'bigquery-public-data.samples')."
                 },
                 "table_id": {
                     "type": "string",
@@ -450,9 +419,6 @@ class BigQueryConnectorRecipe(BaseRecipe):
 
         project_id = str(config.get("project_id", "my-gcp-project")).strip()
         dataset_id = str(config.get("dataset_id", "analytics_data")).strip()
-        if config.get("is_public_dataset") and config.get("public_dataset"):
-            dataset_id = str(config.get("public_dataset")).strip()
-
         table_id = str(config.get("table_id", "events_daily")).strip()
         conn_mode = str(config.get("connection_mode", "service_account_json")).strip().lower()
 
@@ -673,6 +639,19 @@ class BigQueryConnectorRecipe(BaseRecipe):
             if not is_live and not simulation_mode:
                 return {"success": False, "datasets": [], "schemas": [], "error": inspect_err or "Connection could not be established."}
 
+            if simulation_mode:
+                sim_datasets = ["analytics_data", "marketing_dw", "events_prod"]
+                return {
+                    "success": True,
+                    "datasets": sim_datasets,
+                    "schemas": sim_datasets,
+                    "databases": sim_datasets,
+                    "count": len(sim_datasets),
+                    "source": "SIMULATED",
+                    "message": "Simulation mode active."
+                }
+
+            # LIVE: ONLY return datasets that actually exist in the GCP project
             datasets = []
             if is_live and client:
                 try:
@@ -680,24 +659,7 @@ class BigQueryConnectorRecipe(BaseRecipe):
                         datasets.append(ds.dataset_id)
                 except Exception as e:
                     logger.warning(f"BigQuery list_datasets failed for {project_id}: {e}")
-
-            # Always supplement with public datasets so user is NEVER blocked by an empty local project
-            popular_public = [
-                "bigquery-public-data.samples",
-                "bigquery-public-data.covid19_open_data",
-                "bigquery-public-data.usa_names",
-                "bigquery-public-data.google_trends",
-                "bigquery-public-data.austin_bikeshare"
-            ]
-            if simulation_mode or not datasets:
-                if simulation_mode:
-                    datasets = ["analytics_data", "marketing_dw", "events_prod"] + popular_public
-                else:
-                    datasets = datasets + popular_public
-            else:
-                for pub in popular_public:
-                    if pub not in datasets:
-                        datasets.append(pub)
+                    return {"success": False, "datasets": [], "error": str(e), "message": f"Failed to list datasets in project '{project_id}': {e}"}
 
             return {
                 "success": True,
@@ -705,7 +667,8 @@ class BigQueryConnectorRecipe(BaseRecipe):
                 "schemas": datasets,
                 "databases": datasets,
                 "count": int(len(datasets)),
-                "source": "LIVE" if is_live else "SIMULATED"
+                "source": "LIVE",
+                "message": f"Found {len(datasets)} dataset(s) in project '{project_id}'." if datasets else f"No datasets found in project '{project_id}'."
             }
 
         # 3. Tables
@@ -713,10 +676,30 @@ class BigQueryConnectorRecipe(BaseRecipe):
             if not is_live and not simulation_mode:
                 return {"success": False, "tables": [], "error": inspect_err or "Connection could not be established."}
 
-            target_dataset = schema_name or config.get("dataset_id") or "analytics_data"
+            target_dataset = schema_name or config.get("dataset_id") or ""
+            if not target_dataset:
+                return {
+                    "success": False,
+                    "tables": [],
+                    "count": 0,
+                    "error": "Dataset ID is required to list tables.",
+                    "message": "Please specify a Dataset ID."
+                }
+
+            if simulation_mode:
+                sim_tables = ["events_daily", "users_dimension", "transactions_fact", "pageviews"]
+                return {
+                    "success": True,
+                    "tables": sim_tables,
+                    "count": len(sim_tables),
+                    "dataset_id": target_dataset,
+                    "schema": target_dataset,
+                    "source": "SIMULATED"
+                }
+
+            # LIVE: ONLY return real tables from BigQuery
             clean_dataset = target_dataset.replace(":", ".")
             tables = []
-
             if is_live and client:
                 try:
                     from google.cloud import bigquery
@@ -730,11 +713,7 @@ class BigQueryConnectorRecipe(BaseRecipe):
                         tables.append(tbl.table_id)
                 except Exception as e:
                     logger.warning(f"BigQuery list_tables failed for {clean_dataset}: {e}")
-
-            if not tables and simulation_mode:
-                tables = ["events_daily", "users_dimension", "transactions_fact", "pageviews"]
-            elif not tables and "samples" in clean_dataset:
-                tables = ["github_nested", "github_timeline", "gsod", "natality", "shakespeare", "trigrams", "wikipedia"]
+                    return {"success": False, "tables": [], "error": str(e), "message": f"Failed to list tables in dataset '{target_dataset}': {e}"}
 
             return {
                 "success": True,
@@ -742,7 +721,8 @@ class BigQueryConnectorRecipe(BaseRecipe):
                 "count": int(len(tables)),
                 "dataset_id": target_dataset,
                 "schema": target_dataset,
-                "source": "LIVE" if is_live else "SIMULATED"
+                "source": "LIVE",
+                "message": f"Found {len(tables)} table(s) in dataset '{target_dataset}'." if tables else f"No tables found in dataset '{target_dataset}'."
             }
 
         # 4. Columns
@@ -750,10 +730,37 @@ class BigQueryConnectorRecipe(BaseRecipe):
             if not is_live and not simulation_mode:
                 return {"success": False, "columns": [], "error": inspect_err or "Connection could not be established."}
 
-            target_dataset = schema_name or config.get("dataset_id") or "analytics_data"
-            target_table = table_name or config.get("table_id") or "events_daily"
-            columns = []
+            target_dataset = schema_name or config.get("dataset_id") or ""
+            target_table = table_name or config.get("table_id") or ""
+            if not target_table or not target_dataset:
+                return {
+                    "success": False,
+                    "columns": [],
+                    "count": 0,
+                    "error": "Both Dataset ID and Table Name are required to inspect columns.",
+                    "message": "Please specify both Dataset ID and Table Name."
+                }
 
+            if simulation_mode:
+                sim_columns = [
+                    {"name": "event_date", "type": "STRING", "nullable": False, "mode": "REQUIRED"},
+                    {"name": "event_timestamp", "type": "INTEGER", "nullable": False, "mode": "REQUIRED"},
+                    {"name": "event_name", "type": "STRING", "nullable": False, "mode": "REQUIRED"},
+                    {"name": "user_pseudo_id", "type": "STRING", "nullable": True, "mode": "NULLABLE"},
+                    {"name": "country", "type": "STRING", "nullable": True, "mode": "NULLABLE"},
+                    {"name": "purchase_revenue_usd", "type": "FLOAT", "nullable": True, "mode": "NULLABLE"},
+                ]
+                return {
+                    "success": True,
+                    "columns": sim_columns,
+                    "count": len(sim_columns),
+                    "table_name": target_table,
+                    "dataset_id": target_dataset,
+                    "source": "SIMULATED"
+                }
+
+            # LIVE: ONLY return real columns from BigQuery
+            columns = []
             if is_live and client:
                 try:
                     from google.cloud import bigquery
@@ -773,16 +780,7 @@ class BigQueryConnectorRecipe(BaseRecipe):
                         })
                 except Exception as e:
                     logger.warning(f"BigQuery get_table schema failed for {target_table}: {e}")
-
-            if not columns and simulation_mode:
-                columns = [
-                    {"name": "event_date", "type": "STRING", "nullable": False, "mode": "REQUIRED"},
-                    {"name": "event_timestamp", "type": "INTEGER", "nullable": False, "mode": "REQUIRED"},
-                    {"name": "event_name", "type": "STRING", "nullable": False, "mode": "REQUIRED"},
-                    {"name": "user_pseudo_id", "type": "STRING", "nullable": True, "mode": "NULLABLE"},
-                    {"name": "country", "type": "STRING", "nullable": True, "mode": "NULLABLE"},
-                    {"name": "purchase_revenue_usd", "type": "FLOAT", "nullable": True, "mode": "NULLABLE"},
-                ]
+                    return {"success": False, "columns": [], "error": str(e), "message": f"Failed to inspect columns for table '{target_table}': {e}"}
 
             return {
                 "success": True,
@@ -790,7 +788,8 @@ class BigQueryConnectorRecipe(BaseRecipe):
                 "count": int(len(columns)),
                 "table_name": target_table,
                 "dataset_id": target_dataset,
-                "source": "LIVE" if is_live else "SIMULATED"
+                "source": "LIVE",
+                "message": f"Found {len(columns)} column(s) in table '{target_table}'." if columns else f"No columns found in table '{target_table}'."
             }
 
         return {
