@@ -5,7 +5,12 @@ import uuid
 import pandas as pd
 
 from backend.app.engine.execution.executor import make_json_safe, diagnose_execution_error
-from backend.app.recipes.ingestion.postgresql_connector import PostgreSQLConnectorRecipe, _clean_sql_value, _clean_sql_row
+from backend.app.recipes.ingestion.postgresql_connector import (
+    PostgreSQLConnectorRecipe,
+    _clean_sql_value,
+    _clean_sql_row,
+    _sanitize_sql_query
+)
 
 
 def test_make_json_safe_decimal_and_time():
@@ -116,3 +121,50 @@ def test_missing_column_error_classification():
         context={}
     )
     assert diag_table["title"] == "Database Table Not Found"
+
+
+def test_postgresql_query_sanitizer():
+    """Verify _sanitize_sql_query strips semicolons and cleanly appends LIMIT."""
+    assert _sanitize_sql_query("SELECT * FROM customers;", 50) == "SELECT * FROM customers LIMIT 50"
+    assert _sanitize_sql_query("SELECT * FROM customers LIMIT 10;", 50) == "SELECT * FROM customers LIMIT 10"
+    assert _sanitize_sql_query("SELECT id FROM users ;;; \n", 20) == "SELECT id FROM users LIMIT 20"
+
+
+def test_postgresql_live_execution_defines_q_variable(monkeypatch):
+    """Verify live table execution constructs variable 'q' and does not throw NameError: name 'q' is not defined."""
+    from unittest.mock import MagicMock
+    recipe = PostgreSQLConnectorRecipe()
+
+    mock_cur = MagicMock()
+    mock_cur.fetchall.return_value = [{"id": 1, "name": "Test Company"}]
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+
+    import psycopg2
+    monkeypatch.setattr(psycopg2, "connect", lambda **kwargs: mock_conn)
+
+    # Force fallback to psycopg2 by making sqlalchemy raise
+    import sqlalchemy
+    monkeypatch.setattr(sqlalchemy, "create_engine", MagicMock(side_effect=Exception("force psycopg2")))
+
+    config = {
+        "read_mode": "table",
+        "table_name": "companies",
+        "schema_name": "public",
+        "simulation_mode": False,
+        "host": "localhost",
+        "port": 5432,
+        "database": "test_db",
+        "username": "postgres",
+        "password": "pwd"
+    }
+
+    result = recipe.execute(inputs={}, config=config)
+    assert result is not None
+    assert "dataframe" in result
+    df = result["dataframe"]
+    assert len(df) == 1
+    # Verify mock_cur was called with a query containing 'SELECT * FROM "public"."companies"'
+    executed_sql = mock_cur.execute.call_args[0][0]
+    assert 'SELECT * FROM "public"."companies"' in executed_sql
+

@@ -58,6 +58,20 @@ def _clean_sql_row(row_dict: Dict[str, Any]) -> Dict[str, Any]:
     return {k: _clean_sql_value(v) for k, v in row_dict.items()}
 
 
+def _sanitize_sql_query(query: str, limit: int) -> str:
+    """
+    Sanitizes SQL query by removing trailing semicolons and whitespace,
+    and cleanly appending 'LIMIT {limit}' only when no limit is present.
+    """
+    clean = str(query or "").strip()
+    if not clean:
+        return ""
+    clean = re.sub(r";+\s*$", "", clean).strip()
+    if not re.search(r"\blimit\b", clean, re.IGNORECASE):
+        clean = f"{clean} LIMIT {limit}"
+    return clean
+
+
 class PostgreSQLConnectorRecipe(BaseRecipe):
     recipe_id = "postgresql_connector"
     name = "PostgreSQL Connector"
@@ -763,6 +777,7 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                                 t_schema = p[0].strip() or t_schema
                                 t_name = p[1].strip()
 
+                            q = f'SELECT {cols_str} FROM "{t_schema}"."{t_name}"{where_sql}{order_sql} LIMIT {limit}{offset_sql}'
                             try:
                                 res = conn.execute(sqlalchemy.text(q))
                             except Exception as q_err:
@@ -794,8 +809,7 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                         query = str(config.get("query", "")).strip()
                         if not query:
                             raise ValidationException("SQL Query is required when Read Mode is set to 'query'.")
-                        if "limit" not in query.lower():
-                            query = f"{query} LIMIT {limit}"
+                        query = _sanitize_sql_query(query, limit)
                         res = conn.execute(sqlalchemy.text(query))
                         columns_retrieved = list(res.keys())
                         records = [_clean_sql_row(dict(zip(columns_retrieved, r))) for r in res.fetchall()]
@@ -844,6 +858,7 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                                     t_schema = p[0].strip() or t_schema
                                     t_name = p[1].strip()
 
+                                q = f'SELECT {cols_str} FROM "{t_schema}"."{t_name}"{where_sql}{order_sql} LIMIT {limit}{offset_sql}'
                                 try:
                                     cur.execute(q)
                                 except Exception as q_err:
@@ -874,8 +889,7 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
                             query = str(config.get("query", "")).strip()
                             if not query:
                                 raise ValidationException("SQL Query is required when Read Mode is set to 'query'.")
-                            if "limit" not in query.lower():
-                                query = f"{query} LIMIT {limit}"
+                            query = _sanitize_sql_query(query, limit)
                             cur.execute(query)
                             records = [_clean_sql_row(dict(r)) for r in cur.fetchall()]
                             if records:
@@ -1375,7 +1389,8 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
             where_sql = f" WHERE {where_clause}" if where_clause else ""
             sql_stmt = f'SELECT {cols_str} FROM "{schema_name}"."{table_name}"{where_sql} LIMIT {limit}'
         else:
-            sql_stmt = config.get("query", f"SELECT * FROM public.customers LIMIT {limit}")
+            raw_query = config.get("query", f"SELECT * FROM public.customers")
+            sql_stmt = _sanitize_sql_query(raw_query, limit)
 
         return (
             f"# Recipe: PostgreSQL Connector\n"
