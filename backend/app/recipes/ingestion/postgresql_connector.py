@@ -515,7 +515,7 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
             port = int(config.get("port", 5432))
         except (ValueError, TypeError):
             port = 5432
-        database = str(config.get("database", "postgres")).strip()
+        database = str(config.get("database") or "postgres").strip()
         username = str(config.get("username", "postgres")).strip()
         password = str(config.get("password", "")).strip()
         conn_str = str(config.get("connection_string", "")).strip()

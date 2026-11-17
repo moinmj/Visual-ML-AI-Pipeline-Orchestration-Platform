@@ -32,7 +32,7 @@ class S3DataLakeConnectorRecipe(BaseRecipe):
     group = "Ingestion & Orchestration"
     subgroup = "Data Lake & Object Storage"
     description = "Ingests Parquet, CSV, or JSON datasets from Amazon S3 and S3-compatible Data Lakes (MinIO, Ozone)."
-    input_types = ["dataframe"]
+    input_types: List[str] = []
     output_types = ["dataframe"]
 
     inputs: List[RecipePort] = []

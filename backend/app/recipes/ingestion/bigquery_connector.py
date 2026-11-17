@@ -32,7 +32,7 @@ class BigQueryConnectorRecipe(BaseRecipe):
     group = "Ingestion & Orchestration"
     subgroup = "Database & Warehouse Connectors"
     description = "Reads analytical tables or Standard SQL queries from Google BigQuery."
-    input_types = ["dataframe"]
+    input_types: List[str] = []
     output_types = ["dataframe"]
 
     inputs: List[RecipePort] = []
@@ -184,16 +184,16 @@ class BigQueryConnectorRecipe(BaseRecipe):
                     "title": "Dataset ID",
                     "input_type": "text",
                     "default": "",
-                    "placeholder": "e.g. analytics_data or production",
+                    "placeholder": "e.g. analytics_data or bigquery-public-data:samples",
                     "section": "query_selection",
-                    "description": "Target BigQuery dataset name."
+                    "description": "Target BigQuery dataset name. Enter your local dataset or any cross-project dataset path (e.g. 'bigquery-public-data:samples' or 'bigquery-public-data.samples')."
                 },
                 "table_id": {
                     "type": "string",
                     "title": "Table Name",
                     "input_type": "text",
                     "default": "",
-                    "placeholder": "e.g. events_daily",
+                    "placeholder": "e.g. events_daily or shakespeare",
                     "section": "query_selection",
                     "description": "Target BigQuery table or view name (used in 'table' mode).",
                     "visible_when": {
@@ -356,6 +356,61 @@ class BigQueryConnectorRecipe(BaseRecipe):
             })
         return records
 
+    @staticmethod
+    def _build_table_ref(project_id: str, dataset_id: str, table_id: str) -> str:
+        """
+        Constructs a standard BigQuery backticked table reference.
+        Supports:
+          - Standard: project.dataset.table
+          - Cross-project dataset: bigquery-public-data:samples -> bigquery-public-data.samples.table
+          - Dotted dataset: bigquery-public-data.samples -> bigquery-public-data.samples.table
+          - Full table_id: bigquery-public-data.samples.table
+        """
+        clean_table = table_id.strip().strip("`")
+        clean_dataset = dataset_id.strip().strip("`").replace(":", ".")
+        clean_project = project_id.strip().strip("`")
+
+        # If table_id is already fully qualified (3 parts: proj.ds.tbl)
+        if clean_table.count(".") == 2:
+            return f"`{clean_table}`"
+
+        # If dataset_id has a project prefix (e.g. bigquery-public-data.samples)
+        if "." in clean_dataset:
+            return f"`{clean_dataset}.{clean_table}`"
+
+        # Standard: project_id.dataset_id.table_id
+        if clean_project and clean_dataset:
+            return f"`{clean_project}.{clean_dataset}.{clean_table}`"
+        elif clean_dataset:
+            return f"`{clean_dataset}.{clean_table}`"
+        return f"`{clean_table}`"
+
+    @staticmethod
+    def _clean_records(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Cleans records for JSON serialization safety (Decimals, dates, timestamps, bytes)."""
+        import decimal
+        import datetime
+
+        cleaned_records = []
+        for row in records:
+            cleaned_row = {}
+            for k, v in row.items():
+                if isinstance(v, decimal.Decimal):
+                    cleaned_row[k] = float(v) if (v % 1 != 0) else int(v)
+                elif isinstance(v, (datetime.date, datetime.datetime, datetime.time)):
+                    cleaned_row[k] = v.isoformat()
+                elif isinstance(v, bytes):
+                    try:
+                        cleaned_row[k] = v.decode("utf-8")
+                    except Exception:
+                        cleaned_row[k] = str(v)
+                elif pd is not None and pd.isna(v):
+                    cleaned_row[k] = None
+                else:
+                    cleaned_row[k] = v
+            cleaned_records.append(cleaned_row)
+        return cleaned_records
+
     def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
         start_time = time.time()
         limit = max(1, min(int(config.get("limit", 1000)), 1000000))
@@ -367,9 +422,28 @@ class BigQueryConnectorRecipe(BaseRecipe):
         table_id = str(config.get("table_id", "events_daily")).strip()
         conn_mode = str(config.get("connection_mode", "service_account_json")).strip().lower()
 
+        # Resolve credential from context if credential_id is provided
+        credential_id = str(config.get("credential_id", "")).strip()
+        if credential_id and context and isinstance(context, dict):
+            creds = context.get("credentials", {})
+            if credential_id in creds:
+                c_data = creds[credential_id]
+                if isinstance(c_data, dict):
+                    c_data = c_data.get("data", c_data)
+                    project_id = c_data.get("project_id") or project_id
+                    raw_json = c_data.get("credentials_json") or c_data.get("service_account_json") or config.get("credentials_json", "")
+                    fpath = c_data.get("credentials_file_path") or config.get("credentials_file_path", "")
+                    config = {**config, "credentials_json": raw_json, "credentials_file_path": fpath, "project_id": project_id}
+
+        # Environment variable overrides
+        if not project_id or project_id == "my-gcp-project":
+            project_id = os.getenv("GOOGLE_CLOUD_PROJECT", os.getenv("GCP_PROJECT", project_id))
+
         records: List[Dict[str, Any]] = []
         delivery_status = "SIMULATED"
         status_msg = ""
+        last_error = None
+        target_ref = ""
 
         # Live Execution Attempt
         if not simulation_mode and project_id:
@@ -401,13 +475,20 @@ class BigQueryConnectorRecipe(BaseRecipe):
 
                 if read_mode == "table":
                     cols = str(config.get("columns", "*")).strip() or "*"
-                    query_sql = f"SELECT {cols} FROM `{project_id}.{dataset_id}.{table_id}` LIMIT {limit}"
+                    target_ref = self._build_table_ref(project_id, dataset_id, table_id)
+                    query_sql = f"SELECT {cols} FROM {target_ref} LIMIT {limit}"
                 else:
                     query_sql = str(config.get("query", "")).strip()
                     if not query_sql:
                         raise ValidationException("SQL Query is required when Read Mode is set to 'query'.")
-                    if limit and "limit" not in query_sql.lower():
-                        query_sql = f"{query_sql} LIMIT {limit}"
+                    safe, err_msg = self._validate_sql_safety(query_sql)
+                    if not safe and err_msg:
+                        raise ValidationException(err_msg)
+                    clean_q = query_sql.rstrip(";").strip()
+                    if limit and "limit" not in clean_q.lower():
+                        query_sql = f"{clean_q} LIMIT {limit}"
+                    else:
+                        query_sql = clean_q
 
                 job_config = bigquery.QueryJobConfig()
                 max_bytes = config.get("maximum_bytes_billed")
@@ -415,11 +496,23 @@ class BigQueryConnectorRecipe(BaseRecipe):
                     job_config.maximum_bytes_billed = int(max_bytes)
 
                 query_job = client.query(query_sql, job_config=job_config)
-                df_res = query_job.to_dataframe()
-                records = df_res.to_dict(orient="records")
 
+                # Resilient DataFrame conversion with graceful native fallback if db-dtypes or pyarrow has issues
+                try:
+                    df_res = query_job.to_dataframe()
+                    records = df_res.to_dict(orient="records")
+                except Exception as conv_err:
+                    logger.info(f"BigQuery to_dataframe conversion failed ({conv_err}); falling back to native row mapping.")
+                    query_result = query_job.result()
+                    records = [dict(row.items()) for row in query_result]
+
+                records = self._clean_records(records)
                 delivery_status = "LIVE"
-                status_msg = f"Retrieved {len(records)} live rows from Google BigQuery ({project_id}.{dataset_id}.{table_id})."
+                target_desc = target_ref if read_mode == "table" else "custom SQL"
+                status_msg = f"Retrieved {len(records)} live rows from Google BigQuery ({target_desc})."
+            except ImportError as ie:
+                logger.warning(f"BigQuery driver error: {ie}")
+                last_error = f"Missing Google Cloud dependencies: {ie}. Ensure 'google-cloud-bigquery' and 'db-dtypes' are installed."
             except Exception as e:
                 logger.warning(f"BigQuery connection failed: {e}")
                 last_error = e
@@ -438,22 +531,22 @@ class BigQueryConnectorRecipe(BaseRecipe):
         col_count = len(df_out.columns) if hasattr(df_out, "columns") else (len(records[0].keys()) if records else 0)
 
         summary = {
-            "title": "Google BigQuery Connector Summary",
+            "title": "Data Warehouse Query Metrics",
             "message": status_msg,
             "status": delivery_status,
             "project_id": project_id,
             "dataset_id": dataset_id,
             "table_id": table_id,
-            "rows_retrieved": len(records),
-            "columns_count": col_count,
+            "rows_retrieved": int(len(records)),
+            "columns_count": int(col_count),
             "read_mode": read_mode,
-            "duration_ms": duration_ms
+            "duration_ms": int(duration_ms)
         }
 
         metrics = {
-            "rows_retrieved": len(records),
-            "columns_count": col_count,
-            "duration_ms": duration_ms,
+            "rows_retrieved": int(len(records)),
+            "columns_count": int(col_count),
+            "duration_ms": int(duration_ms),
             "delivery_status": delivery_status
         }
 
@@ -464,16 +557,261 @@ class BigQueryConnectorRecipe(BaseRecipe):
             "metrics": metrics
         }
 
+    def inspect(
+        self,
+        action: str,
+        config: Dict[str, Any],
+        context: Optional[Any] = None,
+        schema_name: Optional[str] = None,
+        table_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Introspects Google BigQuery datasets, tables, and schemas in real-time."""
+        action = str(action or "test_connection").strip().lower()
+        simulation_mode = bool(config.get("simulation_mode", False))
+        project_id = str(config.get("project_id", "")).strip()
+
+        is_live = False
+        client = None
+        inspect_err = ""
+
+        if not simulation_mode and project_id:
+            try:
+                from google.cloud import bigquery
+                from google.oauth2 import service_account
+
+                raw_json = str(config.get("credentials_json", "")).strip()
+                fpath = str(config.get("credentials_file_path", "")).strip()
+                conn_mode = str(config.get("connection_mode", "service_account_json")).strip().lower()
+
+                if conn_mode == "service_account_json" and raw_json:
+                    info = json.loads(raw_json)
+                    creds = service_account.Credentials.from_service_account_info(info)
+                    client = bigquery.Client(project=project_id, credentials=creds)
+                elif conn_mode == "credentials_file" and fpath and os.path.exists(fpath):
+                    creds = service_account.Credentials.from_service_account_file(fpath)
+                    client = bigquery.Client(project=project_id, credentials=creds)
+                elif conn_mode == "sso":
+                    sso_token = str(config.get("sso_access_token", "")).strip()
+                    if sso_token:
+                        from google.oauth2.credentials import Credentials
+                        creds = Credentials(token=sso_token)
+                        client = bigquery.Client(project=project_id, credentials=creds)
+                    else:
+                        client = bigquery.Client(project=project_id)
+                else:
+                    client = bigquery.Client(project=project_id)
+
+                client.get_project(project_id)
+                is_live = True
+            except Exception as ex:
+                inspect_err = str(ex)
+                logger.debug(f"BigQuery inspect connection failed: {ex}")
+
+        # 1. Test Connection
+        if action == "test_connection":
+            if is_live:
+                return {
+                    "success": True,
+                    "connected": True,
+                    "status": "LIVE",
+                    "project_id": project_id,
+                    "message": f"Successfully connected to Google BigQuery project '{project_id}'."
+                }
+            elif simulation_mode:
+                return {
+                    "success": True,
+                    "connected": True,
+                    "status": "SIMULATED",
+                    "project_id": project_id or "demo-bigquery-project",
+                    "message": "Google BigQuery simulation mode active."
+                }
+            else:
+                return {
+                    "success": False,
+                    "connected": False,
+                    "status": "UNREACHABLE",
+                    "error": inspect_err,
+                    "message": f"Could not connect to Google BigQuery: {inspect_err or 'Project unreachable or credentials invalid.'}"
+                }
+
+        # 2. Datasets / Schemas / Databases
+        if action in ("datasets", "get_datasets", "schemas", "get_schemas", "databases", "get_databases"):
+            if not is_live and not simulation_mode:
+                return {"success": False, "datasets": [], "schemas": [], "error": inspect_err or "Connection could not be established."}
+
+            if simulation_mode:
+                sim_datasets = ["analytics_data", "marketing_dw", "events_prod"]
+                return {
+                    "success": True,
+                    "datasets": sim_datasets,
+                    "schemas": sim_datasets,
+                    "databases": sim_datasets,
+                    "count": len(sim_datasets),
+                    "source": "SIMULATED",
+                    "message": "Simulation mode active."
+                }
+
+            # LIVE: ONLY return datasets that actually exist in the GCP project
+            datasets = []
+            if is_live and client:
+                try:
+                    for ds in client.list_datasets(project=project_id):
+                        datasets.append(ds.dataset_id)
+                except Exception as e:
+                    logger.warning(f"BigQuery list_datasets failed for {project_id}: {e}")
+                    return {"success": False, "datasets": [], "error": str(e), "message": f"Failed to list datasets in project '{project_id}': {e}"}
+
+            return {
+                "success": True,
+                "datasets": datasets,
+                "schemas": datasets,
+                "databases": datasets,
+                "count": int(len(datasets)),
+                "source": "LIVE",
+                "message": f"Found {len(datasets)} dataset(s) in project '{project_id}'." if datasets else f"No datasets found in project '{project_id}'."
+            }
+
+        # 3. Tables
+        if action in ("tables", "get_tables"):
+            if not is_live and not simulation_mode:
+                return {"success": False, "tables": [], "error": inspect_err or "Connection could not be established."}
+
+            target_dataset = schema_name or config.get("dataset_id") or ""
+            if not target_dataset:
+                return {
+                    "success": False,
+                    "tables": [],
+                    "count": 0,
+                    "error": "Dataset ID is required to list tables.",
+                    "message": "Please specify a Dataset ID."
+                }
+
+            if simulation_mode:
+                sim_tables = ["events_daily", "users_dimension", "transactions_fact", "pageviews"]
+                return {
+                    "success": True,
+                    "tables": sim_tables,
+                    "count": len(sim_tables),
+                    "dataset_id": target_dataset,
+                    "schema": target_dataset,
+                    "source": "SIMULATED"
+                }
+
+            # LIVE: ONLY return real tables from BigQuery
+            clean_dataset = target_dataset.replace(":", ".")
+            tables = []
+            if is_live and client:
+                try:
+                    from google.cloud import bigquery
+                    if "." in clean_dataset:
+                        parts = clean_dataset.split(".", 1)
+                        ds_proj, ds_name = parts[0], parts[1]
+                        ds_ref = bigquery.DatasetReference(ds_proj, ds_name)
+                    else:
+                        ds_ref = bigquery.DatasetReference(project_id, clean_dataset)
+                    for tbl in client.list_tables(ds_ref):
+                        tables.append(tbl.table_id)
+                except Exception as e:
+                    logger.warning(f"BigQuery list_tables failed for {clean_dataset}: {e}")
+                    return {"success": False, "tables": [], "error": str(e), "message": f"Failed to list tables in dataset '{target_dataset}': {e}"}
+
+            return {
+                "success": True,
+                "tables": tables,
+                "count": int(len(tables)),
+                "dataset_id": target_dataset,
+                "schema": target_dataset,
+                "source": "LIVE",
+                "message": f"Found {len(tables)} table(s) in dataset '{target_dataset}'." if tables else f"No tables found in dataset '{target_dataset}'."
+            }
+
+        # 4. Columns
+        if action in ("columns", "get_columns"):
+            if not is_live and not simulation_mode:
+                return {"success": False, "columns": [], "error": inspect_err or "Connection could not be established."}
+
+            target_dataset = schema_name or config.get("dataset_id") or ""
+            target_table = table_name or config.get("table_id") or ""
+            if not target_table or not target_dataset:
+                return {
+                    "success": False,
+                    "columns": [],
+                    "count": 0,
+                    "error": "Both Dataset ID and Table Name are required to inspect columns.",
+                    "message": "Please specify both Dataset ID and Table Name."
+                }
+
+            if simulation_mode:
+                sim_columns = [
+                    {"name": "event_date", "type": "STRING", "nullable": False, "mode": "REQUIRED"},
+                    {"name": "event_timestamp", "type": "INTEGER", "nullable": False, "mode": "REQUIRED"},
+                    {"name": "event_name", "type": "STRING", "nullable": False, "mode": "REQUIRED"},
+                    {"name": "user_pseudo_id", "type": "STRING", "nullable": True, "mode": "NULLABLE"},
+                    {"name": "country", "type": "STRING", "nullable": True, "mode": "NULLABLE"},
+                    {"name": "purchase_revenue_usd", "type": "FLOAT", "nullable": True, "mode": "NULLABLE"},
+                ]
+                return {
+                    "success": True,
+                    "columns": sim_columns,
+                    "count": len(sim_columns),
+                    "table_name": target_table,
+                    "dataset_id": target_dataset,
+                    "source": "SIMULATED"
+                }
+
+            # LIVE: ONLY return real columns from BigQuery
+            columns = []
+            if is_live and client:
+                try:
+                    from google.cloud import bigquery
+                    clean_ds = target_dataset.replace(":", ".")
+                    if "." in clean_ds:
+                        parts = clean_ds.split(".", 1)
+                        tbl_ref = bigquery.TableReference(bigquery.DatasetReference(parts[0], parts[1]), target_table)
+                    else:
+                        tbl_ref = bigquery.TableReference(bigquery.DatasetReference(project_id, clean_ds), target_table)
+                    tbl_obj = client.get_table(tbl_ref)
+                    for field in tbl_obj.schema:
+                        columns.append({
+                            "name": field.name,
+                            "type": field.field_type,
+                            "nullable": field.is_nullable,
+                            "mode": field.mode
+                        })
+                except Exception as e:
+                    logger.warning(f"BigQuery get_table schema failed for {target_table}: {e}")
+                    return {"success": False, "columns": [], "error": str(e), "message": f"Failed to inspect columns for table '{target_table}': {e}"}
+
+            return {
+                "success": True,
+                "columns": columns,
+                "count": int(len(columns)),
+                "table_name": target_table,
+                "dataset_id": target_dataset,
+                "source": "LIVE",
+                "message": f"Found {len(columns)} column(s) in table '{target_table}'." if columns else f"No columns found in table '{target_table}'."
+            }
+
+        return {
+            "success": False,
+            "error": f"Unknown inspection action '{action}'. Supported: 'test_connection', 'datasets', 'schemas', 'databases', 'tables', 'columns'.",
+            "message": f"Unknown inspection action '{action}'."
+        }
+
     def to_code(self, config: Dict[str, Any]) -> str:
         project_id = config.get("project_id", "my-gcp-project")
         dataset_id = config.get("dataset_id", "analytics_data")
+        if config.get("is_public_dataset") and config.get("public_dataset"):
+            dataset_id = config.get("public_dataset")
+
         table_id = config.get("table_id", "events_daily")
         read_mode = config.get("read_mode", "table")
         limit = config.get("limit", 1000)
 
         if read_mode == "table":
             cols = config.get("columns", "*") or "*"
-            sql = f"SELECT {cols} FROM `{project_id}.{dataset_id}.{table_id}` LIMIT {limit}"
+            target_table = self._build_table_ref(project_id, dataset_id, table_id)
+            sql = f"SELECT {cols} FROM {target_table} LIMIT {limit}"
         else:
             sql = config.get("query", f"SELECT * FROM `{project_id}.{dataset_id}.{table_id}` LIMIT 100")
 
@@ -484,5 +822,5 @@ class BigQueryConnectorRecipe(BaseRecipe):
             f"client = bigquery.Client(project='{project_id}')\n"
             f"sql = \"\"\"{sql}\"\"\"\n"
             f"df = client.query(sql).to_dataframe()\n"
-            f"print(f'Retrieved {{len(df)}} rows from BigQuery dataset {dataset_id}.')\n"
+            f"print(f'Retrieved {{len(df)}} rows from BigQuery.')\n"
         )

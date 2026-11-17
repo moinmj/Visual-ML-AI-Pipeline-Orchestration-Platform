@@ -20,6 +20,7 @@ except ImportError:
 from backend.app.recipes.base.recipe import BaseRecipe, RecipePort
 from backend.app.core.logging import logger
 from backend.app.core.config import settings
+from backend.app.core.exceptions import ValidationException
 
 
 class AzureDataLakeConnectorRecipe(BaseRecipe):
@@ -27,10 +28,11 @@ class AzureDataLakeConnectorRecipe(BaseRecipe):
     name = "Azure Data Lake Storage Connector"
     version = "1.0.0"
     category = "ingestion"
+    icon = "azure"
     group = "Ingestion & Orchestration"
     subgroup = "Data Lake & Object Storage"
     description = "Ingests Parquet, CSV, or JSON datasets from Azure Data Lake Storage Gen2 and Azure Blob Storage."
-    input_types = ["dataframe"]
+    input_types: List[str] = []
     output_types = ["dataframe"]
 
     inputs: List[RecipePort] = []
@@ -309,13 +311,33 @@ class AzureDataLakeConnectorRecipe(BaseRecipe):
         blob_path = str(config.get("blob_path", "")).strip()
         auth_mode = str(config.get("auth_mode", "connection_string")).strip().lower()
 
+        # Resolve credential from context if credential_id is provided
+        credential_id = str(config.get("credential_id", "")).strip()
+        if credential_id and context and isinstance(context, dict):
+            creds = context.get("credentials", {})
+            if credential_id in creds:
+                c_data = creds[credential_id]
+                if isinstance(c_data, dict):
+                    c_data = c_data.get("data", c_data)
+                    cs = c_data.get("connection_string") or config.get("connection_string", "")
+                    account = c_data.get("account_name") or account
+                    key = c_data.get("account_key") or c_data.get("key") or config.get("account_key", "")
+                    sas = c_data.get("sas_token") or config.get("sas_token", "")
+                    container = c_data.get("container_name") or container
+                    config = {**config, "connection_string": cs, "account_key": key, "sas_token": sas}
+
         format_type = self._infer_format(blob_path, str(config.get("file_format", "auto")))
         records: List[Dict[str, Any]] = []
         delivery_status = "SIMULATED"
         status_msg = ""
 
         # Live Execution Attempt
-        if not simulation_mode and container and blob_path:
+        if not simulation_mode:
+            if not container:
+                raise ValidationException("Azure container / file system name is required.")
+            if not blob_path:
+                raise ValidationException("Azure blob / file path is required.")
+
             try:
                 from azure.storage.blob import BlobServiceClient
                 blob_service = None
@@ -324,37 +346,59 @@ class AzureDataLakeConnectorRecipe(BaseRecipe):
                 sas = str(config.get("sas_token", "")).strip()
                 key = str(config.get("account_key", "")).strip()
 
-                if auth_mode == "connection_string" and cs:
+                # Environment variable fallbacks
+                if not cs:
+                    cs = os.getenv("AZURE_STORAGE_CONNECTION_STRING", "")
+                if not key:
+                    key = os.getenv("AZURE_STORAGE_KEY", os.getenv("AZURE_STORAGE_ACCOUNT_KEY", ""))
+                if not sas:
+                    sas = os.getenv("AZURE_STORAGE_SAS_TOKEN", "")
+                if not account or account == "mystorageaccount":
+                    account = os.getenv("AZURE_STORAGE_ACCOUNT", os.getenv("AZURE_STORAGE_ACCOUNT_NAME", account))
+
+                if cs:
                     blob_service = BlobServiceClient.from_connection_string(cs)
-                elif auth_mode == "sas_token" and sas and account:
-                    account_url = f"https://{account}.blob.core.windows.net?{sas}"
-                    blob_service = BlobServiceClient(account_url=account_url)
-                elif auth_mode == "account_key" and key and account:
+                elif key and account:
                     account_url = f"https://{account}.blob.core.windows.net"
                     blob_service = BlobServiceClient(account_url=account_url, credential=key)
+                elif sas and account:
+                    clean_sas = sas.lstrip("?")
+                    account_url = f"https://{account}.blob.core.windows.net?{clean_sas}"
+                    blob_service = BlobServiceClient(account_url=account_url)
+                elif auth_mode == "sso" and account:
+                    sso_token = str(config.get("sso_token", "")).strip()
+                    if sso_token:
+                        account_url = f"https://{account}.blob.core.windows.net"
+                        blob_service = BlobServiceClient(account_url=account_url, credential=sso_token)
 
-                if blob_service:
-                    blob_client = blob_service.get_blob_client(container=container, blob=blob_path)
-                    downloader = blob_client.download_blob()
-                    stream = io.BytesIO(downloader.readall())
+                if not blob_service:
+                    raise ValidationException(
+                        "Azure Storage credentials missing. Please provide a Connection String, Account Key, or SAS Token."
+                    )
 
-                    if format_type == "parquet":
-                        df_live = pd.read_parquet(stream)
-                    elif format_type == "csv":
-                        df_live = pd.read_csv(stream)
-                    elif format_type == "jsonl":
-                        df_live = pd.read_json(stream, lines=True)
-                    else:
-                        df_live = pd.read_json(stream)
+                blob_client = blob_service.get_blob_client(container=container, blob=blob_path)
+                downloader = blob_client.download_blob()
+                stream = io.BytesIO(downloader.readall())
 
-                    if limit and len(df_live) > limit:
-                        df_live = df_live.iloc[:limit]
+                if format_type == "parquet":
+                    df_live = pd.read_parquet(stream)
+                elif format_type == "csv":
+                    df_live = pd.read_csv(stream)
+                elif format_type == "jsonl":
+                    df_live = pd.read_json(stream, lines=True)
+                else:
+                    df_live = pd.read_json(stream)
 
-                    records = df_live.to_dict(orient="records")
-                    delivery_status = "LIVE"
-                    status_msg = f"Successfully read {len(records)} records from Azure container '{container}' blob '{blob_path}'."
+                if limit and len(df_live) > limit:
+                    df_live = df_live.iloc[:limit]
+
+                records = df_live.to_dict(orient="records")
+                delivery_status = "LIVE"
+                status_msg = f"Successfully read {len(records)} records from Azure container '{container}' blob '{blob_path}'."
             except ImportError:
                 raise ValidationException("azure-storage-blob driver not installed. Please install 'azure-storage-blob' to connect to Azure Data Lake.")
+            except ValidationException:
+                raise
             except Exception as e:
                 logger.warning(f"Azure Data Lake connection failed: {e}")
                 raise ValidationException(f"Azure Data Lake Storage connection failed: {str(e)}")
@@ -376,15 +420,15 @@ class AzureDataLakeConnectorRecipe(BaseRecipe):
             "container": container,
             "blob_path": blob_path,
             "format": format_type,
-            "rows_retrieved": len(records),
-            "columns_count": col_count,
-            "duration_ms": duration_ms
+            "rows_retrieved": int(len(records)),
+            "columns_count": int(col_count),
+            "duration_ms": int(duration_ms)
         }
 
         metrics = {
-            "rows_retrieved": len(records),
-            "columns_count": col_count,
-            "duration_ms": duration_ms,
+            "rows_retrieved": int(len(records)),
+            "columns_count": int(col_count),
+            "duration_ms": int(duration_ms),
             "delivery_status": delivery_status
         }
 
