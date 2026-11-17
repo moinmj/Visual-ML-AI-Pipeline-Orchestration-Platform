@@ -3314,7 +3314,7 @@ async def get_test_step_table_preview(
     if db is not None:
         try:
             from backend.app.workflows.models import WorkflowExecution
-            res_we = await db.execute(select(WorkflowExecution).where(WorkflowExecution.execution_id == session_id))
+            res_we = await db.execute(select(WorkflowExecution).where(WorkflowExecution.id == session_id))
             we = res_we.scalar_one_or_none()
             if we and we.reports and isinstance(we.reports, dict):
                 for nr in we.reports.get("node_results", []):
@@ -3387,7 +3387,7 @@ async def get_test_step_table_preview(
     if (df is None or not isinstance(df, pd.DataFrame)) and db is not None:
         try:
             from backend.app.workflows.models import WorkflowExecution
-            res_we = await db.execute(select(WorkflowExecution).where(WorkflowExecution.execution_id == session_id))
+            res_we = await db.execute(select(WorkflowExecution).where(WorkflowExecution.id == session_id))
             we = res_we.scalar_one_or_none()
             if we and we.status != "FAILED" and we.step_snapshots and isinstance(we.step_snapshots, dict):
                 node_snap = we.step_snapshots.get(node_id)
@@ -3395,6 +3395,16 @@ async def get_test_step_table_preview(
                     df = pd.DataFrame(node_snap["preview_rows"])
         except Exception as ex:
             logger.debug(f"Could not load DB execution snapshot for preview: {ex}")
+
+    # 6. Final emergency fallback: if meta has preview_rows
+    if (df is None or not isinstance(df, pd.DataFrame)) and meta and meta.get("preview_rows"):
+        try:
+            df = pd.DataFrame(meta["preview_rows"])
+            cols = meta.get("columns")
+            if cols and isinstance(cols, list) and all(c in df.columns for c in cols):
+                df = df[cols]
+        except Exception:
+            pass
 
     if df is None or not isinstance(df, pd.DataFrame):
         raise HTTPException(
@@ -3409,8 +3419,13 @@ async def get_test_step_table_preview(
     page_df = df.iloc[skip:skip + limit].copy()
     for c in page_df.select_dtypes(include=["datetime", "datetimetz"]).columns:
         page_df[c] = page_df[c].dt.strftime("%Y-%m-%d %H:%M:%S")
-    clean_page = page_df.replace({float("nan"): None, float("inf"): None, float("-inf"): None})
-    clean_page = clean_page.where(pd.notnull(clean_page), None)
+
+    try:
+        clean_page = page_df.replace({float("nan"): None, float("inf"): None, float("-inf"): None})
+        clean_page = clean_page.where(pd.notnull(clean_page), None)
+        raw_rows = clean_page.to_dict(orient="records")
+    except Exception:
+        raw_rows = page_df.to_dict(orient="records")
 
     return {
         "execution_id": session_id,
@@ -3422,7 +3437,7 @@ async def get_test_step_table_preview(
         "limit": limit,
         "total_pages": total_pages,
         "columns": list(df.columns),
-        "data": [make_json_safe(r) for r in clean_page.to_dict(orient="records")]
+        "data": [make_json_safe(r) for r in raw_rows]
     }
 
 
@@ -3469,8 +3484,13 @@ async def get_node_table_data(
     page_df = df.iloc[skip:skip + limit].copy()
     for c in page_df.select_dtypes(include=["datetime", "datetimetz"]).columns:
         page_df[c] = page_df[c].dt.strftime("%Y-%m-%d %H:%M:%S")
-    clean_page = page_df.replace({float("nan"): None, float("inf"): None, float("-inf"): None})
-    clean_page = clean_page.where(pd.notnull(clean_page), None)
+
+    try:
+        clean_page = page_df.replace({float("nan"): None, float("inf"): None, float("-inf"): None})
+        clean_page = clean_page.where(pd.notnull(clean_page), None)
+        raw_rows = clean_page.to_dict(orient="records")
+    except Exception:
+        raw_rows = page_df.to_dict(orient="records")
 
     from backend.app.engine.execution.executor import make_json_safe
     return {
@@ -3483,7 +3503,7 @@ async def get_node_table_data(
         "limit": limit,
         "total_pages": total_pages,
         "columns": list(df.columns),
-        "data": [make_json_safe(r) for r in clean_page.to_dict(orient="records")]
+        "data": [make_json_safe(r) for r in raw_rows]
     }
 
 
