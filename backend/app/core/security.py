@@ -182,27 +182,27 @@ async def _load_session(sid: str) -> Optional[dict]:
     h = _hash(clean_sid)
     now = _utcnow()
 
-    # Development-mode bypass: Allow dev tokens or offline dev access when ENVIRONMENT == 'development'
+    # Development-mode bypass: Only active when DEV_AUTH_BYPASS is explicitly True AND environment is dev/local
     is_dev = str(getattr(settings, "ENVIRONMENT", "development")).lower() in ("development", "dev", "local") or getattr(settings, "DEBUG", False)
-    if is_dev and (clean_sid.lower() in ("dev", "dev-token", "development", "local", "superadmin", "test") or getattr(settings, "DEV_AUTH_BYPASS", False)):
-        if clean_sid.lower() in ("dev", "dev-token", "development", "local", "superadmin", "test"):
-            return _dev_user_row(clean_sid, now)
+    dev_bypass_enabled = is_dev and bool(getattr(settings, "DEV_AUTH_BYPASS", False))
+    if dev_bypass_enabled and clean_sid.lower() in ("dev", "dev-token", "development", "local", "superadmin", "test"):
+        return _dev_user_row(clean_sid, now)
 
     try:
         async with _um_sm()() as db:
             row = (await db.execute(_SESSION_SQL, {"sid": clean_sid, "h": h})).mappings().first()
             if row is None:
-                if is_dev and getattr(settings, "DEV_AUTH_BYPASS", False):
+                if dev_bypass_enabled:
                     return _dev_user_row(clean_sid, now)
                 return None
             if row["revoked_at"] is not None:
                 return None
             if row["expires_at"] <= now:
-                if is_dev and getattr(settings, "DEV_AUTH_BYPASS", False):
+                if dev_bypass_enabled:
                     return dict(row)
                 return None
             if row["last_seen_at"] + IDLE_TIMEOUT <= now:
-                if is_dev and getattr(settings, "DEV_AUTH_BYPASS", False):
+                if dev_bypass_enabled:
                     return dict(row)
                 return None
             if not row["user_active"] or row["user_deleted"]:
@@ -218,12 +218,12 @@ async def _load_session(sid: str) -> Optional[dict]:
                 await db.commit()
             return dict(row)
     except HTTPException:
-        if is_dev and getattr(settings, "DEV_AUTH_BYPASS", False):
+        if dev_bypass_enabled:
             return _dev_user_row(clean_sid, now)
         raise
     except Exception as e:
         logger.error("Session lookup against UM DB failed: %s", e)
-        if is_dev and getattr(settings, "DEV_AUTH_BYPASS", False):
+        if dev_bypass_enabled:
             return _dev_user_row(clean_sid, now)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -325,9 +325,10 @@ async def get_current_user(
         sid = cookie_sid.strip()
         from_cookie = True
 
-    # 3. Development environment convenience: auto-login with dev session if DEV_AUTH_BYPASS enabled
+    # 3. Development environment convenience: auto-login with dev session only if DEV_AUTH_BYPASS enabled
     is_dev = str(getattr(settings, "ENVIRONMENT", "development")).lower() in ("development", "dev", "local") or getattr(settings, "DEBUG", False)
-    if not sid and is_dev and getattr(settings, "DEV_AUTH_BYPASS", False):
+    dev_bypass_enabled = is_dev and bool(getattr(settings, "DEV_AUTH_BYPASS", False))
+    if not sid and dev_bypass_enabled:
         sid = "dev"
         from_cookie = False
 

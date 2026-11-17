@@ -38,8 +38,8 @@ async def test_extract_sid_prioritizes_header_over_cookie():
 
 
 @pytest.mark.asyncio
-async def test_dev_session_resolves_in_development_mode():
-    with patch.object(settings, "ENVIRONMENT", "development"):
+async def test_dev_session_resolves_in_development_mode_when_bypass_enabled():
+    with patch.object(settings, "ENVIRONMENT", "development"), patch.object(settings, "DEV_AUTH_BYPASS", True):
         user = await resolve_session("dev")
         assert user is not None
         assert user.sub == "1"
@@ -50,9 +50,18 @@ async def test_dev_session_resolves_in_development_mode():
 
 
 @pytest.mark.asyncio
+async def test_dev_session_rejected_in_production():
+    # In production, DEV_AUTH_BYPASS is False and ENVIRONMENT is production -> 'dev' token cannot bypass
+    with patch.object(settings, "ENVIRONMENT", "production"), patch.object(settings, "DEV_AUTH_BYPASS", False):
+        with patch("backend.app.core.security._um_sm", side_effect=Exception("UM DB Offline")):
+            with pytest.raises(HTTPException):
+                await resolve_session("dev")
+
+
+@pytest.mark.asyncio
 async def test_header_auth_skips_csrf_check():
     # A POST request with X-Session-Id header (explicit API client) must succeed without CSRF token
-    with patch.object(settings, "ENVIRONMENT", "development"):
+    with patch.object(settings, "ENVIRONMENT", "development"), patch.object(settings, "DEV_AUTH_BYPASS", True):
         with patch.object(settings, "SESSION_CSRF_ENABLED", True):
             scope = {
                 "type": "http",
@@ -72,7 +81,7 @@ async def test_header_auth_skips_csrf_check():
 @pytest.mark.asyncio
 async def test_swagger_docs_referer_exempt_from_csrf():
     # Even if authenticated via cookie only, Swagger UI (/docs) requests are exempt from CSRF
-    with patch.object(settings, "ENVIRONMENT", "development"):
+    with patch.object(settings, "ENVIRONMENT", "development"), patch.object(settings, "DEV_AUTH_BYPASS", True):
         with patch.object(settings, "SESSION_CSRF_ENABLED", True):
             scope = {
                 "type": "http",
@@ -92,7 +101,7 @@ async def test_swagger_docs_referer_exempt_from_csrf():
 @pytest.mark.asyncio
 async def test_cross_site_cookie_post_requires_csrf():
     # An untrusted cross-origin request using cookie must fail if CSRF token is missing
-    with patch.object(settings, "ENVIRONMENT", "development"):
+    with patch.object(settings, "ENVIRONMENT", "development"), patch.object(settings, "DEV_AUTH_BYPASS", True):
         with patch.object(settings, "SESSION_CSRF_ENABLED", True):
             scope = {
                 "type": "http",
