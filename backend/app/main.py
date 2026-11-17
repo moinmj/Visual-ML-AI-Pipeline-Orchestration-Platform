@@ -32,6 +32,7 @@ from backend.app.recipes.router import router as recipes_router
 from backend.app.workflows.router import router as workflows_router, ws_router as workflows_ws_router
 from backend.app.workflows.endpoint_router import endpoint_router
 from backend.app.recommendation.router import router as recommendation_router
+from backend.app.recommendation.agent_router import router as agent_recommendation_router
 from backend.app.templates.router import router as templates_router
 from backend.app.auth.router import router as auth_router
 from backend.app.tenant_data.router import router as tenant_data_router
@@ -165,6 +166,7 @@ app.include_router(recipes_router, prefix=settings.API_V1_STR)
 app.include_router(workflows_router, prefix=settings.API_V1_STR)
 app.include_router(workflows_ws_router, prefix=settings.API_V1_STR)
 app.include_router(recommendation_router, prefix=settings.API_V1_STR)
+app.include_router(agent_recommendation_router, prefix=settings.API_V1_STR)
 app.include_router(templates_router, prefix=settings.API_V1_STR)
 app.include_router(auth_router, prefix=settings.API_V1_STR)
 app.include_router(tenant_data_router, prefix=settings.API_V1_STR)

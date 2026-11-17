@@ -99,6 +99,20 @@ source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+#### Windows PowerShell
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+Copy-Item .env.example .env
+```
+
+Set `OPENAI_API_KEY` in `.env` to enable the OpenAI agent endpoints. The
+existing non-agent recommender works without an OpenAI key. Never commit or
+share the `.env` file.
+
 ### 2. Launch Interactive Whiteboard Studio
 ```bash
 streamlit run ui_prototype/app.py
@@ -121,6 +135,8 @@ service that owns the tenant database.
 ```bash
 pytest backend/tests -v
 ```
+In Windows PowerShell, with the virtual environment activated, use
+`python -m pytest backend\tests -v`.
 
 ---
 
@@ -133,10 +149,81 @@ pytest backend/tests -v
 | `POST` | `/api/v1/workflows/async-execute` | Dispatches long-running DAG jobs to the background worker pool and returns a tracking `job_id`. |
 | `GET` | `/api/v1/workflows/jobs/{job_id}` | Polls the runtime status, duration, and telemetry for an asynchronous workflow job. |
 | `POST` | `/api/v1/workflows/trigger/{path}` | Inbound webhook trigger ingesting live JSON event streams into the DAG entrypoint. |
+| `POST` | `/api/v1/agent/pipelines/plan` | Uses the registered recipe catalog to draft a classification or regression DAG for review. |
+| `POST` | `/api/v1/agent/pipelines/run` | Queues a bounded agent-led classification or regression search and immediately returns a `job_id`. |
+| `GET` | `/api/v1/agent/pipelines/jobs/{job_id}` | Polls the agent job and returns its result when complete. |
 | `POST` | `/api/v1/datasets/upload` | Ingests CSV, XLSX, or JSON files and automatically computes statistical quality profiles. |
 | `GET` | `/api/v1/datasets/{id}/profile` | Retrieves column-by-column missingness, distribution stats, and health scores. |
 | `GET` | `/api/v1/recipes/` | Lists the entire catalog of registered AI/ML and data-processing components. |
 | `GET` | `/api/v1/recipes/{id}/schema` | Retrieves JSON Schema definitions for dynamic frontend parameter form rendering. |
+
+### OpenAI recipe agent
+
+```json
+POST /api/v1/agent/pipelines/plan
+{
+  "dataset_id": "<uploaded-dataset-id>",
+  "request": "Predict house prices and compare suitable regression models",
+  "target_column": "price",
+  "task_type": "regression"
+}
+```
+
+`task_type` is optional: the planner can infer classification or regression
+from the request and dataset profile, and asks for clarification when it cannot
+choose safely. `/plan` returns clarification questions or a validated workflow
+for review. Recipe tools are generated from the registry; the planner can use
+registered preprocessing, NLP, and training recipes compatible with the
+selected supervised task. The complete recipe catalog is also included as
+planning context, while ingestion, splitting, and evaluation are controlled by
+the server.
+
+For autonomous execution, use `/run`:
+
+```json
+POST /api/v1/agent/pipelines/run
+{
+  "dataset_id": "<uploaded-dataset-id>",
+  "request": "Train and improve a regression model to predict house prices",
+  "target_column": "price",
+  "task_type": "regression",
+  "max_attempts": 5
+}
+```
+
+`/run` returns `202 Accepted` with a job ID; poll the `status_endpoint` in its
+response. The agent judges task-specific validation metrics, selects
+alternative registered recipes/configurations, and retries up to five times.
+Regression candidates use R2 (higher is better), falling back to RMSE (lower
+is better); classification candidates use balanced accuracy/F1. The best
+candidate is registered in MLflow only when accepted.
+
+Agent jobs run outside the API event loop in a bounded per-process worker pool.
+Defaults are two active jobs, sixteen queued jobs, and eight concurrent OpenAI
+requests; configure `AGENT_MAX_WORKERS`, `AGENT_MAX_QUEUED`, and
+`AGENT_MAX_OPENAI_CONCURRENT`. When capacity is full, the API returns
+`429 Too Many Requests` with `Retry-After`, rather than accepting unlimited
+work. Job state and queue are currently in process memory, so a server restart
+loses them and multiple API replicas do not share job state. Production
+horizontal scaling requires a shared durable queue and job store.
+
+The same validation split is used to compare candidates, so its score is not
+an unbiased final test score. Preprocessing recipes that learn values before
+splitting can also inflate that score; a separate final holdout and
+split-aware preprocessing are needed for production-grade evaluation.
+
+OpenAI receives the user's request, column names, aggregate schema/profile
+metadata, and scalar evaluation metrics—not dataset rows, category examples,
+or the dataset ID.
+
+The run endpoint is orchestrated with a LangGraph `StateGraph`: a planner
+agent proposes the first pipeline, the existing workflow executor runs it,
+and an evaluator/reviser agent either accepts the result, asks for
+clarification, or proposes another validated recipe configuration. This is a
+bounded, sequential agent graph—not a hierarchy of autonomous worker agents.
+Forecasting and anomaly-detection recipes are visible in the catalog, but
+their task-specific planning and validation flows are not yet enabled in this
+supervised agent endpoint.
 
 ---
 

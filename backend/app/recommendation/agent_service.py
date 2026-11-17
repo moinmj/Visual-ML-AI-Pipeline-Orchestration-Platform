@@ -1,0 +1,586 @@
+import json
+import threading
+from copy import deepcopy
+from typing import Any, Dict, List, Optional, Tuple
+
+import pandas as pd
+from jsonschema import ValidationError as JsonSchemaValidationError, validate
+from openai import AsyncOpenAI, OpenAIError
+
+import backend.app.recipes
+from backend.app.core.config import settings
+from backend.app.core.logging import logger
+from backend.app.engine.dag.graph import WorkflowEdge, WorkflowGraph, WorkflowNode
+from backend.app.profiling.profiler import DataProfiler
+from backend.app.recipes.base.registry import recipe_registry
+
+
+TRANSFORM_CATEGORIES = {"preprocessing", "nlp"}
+SUPPORTED_TASK_TYPES = ("classification", "regression")
+
+
+class AgentPlanningError(Exception):
+    """Raised when the model returns a plan that cannot safely become a workflow."""
+
+
+class AgentConfigurationError(AgentPlanningError):
+    """Raised when OpenAI credentials are not configured."""
+
+
+class AgentCapacityError(AgentPlanningError):
+    """Raised when the process has reached its OpenAI request concurrency limit."""
+
+
+_OPENAI_CAPACITY = threading.BoundedSemaphore(settings.AGENT_MAX_OPENAI_CONCURRENT)
+
+
+async def _request_openai_tools(
+    *,
+    messages: List[Dict[str, Any]],
+    tools: List[Dict[str, Any]],
+    operation: str,
+):
+    api_key = settings.OPENAI_API_KEY
+    if not api_key or not api_key.strip():
+        raise AgentConfigurationError(
+            "OpenAI is not configured. Set OPENAI_API_KEY to use the agent planner."
+        )
+    if not _OPENAI_CAPACITY.acquire(blocking=False):
+        raise AgentCapacityError("The agent's OpenAI request capacity is full; retry shortly.")
+
+    try:
+        async with AsyncOpenAI(
+            api_key=api_key,
+            timeout=30.0,
+            max_retries=2,
+        ) as client:
+            return await client.chat.completions.create(
+                model=settings.OPENAI_MODEL,
+                messages=messages,
+                tools=tools,
+                tool_choice="required",
+                parallel_tool_calls=True,
+            )
+    except OpenAIError as exc:
+        logger.error(f"OpenAI agent {operation} request failed: {exc}")
+        raise AgentPlanningError(f"OpenAI could not {operation}.") from exc
+    finally:
+        _OPENAI_CAPACITY.release()
+
+def build_dataset_context(df: pd.DataFrame) -> Dict[str, Any]:
+    """Return schema and aggregate profile only; never send data rows or category values."""
+    return build_dataset_context_from_profile(DataProfiler.profile_dataframe(df))
+
+
+def build_dataset_context_from_profile(profile: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep only the safe schema fields needed for planning from a stored data profile."""
+    columns = {}
+    profile_columns = profile.get("columns")
+    if not isinstance(profile_columns, dict):
+        profile_columns = {}
+    for column_name, metadata in profile_columns.items():
+        if not isinstance(metadata, dict):
+            continue
+        columns[column_name] = {
+            "inferred_type": metadata.get("inferred_type"),
+            "dtype": metadata.get("raw_dtype"),
+            "null_count": metadata.get("null_count"),
+            "null_percentage": metadata.get("null_percentage"),
+            "unique_count": metadata.get("unique_count"),
+        }
+
+    return {
+        "row_count": profile.get("row_count", 0),
+        "column_count": profile.get("column_count") or len(columns),
+        "columns": columns,
+    }
+
+
+def _recipe_tool_name(recipe_id: str) -> str:
+    return f"select_recipe_{recipe_id}"
+
+
+def _recipe_task_types(recipe_id: str) -> List[str]:
+    schema = recipe_registry.get(recipe_id).get_schema()
+    task_schema = schema.get("properties", {}).get("task_type", {})
+    supported = task_schema.get("enum")
+    if isinstance(supported, list):
+        return [task for task in SUPPORTED_TASK_TYPES if task in supported]
+    return []
+
+
+def _recipe_parameters(
+    recipe_id: str,
+    task_type: Optional[str] = None,
+) -> Dict[str, Any]:
+    recipe = recipe_registry.get(recipe_id)
+    schema = deepcopy(recipe.get_schema())
+    schema.setdefault("additionalProperties", False)
+
+    if recipe.category == "training":
+        properties = schema.setdefault("properties", {})
+        task_schema = properties.setdefault("task_type", {"type": "string"})
+        compatible_tasks = _recipe_task_types(recipe_id)
+        task_schema["enum"] = (
+            [task_type] if task_type in compatible_tasks else compatible_tasks
+        )
+        if not task_schema["enum"]:
+            raise AgentPlanningError(
+                f"Training recipe '{recipe_id}' does not support a supervised task."
+            )
+        task_schema["default"] = task_type or (
+            "classification" if "classification" in compatible_tasks else compatible_tasks[0]
+        )
+        required = schema.setdefault("required", [])
+        if "task_type" not in required:
+            required.append("task_type")
+    elif recipe_id == "categorical_encoder":
+        methods = schema.get("properties", {}).get("method", {}).get("enum", [])
+        schema["properties"]["method"]["enum"] = [
+            method for method in methods if method not in {"target", "woe"}
+        ]
+
+    return schema
+
+
+def build_agent_tools(
+    column_names: List[str],
+    task_type: Optional[str] = None,
+) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+    available_tasks = sorted(
+        {
+            task
+            for metadata in recipe_registry.list_all(category="training")
+            if "train_data" in metadata.input_types and "model" in metadata.output_types
+            for task in _recipe_task_types(metadata.recipe_id)
+        }
+    )
+    if task_type is not None and task_type not in available_tasks:
+        raise AgentPlanningError(f"Unsupported supervised task type '{task_type}'.")
+
+    tools: List[Dict[str, Any]] = [
+        {
+            "type": "function",
+            "function": {
+                "name": "choose_task_type",
+                "description": (
+                    "Choose the supervised learning task requested by the user. "
+                    "Use regression for a numeric continuous outcome and classification "
+                    "for a discrete class label. Ask the user if the intent is ambiguous."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "task_type": {
+                            "type": "string",
+                            "enum": [task_type] if task_type else available_tasks,
+                        },
+                        "reason": {"type": "string"},
+                    },
+                    "required": ["task_type", "reason"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "choose_target_column",
+                "description": "Choose the dataset column the user wants the model to predict.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "column": {"type": "string", "enum": column_names},
+                        "reason": {"type": "string"},
+                    },
+                    "required": ["column", "reason"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "ask_user",
+                "description": "Ask a concise clarification question when a safe plan cannot be made.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "question": {"type": "string"},
+                        "reason": {"type": "string"},
+                    },
+                    "required": ["question", "reason"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+    ]
+    tool_recipes: Dict[str, str] = {}
+
+    for metadata in recipe_registry.list_all():
+        is_transform = (
+            metadata.category in TRANSFORM_CATEGORIES
+            and "dataframe" in metadata.input_types
+            and "dataframe" in metadata.output_types
+        )
+        is_trainer = (
+            metadata.category == "training"
+            and "train_data" in metadata.input_types
+            and "model" in metadata.output_types
+            and bool(_recipe_task_types(metadata.recipe_id))
+            and (
+                task_type is None
+                or task_type in _recipe_task_types(metadata.recipe_id)
+            )
+        )
+        if not (is_transform or is_trainer):
+            continue
+
+        recipe = recipe_registry.get(metadata.recipe_id)
+        name = _recipe_tool_name(metadata.recipe_id)
+        tools.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": (
+                        f"Add the registered {recipe.category} recipe "
+                        f"'{recipe.name}'. {recipe.description}"
+                    ),
+                    "parameters": _recipe_parameters(metadata.recipe_id, task_type),
+                },
+            }
+        )
+        tool_recipes[name] = metadata.recipe_id
+
+    return tools, tool_recipes
+
+
+def build_agent_workflow(
+    dataset_id: str,
+    target_column: str,
+    recipe_selections: List[Tuple[str, Dict[str, Any]]],
+    task_type: str = "classification",
+) -> WorkflowGraph:
+    """Build and validate a supervised workflow from compatible registered recipes."""
+    if task_type not in SUPPORTED_TASK_TYPES:
+        raise AgentPlanningError(f"Unsupported supervised task type '{task_type}'.")
+    if recipe_registry.get("model_evaluator") is None:
+        raise AgentPlanningError("The model evaluator recipe is not registered.")
+
+    trainer_selections = []
+    preprocessing_selections = []
+    for recipe_id, config in recipe_selections:
+        recipe = recipe_registry.get(recipe_id)
+        try:
+            validate(config, _recipe_parameters(recipe_id, task_type))
+        except JsonSchemaValidationError as exc:
+            raise AgentPlanningError(
+                f"Invalid configuration for recipe '{recipe_id}': {exc.message}"
+            ) from exc
+
+        if recipe.category == "training":
+            if config.get("task_type") != task_type:
+                raise AgentPlanningError(
+                    f"Trainer '{recipe_id}' must use task type '{task_type}'."
+                )
+            trainer_selections.append((recipe_id, config))
+        elif recipe.category in TRANSFORM_CATEGORIES:
+            preprocessing_selections.append((recipe_id, config))
+        else:
+            raise AgentPlanningError(f"Recipe '{recipe_id}' is not supported by this planner.")
+
+    if len(trainer_selections) != 1:
+        raise AgentPlanningError("The plan must select exactly one compatible trainer.")
+
+    nodes = [
+        WorkflowNode(
+            id="agent_data",
+            recipe_id="csv_loader",
+            label="Uploaded dataset",
+            config={"dataset_id": dataset_id},
+        )
+    ]
+    edges = []
+    previous_node = "agent_data"
+
+    for index, (recipe_id, config) in enumerate(preprocessing_selections, start=1):
+        recipe = recipe_registry.get(recipe_id)
+        step_config = dict(config)
+        if "target_column" in recipe.get_schema().get("properties", {}):
+            step_config.setdefault("target_column", target_column)
+        node_id = f"agent_preprocess_{index}"
+        nodes.append(
+            WorkflowNode(
+                id=node_id,
+                recipe_id=recipe_id,
+                label=recipe.name,
+                config=step_config,
+            )
+        )
+        edges.append(WorkflowEdge(source=previous_node, target=node_id))
+        previous_node = node_id
+
+    nodes.extend(
+        [
+            WorkflowNode(
+                id="agent_split",
+                recipe_id="train_test_split",
+                label="Train / test split",
+                config={
+                    "target_column": target_column,
+                    "test_size": 0.2,
+                    "stratify": task_type == "classification",
+                    "random_state": 42,
+                },
+            ),
+            WorkflowNode(
+                id="agent_trainer",
+                recipe_id=trainer_selections[0][0],
+                label=recipe_registry.get(trainer_selections[0][0]).name,
+                config=trainer_selections[0][1],
+            ),
+            WorkflowNode(
+                id="agent_evaluator",
+                recipe_id="model_evaluator",
+                label=f"Evaluate {task_type} model",
+                config={
+                    "report_type": (
+                        "Regression Diagnostics (MAE, RMSE, R2, MAPE)"
+                        if task_type == "regression"
+                        else "Comprehensive (All Metrics + Confusion Matrix)"
+                    )
+                },
+            ),
+        ]
+    )
+    edges.extend(
+        [
+            WorkflowEdge(source=previous_node, target="agent_split"),
+            WorkflowEdge(source="agent_split", target="agent_trainer"),
+            WorkflowEdge(source="agent_split", target="agent_evaluator"),
+            WorkflowEdge(source="agent_trainer", target="agent_evaluator"),
+        ]
+    )
+
+    workflow = WorkflowGraph(nodes=nodes, edges=edges)
+    diagnostics = workflow.get_diagnostics()
+    if not diagnostics["is_valid"]:
+        raise AgentPlanningError(
+            "The generated recipe workflow is invalid: "
+            + " | ".join(diagnostics["errors"])
+        )
+    return workflow
+
+
+async def create_agent_plan(
+    dataset_id: str,
+    dataset_context: Dict[str, Any],
+    user_request: str,
+    requested_target: Optional[str],
+    requested_task_type: Optional[str] = None,
+) -> Dict[str, Any]:
+    column_names = list(dataset_context["columns"])
+    tools, tool_recipes = build_agent_tools(column_names, requested_task_type)
+    tool_schemas = {
+        tool["function"]["name"]: tool["function"]["parameters"]
+        for tool in tools
+    }
+    recipe_catalog = [
+        {
+            "recipe_id": metadata.recipe_id,
+            "name": metadata.name,
+            "category": metadata.category,
+            "description": metadata.description,
+            "input_types": metadata.input_types,
+            "output_types": metadata.output_types,
+        }
+        for metadata in recipe_registry.list_all()
+    ]
+    supported_tasks = sorted(
+        tools[0]["function"]["parameters"]["properties"]["task_type"]["enum"]
+    )
+    task_instruction = (
+        f"The user explicitly selected task type '{requested_task_type}'. "
+        "Use it and do not select a different task."
+        if requested_task_type
+        else f"Select the task type from the available options: {supported_tasks}. "
+        "If the request describes a different task family, explain the limitation and ask the user how to proceed."
+    )
+    target_instruction = (
+        f"The user explicitly selected target column '{requested_target}'. "
+        "Use it and do not select a different target."
+        if requested_target
+        else "Select a target column using choose_target_column. If the user's intent is ambiguous, call ask_user instead."
+    )
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a constrained supervised-pipeline planner. Use the supplied recipe tools "
+                "to select zero or more preprocessing steps followed by exactly one compatible "
+                "trainer. The server will add dataset loading, a train/test split used for candidate "
+                "validation, and model "
+                "evaluation. Call ask_user if required information is unclear. Never claim that a "
+                "model has been trained or saved during planning. Tool calls only draft a plan; they "
+                "do not execute recipes. Only choose recipe tools compatible with the selected task; "
+                "the recipe catalog is informational and does not authorize direct execution. "
+                "Avoid target encoding because it can leak labels. For classification, do not choose "
+                "a numeric target with many unique values without asking for confirmation. For "
+                "regression, require a numeric target. Do not request or infer raw data values. "
+                + task_instruction
+                + " "
+                + target_instruction
+            ),
+        },
+        {
+            "role": "user",
+            "content": json.dumps(
+                {
+                    "request": user_request,
+                    "dataset_profile": dataset_context,
+                    "registered_recipe_catalog": recipe_catalog,
+                },
+                ensure_ascii=True,
+            ),
+        },
+    ]
+
+    completion = await _request_openai_tools(
+        messages=messages,
+        tools=tools,
+        operation="create a pipeline plan",
+    )
+
+    if not completion.choices or not completion.choices[0].message.tool_calls:
+        raise AgentPlanningError("OpenAI returned no recipe selections for the pipeline plan.")
+
+    message = completion.choices[0].message
+    questions = []
+    selected_target = requested_target
+    selected_task_type = requested_task_type
+    recipe_selections = []
+    used_recipe_ids = set()
+
+    for tool_call in message.tool_calls:
+        function_name = tool_call.function.name
+        try:
+            arguments = json.loads(tool_call.function.arguments)
+        except json.JSONDecodeError as exc:
+            raise AgentPlanningError("OpenAI returned malformed recipe configuration.") from exc
+        if not isinstance(arguments, dict):
+            raise AgentPlanningError("OpenAI returned invalid tool arguments.")
+        try:
+            validate(arguments, tool_schemas[function_name])
+        except (KeyError, JsonSchemaValidationError) as exc:
+            raise AgentPlanningError("OpenAI returned invalid tool arguments.") from exc
+
+        if function_name == "ask_user":
+            questions.append(
+                {
+                    "question": arguments["question"],
+                    "reason": arguments["reason"],
+                }
+            )
+        elif function_name == "choose_task_type":
+            task = arguments.get("task_type")
+            if task not in supported_tasks:
+                raise AgentPlanningError("OpenAI selected a task type that is not supported.")
+            if requested_task_type and task != requested_task_type:
+                raise AgentPlanningError("OpenAI did not use the explicitly requested task type.")
+            if selected_task_type and task != selected_task_type:
+                raise AgentPlanningError("OpenAI returned conflicting task types.")
+            selected_task_type = task
+        elif function_name == "choose_target_column":
+            column = arguments.get("column")
+            if column not in column_names:
+                raise AgentPlanningError("OpenAI selected a target column not present in the dataset.")
+            if requested_target and column != requested_target:
+                raise AgentPlanningError("OpenAI did not use the explicitly requested target column.")
+            if selected_target and column != selected_target:
+                raise AgentPlanningError("OpenAI returned conflicting target columns.")
+            selected_target = column
+        elif function_name in tool_recipes:
+            recipe_id = tool_recipes[function_name]
+            if recipe_id in used_recipe_ids:
+                raise AgentPlanningError(f"OpenAI selected recipe '{recipe_id}' more than once.")
+            used_recipe_ids.add(recipe_id)
+            recipe_selections.append((recipe_id, arguments))
+        else:
+            raise AgentPlanningError("OpenAI returned a tool that is not available to the planner.")
+
+    if questions:
+        return {"status": "needs_clarification", "questions": questions}
+    if not selected_task_type:
+        return {
+            "status": "needs_clarification",
+            "questions": [
+                {
+                    "question": "Should the model classify categories or predict a numeric value?",
+                    "reason": "The request and dataset profile do not make the supervised task type clear.",
+                }
+            ],
+        }
+    if not selected_target:
+        return {
+            "status": "needs_clarification",
+            "questions": [
+                {
+                    "question": "Which column should the model predict?",
+                    "reason": "A supervised workflow requires a target column.",
+                }
+            ],
+        }
+    target_profile = dataset_context["columns"][selected_target]
+    unique_count = target_profile.get("unique_count")
+    if not isinstance(unique_count, (int, float)) or unique_count < 2:
+        return {
+            "status": "needs_clarification",
+            "questions": [
+                {
+                    "question": f"'{selected_target}' has fewer than two distinct values. Which target column should be used?",
+                    "reason": "A supervised target must contain at least two distinct values.",
+                }
+            ],
+        }
+    if (
+        selected_task_type == "regression"
+        and target_profile.get("inferred_type") != "numeric"
+    ):
+        return {
+            "status": "needs_clarification",
+            "questions": [
+                {
+                    "question": f"'{selected_target}' does not appear numeric. Which numeric column should be predicted for regression?",
+                    "reason": "The selected regression task requires a numeric target column.",
+                }
+            ],
+        }
+
+    workflow = build_agent_workflow(
+        dataset_id=dataset_id,
+        target_column=selected_target,
+        recipe_selections=recipe_selections,
+        task_type=selected_task_type,
+    )
+    return {
+        "status": "ready_for_review",
+        "task_type": selected_task_type,
+        "target_column": selected_target,
+        "summary": message.content or "A classification workflow was generated for review.",
+        "workflow": workflow.model_dump(),
+        "validation": workflow.get_diagnostics(),
+        "notes": (
+            [
+                "Some preprocessing recipes learn values before the train/test split in the current engine; "
+                "evaluation scores may be optimistic when those recipes are selected."
+            ]
+            if any(
+                recipe_registry.get(recipe_id).category in TRANSFORM_CATEGORIES
+                for recipe_id, _ in recipe_selections
+            )
+            else []
+        ),
+        "execution_endpoint": "/api/v1/workflows/execute",
+        "approval_required": True,
+    }
