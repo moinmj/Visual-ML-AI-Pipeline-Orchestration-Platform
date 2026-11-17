@@ -55,6 +55,7 @@ IDLE_TIMEOUT   = timedelta(minutes=int(getattr(settings, "SESSION_IDLE_MINUTES",
 _DB_TOUCH_INTERVAL = timedelta(seconds=60)
 
 _cookie_sec = APIKeyCookie(name=COOKIE_NAME, auto_error=False, description="Session ID cookie ('sid')")
+_session_hdr_sec = APIKeyHeader(name=SESSION_HEADER, auto_error=False, description="Session ID header ('X-Session-Id')")
 
 # ── read-only async connection to the User-Management database ────────────────
 _um_sessionmaker: Optional[async_sessionmaker] = None
@@ -156,21 +157,53 @@ _TOUCH_SQL = text("""
 """)
 
 
+def _dev_user_row(sid: str, now: datetime) -> dict:
+    return {
+        "session_id": sid,
+        "user_id": "1",
+        "tenant_id": 1,
+        "roles": ["Super Admin", "Tenant Admin", "Data Scientist", "ML Engineer"],
+        "permissions": ["*"],
+        "email": "dev@localhost",
+        "user_active": True,
+        "user_deleted": False,
+        "user_token_version": 1,
+        "session_token_version": 1,
+        "tenant_active": True,
+        "revoked_at": None,
+        "expires_at": now + timedelta(days=365),
+        "last_seen_at": now,
+    }
+
+
 async def _load_session(sid: str) -> Optional[dict]:
     """Return the validated session row (as a dict) for a raw cookie value, or None."""
     clean_sid = sid.strip()
     h = _hash(clean_sid)
     now = _utcnow()
+
+    # Development-mode bypass: Only active when DEV_AUTH_BYPASS is explicitly True AND environment is dev/local
+    is_dev = str(getattr(settings, "ENVIRONMENT", "development")).lower() in ("development", "dev", "local") or getattr(settings, "DEBUG", False)
+    dev_bypass_enabled = is_dev and bool(getattr(settings, "DEV_AUTH_BYPASS", False))
+    if dev_bypass_enabled and clean_sid.lower() in ("dev", "dev-token", "development", "local", "superadmin", "test"):
+        return _dev_user_row(clean_sid, now)
+
     try:
         async with _um_sm()() as db:
             row = (await db.execute(_SESSION_SQL, {"sid": clean_sid, "h": h})).mappings().first()
             if row is None:
+                if dev_bypass_enabled:
+                    return _dev_user_row(clean_sid, now)
                 return None
             if row["revoked_at"] is not None:
                 return None
             if row["expires_at"] <= now:
+                if dev_bypass_enabled:
+                    return dict(row)
                 return None
             if row["last_seen_at"] + IDLE_TIMEOUT <= now:
+                if dev_bypass_enabled:
+                    return dict(row)
                 return None
             if not row["user_active"] or row["user_deleted"]:
                 return None
@@ -185,9 +218,13 @@ async def _load_session(sid: str) -> Optional[dict]:
                 await db.commit()
             return dict(row)
     except HTTPException:
+        if dev_bypass_enabled:
+            return _dev_user_row(clean_sid, now)
         raise
     except Exception as e:
         logger.error("Session lookup against UM DB failed: %s", e)
+        if dev_bypass_enabled:
+            return _dev_user_row(clean_sid, now)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Authentication backend unavailable.",
@@ -268,20 +305,35 @@ def _extract_sid(request: Request) -> Tuple[Optional[str], bool]:
 
 async def get_current_user(
     request: Request,
+    header_sid: Annotated[Optional[str], Depends(_session_hdr_sec)] = None,
     cookie_sid: Annotated[Optional[str], Depends(_cookie_sec)] = None,
 ) -> TokenData:
     """
-    FastAPI dependency: validates the session cookie 'sid', returns the caller.
+    FastAPI dependency: validates the session cookie 'sid' or 'X-Session-Id' header, returns the caller.
 
     Downstream code always reads tenant_id from this object (never from a path/
     query param) so a caller can't request another tenant's data by changing an ID.
     """
-    sid = cookie_sid if isinstance(cookie_sid, str) else None
-    from_cookie = bool(sid)
+    # 1. Header or query param takes precedence (explicit API client like Swagger/Postman/curl)
+    sid, from_cookie = _extract_sid(request)
+    if not sid and header_sid:
+        sid = header_sid.strip()
+        from_cookie = False
+
+    # 2. Fall back to cookie (browser UI)
+    if not sid and cookie_sid:
+        sid = cookie_sid.strip()
+        from_cookie = True
+
+    # 3. Development environment convenience: auto-login with dev session only if DEV_AUTH_BYPASS enabled
+    is_dev = str(getattr(settings, "ENVIRONMENT", "development")).lower() in ("development", "dev", "local") or getattr(settings, "DEBUG", False)
+    dev_bypass_enabled = is_dev and bool(getattr(settings, "DEV_AUTH_BYPASS", False))
+    if not sid and dev_bypass_enabled:
+        sid = "dev"
+        from_cookie = False
+
     if not sid:
-        sid, from_cookie = _extract_sid(request)
-    if not sid:
-        raise _unauth("Not authenticated. Valid session cookie ('sid') required.")
+        raise _unauth("Not authenticated. Valid session cookie ('sid') or 'X-Session-Id' header required.")
 
     # Extract optional X-Tenant-ID for Super Admins
     x_tenant_hdr = (
@@ -303,9 +355,14 @@ async def get_current_user(
     if (from_cookie
             and getattr(settings, "SESSION_CSRF_ENABLED", True)
             and request.method not in SAFE_METHODS):
-        sent = request.headers.get(CSRF_HEADER) or ""
-        if not hmac.compare_digest(sent, _csrf_token_for(sid)):
-            raise HTTPException(status.HTTP_403_FORBIDDEN, "Missing or invalid CSRF token.")
+        sec_fetch = (request.headers.get("sec-fetch-site") or "").lower()
+        referer = (request.headers.get("referer") or "").lower()
+        # Exempt same-origin / internal Swagger docs requests from CSRF
+        is_safe_origin = sec_fetch in ("same-origin", "same-site") or "/docs" in referer
+        if not is_safe_origin:
+            sent = request.headers.get(CSRF_HEADER) or ""
+            if not hmac.compare_digest(sent, _csrf_token_for(sid)):
+                raise HTTPException(status.HTTP_403_FORBIDDEN, "Missing or invalid CSRF token.")
 
     return user
 

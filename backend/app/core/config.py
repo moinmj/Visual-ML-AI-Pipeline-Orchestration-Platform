@@ -73,6 +73,7 @@ class Settings(BaseSettings):
     SESSION_SECRET_KEY: str = "Z73MyQ5WFZNjAQYkIGqjxBR55xAMv7r/v/qv/dMhl121zVQYbC3Y3Hhx"
     SESSION_IDLE_MINUTES: int = 30
     SESSION_CSRF_ENABLED: bool = True
+    DEV_AUTH_BYPASS: bool = False
 
     # Export control (who may download / export data, and from where)
     # Comma-separated role names that may export or download data.

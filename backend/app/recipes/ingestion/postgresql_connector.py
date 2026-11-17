@@ -505,9 +505,10 @@ class PostgreSQLConnectorRecipe(BaseRecipe):
 
     def _resolve_connection_params(self, config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
         """Resolves database credentials, connection strings, and parameters from config or context."""
-        mode = str(
-            config.get("connection_mode", "host_port" if (config.get("host") and not config.get("connection_string")) else "connection_string" if config.get("connection_string") else "host_port")
-        ).strip().lower()
+        raw_mode = str(config.get("connection_mode") or "").strip().lower()
+        if not raw_mode:
+            raw_mode = "host_port" if (config.get("host") and not config.get("connection_string")) else "connection_string" if config.get("connection_string") else "host_port"
+        mode = raw_mode
         credential_id = str(config.get("credential_id", "")).strip()
 
         host = str(config.get("host", "localhost")).strip()
