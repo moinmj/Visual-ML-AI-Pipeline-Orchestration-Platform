@@ -19,8 +19,12 @@ from backend.app.recipes.base.recipe import BaseRecipe
 from backend.app.core.logging import logger
 
 
-FORBIDDEN_MODULES = {"subprocess", "shutil", "socket", "http", "urllib", "requests", "ctypes", "multiprocessing", "threading"}
-FORBIDDEN_CALLS = {"exit", "quit", "breakpoint"}
+FORBIDDEN_MODULES = {
+    "os", "sys", "pathlib", "subprocess", "shutil", "socket", "http", "urllib",
+    "requests", "ctypes", "multiprocessing", "threading", "posix", "nt", "platform",
+    "importlib", "builtins"
+}
+FORBIDDEN_CALLS = {"exit", "quit", "breakpoint", "eval", "exec", "compile", "open"}
 PACKAGE_NAME_REGEX = re.compile(r"^[a-zA-Z0-9_\-\.<=>~!+]+$")
 
 
