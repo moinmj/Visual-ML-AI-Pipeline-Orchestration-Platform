@@ -175,9 +175,13 @@ class NodeStepExecutor:
                 clean_head = primary_df.head(10).copy()
                 for c in clean_head.select_dtypes(include=["datetime", "datetimetz"]).columns:
                     clean_head[c] = clean_head[c].dt.strftime("%Y-%m-%d %H:%M:%S")
-                clean_head = clean_head.replace({float("nan"): None, float("inf"): None, float("-inf"): None})
-                clean_head = clean_head.where(pd.notnull(clean_head), None)
-                preview_rows = [make_json_safe(r) for r in clean_head.to_dict(orient="records")]
+                try:
+                    clean_head = clean_head.replace({float("nan"): None, float("inf"): None, float("-inf"): None})
+                    clean_head = clean_head.where(pd.notnull(clean_head), None)
+                    raw_head = clean_head.to_dict(orient="records")
+                except Exception:
+                    raw_head = clean_head.to_dict(orient="records")
+                preview_rows = [make_json_safe(r) for r in raw_head]
             except Exception:
                 pass
 
@@ -218,7 +222,10 @@ class NodeStepExecutor:
         # 1. Primary DataFrame
         df_file = sdir / f"node_{node_id}_df.parquet"
         if df_file.exists():
-            outputs["dataframe"] = pd.read_parquet(df_file)
+            try:
+                outputs["dataframe"] = pd.read_parquet(df_file)
+            except Exception as e:
+                logger.warning(f"Error loading primary parquet {df_file}: {e}")
 
         # 2. Port DataFrames
         for p_file in sdir.glob(f"node_{node_id}_port_*.parquet"):
