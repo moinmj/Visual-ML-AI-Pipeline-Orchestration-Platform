@@ -124,3 +124,64 @@ def test_mysql_error_diagnostics():
         context={}
     )
     assert diag_col["title"] == "Database Column Not Found"
+
+
+def test_mysql_live_execution_table_and_query_mock(monkeypatch):
+    """Verify live table and query execution construct valid SQL, execute cleanly, and deserialize fields."""
+    from unittest.mock import MagicMock
+    recipe = MySQLConnectorRecipe()
+
+    mock_cur = MagicMock()
+    mock_cur.fetchall.return_value = [
+        {"id": 1, "name": "MySQL Product", "is_active": b"\x01", "is_deleted": b"\x00"}
+    ]
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+
+    import pymysql
+    monkeypatch.setattr(pymysql, "connect", lambda **kwargs: mock_conn)
+
+    # 1. Live Table Mode execution
+    config_table = {
+        "read_mode": "table",
+        "table_name": "products",
+        "database": "store_db",
+        "simulation_mode": False,
+        "host": "localhost",
+        "port": 3306,
+        "username": "root",
+        "password": "pwd"
+    }
+
+    result = recipe.execute(inputs={}, config=config_table)
+    assert result is not None
+    assert "dataframe" in result
+    df = result["dataframe"]
+    assert len(df) == 1
+    assert bool(df["is_active"].iloc[0]) is True
+    assert bool(df["is_deleted"].iloc[0]) is False
+
+    # Verify query was constructed and executed
+    executed_q = mock_cur.execute.call_args[0][0]
+    assert "SELECT * FROM `products`" in executed_q
+
+    # 2. Live Custom Query Mode with trailing semicolon
+    config_query = {
+        "read_mode": "query",
+        "query": "SELECT id, name FROM products WHERE is_active = 1;\n",
+        "limit": 50,
+        "database": "store_db",
+        "simulation_mode": False,
+        "host": "localhost",
+        "port": 3306,
+        "username": "root",
+        "password": "pwd"
+    }
+
+    result_q = recipe.execute(inputs={}, config=config_query)
+    assert result_q is not None
+    assert "dataframe" in result_q
+    executed_sql = mock_cur.execute.call_args[0][0]
+    # Semicolon stripped and LIMIT appended cleanly
+    assert executed_sql == "SELECT id, name FROM products WHERE is_active = 1 LIMIT 50"
+
