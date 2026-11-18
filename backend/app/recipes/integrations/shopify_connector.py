@@ -54,11 +54,8 @@ class ShopifyConnectorRecipe(BaseRecipe):
         )
     ]
 
-    RESOURCE_ENDPOINTS = {
-        "Orders": "/admin/api/2024-01/orders.json",
-        "Products": "/admin/api/2024-01/products.json",
-        "Customers": "/admin/api/2024-01/customers.json"
-    }
+    API_VERSION = "2026-10"
+    GRAPHQL_ENDPOINT = "/admin/api/2026-10/graphql.json"
 
     def get_schema(self) -> Dict[str, Any]:
         return {
@@ -219,17 +216,204 @@ class ShopifyConnectorRecipe(BaseRecipe):
 
         return records
 
-    def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
+    def _graphql_request(self, base_url: str, access_token: str,
+                          query: str, variables: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute one Shopify Admin GraphQL request."""
+        url = f"{base_url}{self.GRAPHQL_ENDPOINT}"
+        payload = json.dumps({"query": query, "variables": variables}).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "X-Shopify-Access-Token": access_token,
+                "User-Agent": "Datarept-ML-Platform/1.0",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as response:
+                body = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Shopify GraphQL HTTP {exc.code}: {detail[:1000]}") from exc
+        except Exception as exc:
+            raise RuntimeError(f"Shopify GraphQL request failed: {exc}") from exc
+
+        if body.get("errors"):
+            messages = "; ".join(
+                item.get("message", "Unknown GraphQL error")
+                for item in body["errors"]
+            )
+            raise RuntimeError(f"Shopify GraphQL error: {messages}")
+        if body.get("data") is None:
+            raise RuntimeError("Shopify GraphQL response did not contain data.")
+        return body["data"]
+
+    @staticmethod
+    def _money(money_set: Any, key: str = "amount") -> str:
+        if not isinstance(money_set, dict):
+            return ""
+        shop_money = money_set.get("shopMoney") or {}
+        return str(shop_money.get(key, ""))
+
+    def _fetch_graphql_records(self, resource: str, base_url: str,
+                               access_token: str, limit: int,
+                               status_filter: str) -> List[Dict[str, Any]]:
+        """Fetch up to limit records with cursor pagination and normalize fields."""
+        if resource == "Orders":
+            query_filter = ""
+            if status_filter in ("open", "closed"):
+                query_filter = f"status:{status_filter}"
+            elif status_filter in ("paid", "pending"):
+                query_filter = f"financial_status:{status_filter}"
+            elif status_filter == "fulfilled":
+                query_filter = "fulfillment_status:fulfilled"
+
+            query = """
+            query Orders($first: Int!, $after: String, $search: String) {
+              orders(first: $first, after: $after, sortKey: CREATED_AT,
+                     reverse: true, query: $search) {
+                edges { cursor node {
+                  id name email createdAt updatedAt tags
+                  displayFinancialStatus displayFulfillmentStatus
+                  totalPriceSet { shopMoney { amount currencyCode } }
+                  subtotalPriceSet { shopMoney { amount } }
+                  lineItems(first: 250) {
+                    edges { node { quantity } }
+                  }
+                } }
+                pageInfo { hasNextPage endCursor }
+              }
+            }
+            """
+        elif resource == "Products":
+            query_filter = ""
+            if status_filter in ("active", "draft"):
+                query_filter = f"status:{status_filter}"
+            query = """
+            query Products($first: Int!, $after: String, $search: String) {
+              products(first: $first, after: $after, sortKey: CREATED_AT,
+                       reverse: true, query: $search) {
+                edges { cursor node {
+                  id title vendor productType status tags createdAt updatedAt
+                  variants(first: 1) {
+                    edges { node { sku price inventoryQuantity } }
+                  }
+                } }
+                pageInfo { hasNextPage endCursor }
+              }
+            }
+            """
+        elif resource == "Customers":
+            query_filter = ""
+            query = """
+            query Customers($first: Int!, $after: String, $search: String) {
+              customers(first: $first, after: $after, sortKey: CREATED_AT,
+                        reverse: true, query: $search) {
+                edges { cursor node {
+                  id firstName lastName email phone numberOfOrders
+                  amountSpent { amount currencyCode }
+                  state tags createdAt
+                } }
+                pageInfo { hasNextPage endCursor }
+              }
+            }
+            """
+        else:
+            raise ValueError(f"Unsupported Shopify resource: {resource}")
+
+        records: List[Dict[str, Any]] = []
+        cursor = None
+        connection_name = resource.lower()
+        while len(records) < limit:
+            page_size = min(250, limit - len(records))
+            data = self._graphql_request(
+                base_url, access_token, query,
+                {"first": page_size, "after": cursor, "search": query_filter or None},
+            )
+            connection = data.get(connection_name) or {}
+            edges = connection.get("edges") or []
+            for edge in edges:
+                node = edge.get("node") or {}
+                if resource == "Orders":
+                    total_set = node.get("totalPriceSet") or {}
+                    subtotal_set = node.get("subtotalPriceSet") or {}
+                    total_money = total_set.get("shopMoney") or {}
+                    records.append({
+                        "id": node.get("id", "").rsplit("/", 1)[-1],
+                        "order_number": node.get("name", "").lstrip("#"),
+                        "name": node.get("name", ""),
+                        "email": node.get("email") or "",
+                        "total_price": self._money(total_set),
+                        "subtotal_price": self._money(subtotal_set),
+                        "currency": total_money.get("currencyCode", ""),
+                        "financial_status": (node.get("displayFinancialStatus") or "").lower(),
+                        "fulfillment_status": (node.get("displayFulfillmentStatus") or "").lower(),
+                        "line_items_count": sum(
+                            int((item.get("node") or {}).get("quantity", 0))
+                            for item in ((node.get("lineItems") or {}).get("edges") or [])
+                        ),
+                        "tags": ", ".join(node.get("tags") or []),
+                        "created_at": node.get("createdAt"),
+                        "updated_at": node.get("updatedAt"),
+                    })
+                elif resource == "Products":
+                    variants = (node.get("variants") or {}).get("edges") or []
+                    variant = (variants[0].get("node") or {}) if variants else {}
+                    records.append({
+                        "id": node.get("id", "").rsplit("/", 1)[-1],
+                        "title": node.get("title", ""),
+                        "vendor": node.get("vendor", ""),
+                        "product_type": node.get("productType", ""),
+                        "status": (node.get("status") or "").lower(),
+                        "price": str(variant.get("price", "")),
+                        "sku": variant.get("sku") or "",
+                        "inventory_quantity": variant.get("inventoryQuantity", 0),
+                        "tags": ", ".join(node.get("tags") or []),
+                        "created_at": node.get("createdAt"),
+                        "updated_at": node.get("updatedAt"),
+                    })
+                else:
+                    spent = node.get("amountSpent") or {}
+                    records.append({
+                        "id": node.get("id", "").rsplit("/", 1)[-1],
+                        "first_name": node.get("firstName") or "",
+                        "last_name": node.get("lastName") or "",
+                        "email": node.get("email") or "",
+                        "phone": node.get("phone") or "",
+                        "orders_count": node.get("numberOfOrders", 0),
+                        "total_spent": str(spent.get("amount", "")),
+                        "currency": spent.get("currencyCode", ""),
+                        "state": (node.get("state") or "").lower(),
+                        "tags": ", ".join(node.get("tags") or []),
+                        "created_at": node.get("createdAt"),
+                    })
+                if len(records) >= limit:
+                    break
+
+            page_info = connection.get("pageInfo") or {}
+            if not page_info.get("hasNextPage") or not page_info.get("endCursor"):
+                break
+            cursor = page_info["endCursor"]
+        return records
+
+    def execute(self, inputs: Dict[str, Any], config: Dict[str, Any],
+                context: Optional[Any] = None) -> Dict[str, Any]:
         resource = str(config.get("resource", "Orders")).strip()
         shop_domain = str(config.get("shop_domain", "my-store")).strip()
-        access_token = str(config.get("access_token", "")).strip() or getattr(settings, "SHOPIFY_ACCESS_TOKEN", None) or os.getenv("SHOPIFY_ACCESS_TOKEN", "")
+        access_token = (
+            str(config.get("access_token", "")).strip()
+            or getattr(settings, "SHOPIFY_ACCESS_TOKEN", None)
+            or os.getenv("SHOPIFY_ACCESS_TOKEN", "")
+        )
         credential_id = str(config.get("credential_id", "")).strip()
         status_filter = str(config.get("status_filter", "All")).strip()
-        limit = int(config.get("record_limit", config.get("limit", 50)))
+        limit = max(1, min(int(config.get("record_limit", config.get("limit", 50))), 250))
         simulation_mode = bool(config.get("simulation_mode", config.get("simulate_if_no_auth", False)))
         output_format = str(config.get("output_format", "dataframe")).strip().lower()
 
-        # Resolve credentials if stored in context
         if credential_id and context and isinstance(context, dict):
             creds_store = context.get("credentials", {})
             if credential_id in creds_store:
@@ -238,79 +422,41 @@ class ShopifyConnectorRecipe(BaseRecipe):
                 access_token = c_data.get("access_token") or c_data.get("token") or access_token
                 shop_domain = c_data.get("shop_domain") or c_data.get("domain") or shop_domain
 
-        # Clean shop domain
-        if shop_domain.startswith("http://") or shop_domain.startswith("https://"):
+        if shop_domain.startswith(("http://", "https://")):
             base_url = shop_domain.rstrip("/")
         else:
             clean_shop = shop_domain.replace(".myshopify.com", "").strip()
             base_url = f"https://{clean_shop}.myshopify.com"
 
-        records: List[Dict[str, Any]] = []
-        delivery_status = "SIMULATED"
-        status_msg = ""
-        endpoint_path = self.RESOURCE_ENDPOINTS.get(resource, "/admin/api/2024-01/orders.json")
-
-        # Live API Call Attempt
-        if not simulation_mode and access_token and (access_token.startswith("shpat_") or len(access_token) >= 20) and not access_token.startswith("mock"):
-            try:
-                per_page = max(1, min(limit, 250))
-                query_params: Dict[str, Any] = {"limit": per_page}
-                if status_filter != "All":
-                    if resource == "Orders":
-                        query_params["status"] = status_filter
-                    elif resource == "Products":
-                        query_params["status"] = status_filter
-
-                encoded_params = urllib.parse.urlencode(query_params)
-                full_url = f"{base_url}{endpoint_path}?{encoded_params}"
-
-                headers = {
-                    "Accept": "application/json",
-                    "X-Shopify-Access-Token": access_token,
-                    "User-Agent": "Datarept-ML-Platform/1.0"
-                }
-
-                req = urllib.request.Request(full_url, headers=headers)
-                with urllib.request.urlopen(req, timeout=12) as response:
-                    if response.status == 200:
-                        raw_json = json.loads(response.read().decode("utf-8"))
-                        if resource == "Orders":
-                            records = raw_json.get("orders", [])
-                        elif resource == "Products":
-                            records = raw_json.get("products", [])
-                        elif resource == "Customers":
-                            records = raw_json.get("customers", [])
-                        else:
-                            for val in raw_json.values():
-                                if isinstance(val, list):
-                                    records = val
-                                    break
-
-                        delivery_status = "LIVE"
-                        status_msg = f"Retrieved {len(records)} live Shopify {resource} records from {base_url}."
-            except urllib.error.HTTPError as he:
-                err_body = ""
-                try:
-                    err_body = he.read().decode("utf-8")
-                except Exception:
-                    pass
-                logger.warning(f"Shopify API HTTP {he.code}: {err_body[:200]}")
-                status_msg = f"Shopify live API query failed (HTTP {he.code}). Using realistic benchmark fallback."
-            except Exception as ex:
-                logger.warning(f"Shopify connection failed: {ex}")
-                status_msg = f"Shopify live connection failed ({ex}). Using realistic benchmark fallback."
-
-        # Offline / Benchmark Fallback
-        if not records:
+        if simulation_mode:
             records = self._generate_benchmark_data(resource, limit, status_filter)
-            if not status_msg:
-                status_msg = f"Generated {len(records)} realistic Shopify {resource} benchmark records (Simulation Mode)."
-
-        # Convert to Pandas DataFrame
-        if pd is not None:
-            df_out = pd.DataFrame(records)
+            delivery_status = "SIMULATED"
+            status_msg = f"Generated {len(records)} benchmark {resource} records because Simulation Mode is enabled."
         else:
-            df_out = records
+            if not access_token:
+                raise RuntimeError(
+                    "Shopify access token is missing. Configure access_token or SHOPIFY_ACCESS_TOKEN, "
+                    "or explicitly enable Simulation Mode."
+                )
+            records = self._fetch_graphql_records(
+                resource, base_url, access_token, limit, status_filter
+            )
+            delivery_status = "LIVE"
+            status_msg = f"Retrieved {len(records)} live Shopify {resource} records from {base_url}."
+
+        # Keep a consistent schema even when Shopify legitimately returns zero records.
+        columns = {
+            "Orders": ["id", "order_number", "name", "email", "total_price", "subtotal_price",
+                       "currency", "financial_status", "fulfillment_status", "line_items_count",
+                       "tags", "created_at", "updated_at"],
+            "Products": ["id", "title", "vendor", "product_type", "status", "price", "sku",
+                         "inventory_quantity", "tags", "created_at", "updated_at"],
+            "Customers": ["id", "first_name", "last_name", "email", "phone", "orders_count",
+                          "total_spent", "currency", "state", "tags", "created_at"],
+        }
+        if resource not in columns:
+            raise ValueError(f"Unsupported Shopify resource: {resource}")
+        df_out = pd.DataFrame(records, columns=columns[resource]) if pd is not None else records
 
         summary = {
             "title": "Shopify E-commerce Read Summary",
@@ -319,14 +465,13 @@ class ShopifyConnectorRecipe(BaseRecipe):
             "resource": resource,
             "shop_domain": shop_domain,
             "records_retrieved": len(records),
-            "endpoint": endpoint_path
+            "endpoint": self.GRAPHQL_ENDPOINT,
         }
-
         metrics = {
             "shopify_resource": resource,
             "record_count": len(records),
             "delivery_status": delivery_status,
-            "shop_domain": shop_domain
+            "shop_domain": shop_domain,
         }
 
         if "json_dict" in output_format or output_format == "json dict":
@@ -336,32 +481,22 @@ class ShopifyConnectorRecipe(BaseRecipe):
         else:
             output_val = df_out
 
-        return {
-            "dataframe": df_out,
-            "output": output_val,
-            "output_summary": summary,
-            "metrics": metrics
-        }
+        return {"dataframe": df_out, "output": output_val,
+                "output_summary": summary, "metrics": metrics}
 
     def to_code(self, config: Dict[str, Any]) -> str:
         resource = config.get("resource", "Orders")
         shop = config.get("shop_domain", "my-store")
-        endpoint = self.RESOURCE_ENDPOINTS.get(resource, "/admin/api/2024-01/orders.json")
-        limit = config.get("record_limit", 50)
+        limit = max(1, min(int(config.get("record_limit", 50)), 250))
         return (
-            f"# Recipe: Shopify E-commerce Connector\n"
-            f"# ID: {self.recipe_id}\n"
-            f"import os\n"
-            f"import requests\n"
-            f"import pandas as pd\n\n"
-            f"url = 'https://{shop}.myshopify.com{endpoint}'\n"
-            f"headers = {{\n"
-            f"    'X-Shopify-Access-Token': os.getenv('SHOPIFY_ACCESS_TOKEN', ''),\n"
-            f"    'Accept': 'application/json'\n"
-            f"}}\n"
-            f"params = {{'limit': {limit}}}\n"
-            f"response = requests.get(url, headers=headers, params=params)\n"
-            f"data = response.json().get('{resource.lower()}', [])\n"
-            f"df = pd.DataFrame(data)\n"
+            "# Recipe: Shopify E-commerce Connector\n"
+            f"# Resource: {resource}\n"
+            f"# Store: {shop}\n"
+            "# Uses Shopify Admin GraphQL API 2026-10.\n"
+            "import os, requests, pandas as pd\n"
+            f"url = 'https://{shop}.myshopify.com{self.GRAPHQL_ENDPOINT}'\n"
+            "headers = {'X-Shopify-Access-Token': os.getenv('SHOPIFY_ACCESS_TOKEN', ''), "
+            "'Content-Type': 'application/json'}\n"
+            f"# Configure the resource-specific GraphQL query and paginate up to {limit} records.\n"
+            "raise NotImplementedError('Use the recipe runtime for the full GraphQL query and pagination.')\n"
         )
-
