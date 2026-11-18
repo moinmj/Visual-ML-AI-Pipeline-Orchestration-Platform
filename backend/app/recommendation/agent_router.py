@@ -7,7 +7,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.infrastructure.database.session import get_db
 from backend.app.datasets.service import dataset_service
-from backend.app.core.config import settings
 from backend.app.recommendation.agent_jobs import (
     AgentQueueFullError,
     agent_job_manager,
@@ -16,13 +15,14 @@ from backend.app.recommendation.agent_service import (
     AgentCapacityError,
     AgentConfigurationError,
     AgentPlanningError,
+    agent_provider_available,
     build_dataset_context,
     build_dataset_context_from_profile,
     create_agent_plan,
 )
 
 
-router = APIRouter(prefix="/agent/pipelines", tags=["OpenAI Recipe Agent"])
+router = APIRouter(prefix="/agent/pipelines", tags=["Recommendation Agent"])
 
 
 class AgentPlanRequest(BaseModel):
@@ -113,10 +113,10 @@ async def run_pipeline_with_agent(
     db: AsyncSession = Depends(get_db),
 ):
     """Queue an autonomous supervised-model search and return without waiting for training."""
-    if not settings.OPENAI_API_KEY or not settings.OPENAI_API_KEY.strip():
+    if not agent_provider_available():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="OpenAI is not configured. Set OPENAI_API_KEY to run the agent.",
+            detail="No recommendation-agent provider is configured. Set OPENAI_API_KEY or GROQ_API_KEY.",
         )
     dataset = await dataset_service.get_dataset(db, payload.dataset_id)
     try:

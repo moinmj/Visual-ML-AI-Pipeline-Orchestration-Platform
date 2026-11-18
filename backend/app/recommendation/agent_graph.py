@@ -20,7 +20,7 @@ from backend.app.recommendation.agent_service import (
     build_agent_tools,
     build_agent_workflow,
     create_agent_plan,
-    _request_openai_tools,
+    _request_agent_tools,
 )
 
 
@@ -144,14 +144,14 @@ async def _review_attempt(
             ),
         },
     ]
-    completion = await _request_openai_tools(
+    completion = await _request_agent_tools(
         messages=messages,
         tools=tools,
         operation="review the pipeline result",
     )
 
     if not completion.choices or not completion.choices[0].message.tool_calls:
-        raise AgentPlanningError("OpenAI returned no decision for the pipeline result.")
+        raise AgentPlanningError("The model returned no decision for the pipeline result.")
 
     recipe_selections = []
     questions = []
@@ -164,7 +164,7 @@ async def _review_attempt(
         try:
             arguments = json.loads(tool_call.function.arguments)
         except json.JSONDecodeError as exc:
-            raise AgentPlanningError("OpenAI returned malformed pipeline review arguments.") from exc
+            raise AgentPlanningError("The model returned malformed pipeline review arguments.") from exc
         if not isinstance(arguments, dict):
             raise AgentPlanningError("OpenAI returned invalid pipeline review arguments.")
         try:

@@ -17,6 +17,7 @@ from backend.app.recommendation.agent_jobs import (
 )
 from backend.app.recommendation.agent_service import (
     AgentPlanningError,
+    agent_provider_available,
     build_agent_tools,
     build_agent_workflow,
     build_dataset_context,
@@ -145,10 +146,12 @@ def test_agent_regression_workflow_executes_and_reports_regression_metrics():
 
 @pytest.mark.asyncio
 async def test_agent_plan_selects_regression_from_dynamic_recipe_catalog(monkeypatch):
-    monkeypatch.setattr(agent_graph.settings, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(agent_graph.settings, "OPENAI_API_KEY", None)
+    monkeypatch.setattr(agent_graph.settings, "GROQ_API_KEY", "test-key")
     completion = SimpleNamespace(
         choices=[
             SimpleNamespace(
+                finish_reason="tool_calls",
                 message=SimpleNamespace(
                     content="Use a regression trainer.",
                     tool_calls=[
@@ -184,13 +187,13 @@ async def test_agent_plan_selects_regression_from_dynamic_recipe_catalog(monkeyp
     )
     captured_messages = {}
 
-    async def fake_openai_request(**kwargs):
+    async def fake_groq_request(**kwargs):
         captured_messages.update(kwargs)
         return completion
 
     monkeypatch.setattr(
-        "backend.app.recommendation.agent_service._request_openai_tools",
-        fake_openai_request,
+        "backend.app.recommendation.agent_service._request_agent_tools",
+        fake_groq_request,
     )
     plan = await create_agent_plan(
         dataset_id="dataset-123",
@@ -212,6 +215,34 @@ async def test_agent_plan_selects_regression_from_dynamic_recipe_catalog(monkeyp
     catalog_message = captured_messages["messages"][1]["content"]
     assert "prophet_forecaster" in catalog_message
     assert "isolation_forest" in catalog_message
+
+
+def test_agent_prefers_openai_and_falls_back_to_groq(monkeypatch):
+    from backend.app.recommendation.agent_service import _get_agent_provider
+
+    monkeypatch.setattr(agent_graph.settings, "OPENAI_API_KEY", " openai-key ")
+    monkeypatch.setattr(agent_graph.settings, "OPENAI_MODEL", "test-openai-model")
+    monkeypatch.setattr(agent_graph.settings, "GROQ_API_KEY", "groq-key")
+    assert agent_provider_available()
+
+    assert _get_agent_provider() == (
+        "OpenAI",
+        "openai-key",
+        "test-openai-model",
+        None,
+    )
+
+    monkeypatch.setattr(agent_graph.settings, "OPENAI_API_KEY", " ")
+    assert agent_provider_available()
+    assert _get_agent_provider() == (
+        "Groq",
+        "groq-key",
+        agent_graph.settings.GROQ_MODEL,
+        "https://api.groq.com/openai/v1",
+    )
+
+    monkeypatch.setattr(agent_graph.settings, "GROQ_API_KEY", " ")
+    assert not agent_provider_available()
 
 
 def test_agent_rejects_invalid_recipe_config():
