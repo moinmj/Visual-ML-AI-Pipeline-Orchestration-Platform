@@ -9,6 +9,7 @@ structured JSON payloads for frontend UI, webhooks, or external integrations.
 from typing import Dict, Any, List, Optional, Union
 import json
 import os
+import secrets
 import time
 from pathlib import Path
 import numpy as np
@@ -17,6 +18,11 @@ import pandas as pd
 from backend.app.recipes.base.recipe import BaseRecipe, RecipePort
 from backend.app.core.config import settings
 from backend.app.core.logging import logger
+
+
+def generate_unique_api_key() -> str:
+    """Generates a cryptographically random, unique API secret key for endpoints."""
+    return f"crt-sec-{secrets.token_hex(12)}"
 
 
 # In-memory storage for rapid endpoint lookup by slug
@@ -184,9 +190,9 @@ class ApiResponseEndpointRecipe(BaseRecipe):
                 "api_key": {
                     "type": "string",
                     "title": "API Secret Key",
-                    "default": "crt-sec-9a8b7c6d5e",
-                    "description": "Custom secret key required when Authentication Requirement is set to 'API Key'. Callers provide this via 'X-API-Key' header or '?api_key=' parameter.",
-                    "input_type": "text"
+                    "default": generate_unique_api_key(),
+                    "description": "Unique secret key required when Authentication Requirement is set to 'API Key'. Callers provide this via 'X-API-Key' header.",
+                    "input_type": "password"
                 },
                 "manual_session_id": {
                     "type": "string",
@@ -239,9 +245,40 @@ class ApiResponseEndpointRecipe(BaseRecipe):
         status_code = int(config.get("http_status_code", 200))
         allow_cors = bool(config.get("allow_cors", True))
         auth_mode = str(config.get("auth_mode", "None (Public)"))
-        api_key = str(config.get("api_key", "crt-sec-9a8b7c6d5e")).strip()
+        raw_key = str(config.get("api_key", "")).strip()
+        if not raw_key or raw_key == "crt-sec-9a8b7c6d5e":
+            api_key = generate_unique_api_key()
+        else:
+            api_key = raw_key
         http_method = str(config.get("http_method", "Both (GET & POST)")).strip()
         cache_duration = int(config.get("cache_duration_seconds", 300))
+
+        # Context-aware resolution (workflow, execution, session)
+        workflow_id = None
+        execution_id = None
+        session_id = None
+
+        if context and isinstance(context, dict):
+            workflow_id = context.get("workflow_id")
+            execution_id = context.get("execution_id")
+            session_id = context.get("session_id") or context.get("auth_session_id")
+
+        try:
+            from backend.app.core.tenant_context import (
+                get_current_workflow_id,
+                get_current_execution_id,
+                get_current_session_id,
+            )
+            workflow_id = workflow_id or get_current_workflow_id()
+            execution_id = execution_id or get_current_execution_id()
+            session_id = session_id or get_current_session_id()
+        except Exception:
+            pass
+
+        # Allow explicit manual session override if provided in node config
+        manual_sid = str(config.get("manual_session_id", "")).strip()
+        if manual_sid:
+            session_id = manual_sid
 
         # Apply record limit
         sliced_df = df.head(record_limit) if record_limit > 0 else df
@@ -284,6 +321,8 @@ class ApiResponseEndpointRecipe(BaseRecipe):
             "allow_cors": allow_cors,
             "auth_mode": auth_mode,
             "api_key": api_key,
+            "session_id": session_id,
+            "auth_session_id": session_id,
             "cache_duration_seconds": cache_duration,
             "updated_at": time.time(),
             "columns": list(df.columns),
@@ -295,52 +334,18 @@ class ApiResponseEndpointRecipe(BaseRecipe):
 
         # 4. Cache payload for live endpoint retrieval
         store_cached_endpoint_payload(endpoint_path, endpoint_envelope)
-
-        # Base Domains
-        backend_base = getattr(settings, "BACKEND_PUBLIC_URL", "https://ml-crt.aiiotgeeks.com").rstrip("/")
-        frontend_base = getattr(settings, "FRONTEND_PUBLIC_URL", "https://crt.aiiotgeeks.com").rstrip("/")
-
-        # Context-aware resolution
-        workflow_id = None
-        execution_id = None
-        session_id = None
-
-        if context and isinstance(context, dict):
-            workflow_id = context.get("workflow_id")
-            execution_id = context.get("execution_id")
-            session_id = context.get("session_id") or context.get("auth_session_id")
-
-        try:
-            from backend.app.core.tenant_context import (
-                get_current_workflow_id,
-                get_current_execution_id,
-                get_current_session_id,
-            )
-            workflow_id = workflow_id or get_current_workflow_id()
-            execution_id = execution_id or get_current_execution_id()
-            session_id = session_id or get_current_session_id()
-        except Exception:
-            pass
-
-        # Allow explicit manual session override if provided in node config
-        manual_sid = str(config.get("manual_session_id", "")).strip()
-        if manual_sid:
-            session_id = manual_sid
-
         if workflow_id:
             composite_key = f"{workflow_id}:{endpoint_path}"
             store_cached_endpoint_payload(composite_key, endpoint_envelope)
             store_cached_endpoint_payload(str(workflow_id), endpoint_envelope)
 
-        # 5. Build Live Clickable URLs
-        api_v1_path = f"/api/v1/workflows/endpoints/{endpoint_path}"
+        # Base Domains
+        backend_base = getattr(settings, "BACKEND_PUBLIC_URL", "https://ml-crt.aiiotgeeks.com").rstrip("/")
+        frontend_base = getattr(settings, "FRONTEND_PUBLIC_URL", "https://crt.aiiotgeeks.com").rstrip("/")
 
-        # Direct Backend URL with auth query parameter
+        # 5. Build Live Clickable URLs (Clean Production URLs — No Secrets in Query Parameters)
+        api_v1_path = f"/api/v1/workflows/endpoints/{endpoint_path}"
         backend_live_url = f"{backend_base}{api_v1_path}"
-        if auth_mode == "API Key":
-            backend_live_url = f"{backend_base}{api_v1_path}?api_key={api_key}"
-        elif auth_mode == "Bearer Token / Session" and session_id:
-            backend_live_url = f"{backend_base}{api_v1_path}?session_id={session_id}"
 
         # Frontend Canvas URL with resolved workflow_id and executionId
         wf_slug = str(workflow_id).strip() if workflow_id else "default-flow"
@@ -349,56 +354,46 @@ class ApiResponseEndpointRecipe(BaseRecipe):
         else:
             frontend_canvas_url = f"{frontend_base}/workflows/canvas?workflow_id={wf_slug}"
 
-        # Frontend Flow URLs
-        ui_flow_path = f"/api/ui/flow/{wf_slug}/endpoints/{endpoint_path}"
-        ui_flow_full_url = f"{backend_base}{ui_flow_path}"
-        if auth_mode == "API Key":
-            ui_flow_full_url += f"?api_key={api_key}"
-        elif auth_mode == "Bearer Token / Session" and session_id:
-            ui_flow_full_url += f"?session_id={session_id}"
-
-        direct_flow_path = f"/api/ui/flow/{wf_slug}/endpoint"
-        direct_flow_full_url = f"{backend_base}{direct_flow_path}"
-        if auth_mode == "API Key":
-            direct_flow_full_url += f"?api_key={api_key}"
-        elif auth_mode == "Bearer Token / Session" and session_id:
-            direct_flow_full_url += f"?session_id={session_id}"
-
+        # Clean Production Spec Rows
         spec_rows = [
             {"Property": "Endpoint Path", "Configuration / Value": f"/{endpoint_path}", "Category": "Route"},
             {"Property": "Backend API URL (Clickable)", "Configuration / Value": backend_live_url, "Category": "Route"},
             {"Property": "Frontend Canvas URL", "Configuration / Value": frontend_canvas_url, "Category": "Route"},
-            {"Property": "Frontend Flow URL", "Configuration / Value": ui_flow_full_url, "Category": "Route"},
-            {"Property": "Direct Flow Endpoint", "Configuration / Value": direct_flow_full_url, "Category": "Route"},
             {"Property": "Allowed HTTP Method", "Configuration / Value": http_method, "Category": "Access"},
+            {"Property": "Auth Requirement", "Configuration / Value": auth_mode, "Category": "Access"},
+        ]
+
+        if auth_mode == "Bearer Token / Session":
+            spec_rows.append({
+                "Property": "Header Usage",
+                "Configuration / Value": "Authorization: Bearer <your_session_token> (or X-Session-Id: <token>)",
+                "Category": "Access"
+            })
+        elif auth_mode == "API Key":
+            spec_rows.append({
+                "Property": "Header Usage",
+                "Configuration / Value": "X-API-Key: <your_api_key>",
+                "Category": "Access"
+            })
+
+        spec_rows.extend([
             {"Property": "Response Format", "Configuration / Value": response_format, "Category": "Payload"},
             {"Property": "HTTP Status Code", "Configuration / Value": str(status_code), "Category": "Payload"},
             {"Property": "Served Records", "Configuration / Value": f"{len(raw_records)} / {orig_rows}", "Category": "Payload"},
             {"Property": "CORS Enabled", "Configuration / Value": "Yes (Access-Control-Allow-Origin: *)" if allow_cors else "Disabled", "Category": "Access"},
-            {"Property": "Auth Requirement", "Configuration / Value": auth_mode, "Category": "Access"},
             {"Property": "Cache Duration", "Configuration / Value": f"{cache_duration} seconds", "Category": "Caching"},
-        ]
-        if auth_mode == "Bearer Token / Session":
-            if session_id:
-                spec_rows.append({"Property": "Active Session ID", "Configuration / Value": session_id, "Category": "Access"})
-                spec_rows.append({"Property": "Authorization Header", "Configuration / Value": f"Bearer {session_id}", "Category": "Access"})
-                spec_rows.append({"Property": "Session Header", "Configuration / Value": f"X-Session-Id: {session_id}", "Category": "Access"})
-            else:
-                spec_rows.append({"Property": "Active Session ID", "Configuration / Value": "(Captured dynamically on execution)", "Category": "Access"})
-        elif auth_mode == "API Key":
-            spec_rows.append({"Property": "Required API Key", "Configuration / Value": api_key, "Category": "Access"})
-            spec_rows.append({"Property": "API Key Header", "Configuration / Value": f"X-API-Key: {api_key}", "Category": "Access"})
+        ])
 
         spec_df = pd.DataFrame(spec_rows)
 
         # Sample snippet for curl / frontend integration
         verb = "POST" if http_method == "POST" else "GET"
         if auth_mode == "API Key":
-            curl_example = f"curl -X {verb} \"{backend_live_url}\" -H \"X-API-Key: {api_key}\""
-            fetch_example = f"fetch('{backend_live_url}', {{ method: '{verb}' }}).then(r => r.json()).then(console.log);"
-        elif auth_mode == "Bearer Token / Session" and session_id:
-            curl_example = f"curl -X {verb} \"{backend_live_url}\" -H \"Authorization: Bearer {session_id}\""
-            fetch_example = f"fetch('{backend_live_url}', {{ method: '{verb}', headers: {{ 'Authorization': 'Bearer {session_id}' }} }}).then(r => r.json()).then(console.log);"
+            curl_example = f"curl -X {verb} \"{backend_live_url}\" -H \"X-API-Key: <your_api_key>\""
+            fetch_example = f"fetch('{backend_live_url}', {{ method: '{verb}', headers: {{ 'X-API-Key': '<your_api_key>' }} }}).then(r => r.json()).then(console.log);"
+        elif auth_mode == "Bearer Token / Session":
+            curl_example = f"curl -X {verb} \"{backend_live_url}\" -H \"Authorization: Bearer <your_session_token>\""
+            fetch_example = f"fetch('{backend_live_url}', {{ method: '{verb}', headers: {{ 'Authorization': 'Bearer <your_session_token>' }} }}).then(r => r.json()).then(console.log);"
         else:
             curl_example = f"curl -X {verb} \"{backend_live_url}?limit=10\""
             fetch_example = f"fetch('{backend_live_url}', {{ method: '{verb}' }}).then(r => r.json()).then(console.log);"
@@ -415,17 +410,14 @@ class ApiResponseEndpointRecipe(BaseRecipe):
                 "columns_count": len(df.columns),
                 "format": response_format,
                 "api_v1_url": backend_live_url,
-                "ui_flow_url": ui_flow_full_url,
-                "frontend_canvas_url": frontend_canvas_url,
-                "session_id": session_id if auth_mode == "Bearer Token / Session" else None
+                "auth_mode": auth_mode,
             },
             "output_summary": {
                 "title": f"API Endpoint: /{endpoint_path}",
                 "endpoint_url": backend_live_url,
                 "frontend_canvas_url": frontend_canvas_url,
-                "frontend_flow_url": ui_flow_full_url,
                 "http_methods": http_method,
-                "session_id": session_id if auth_mode == "Bearer Token / Session" else None,
+                "auth_mode": auth_mode,
                 "curl_command": curl_example,
                 "javascript_fetch": fetch_example,
                 "preview_sample": raw_records[:3] if raw_records else []
