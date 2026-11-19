@@ -32,12 +32,18 @@ from backend.app.recipes.ingestion.api_response_endpoint import (
 endpoint_router = APIRouter(tags=["Flow API Endpoints"])
 
 
-async def _check_endpoint_auth(request: Request, auth_mode: str, expected_api_key: Optional[str] = None) -> None:
+async def _check_endpoint_auth(
+    request: Request,
+    auth_mode: str,
+    expected_api_key: Optional[str] = None,
+    expected_session_id: Optional[str] = None,
+) -> None:
     """
     Validates authentication against the configured requirement of the node.
     - 'None (Public)': open to all clients.
-    - 'Bearer Token / Session': requires valid session cookie, header, or bearer token.
-    - 'API Key': requires X-API-Key header or ?api_key= parameter.
+    - 'Bearer Token / Session': requires valid session token passed via Authorization: Bearer <token>,
+      X-Session-Id header, or session cookie.
+    - 'API Key': requires X-API-Key header (or Authorization: Bearer <key> / ?api_key= parameter).
     """
     mode = (auth_mode or "None (Public)").strip()
 
@@ -48,9 +54,21 @@ async def _check_endpoint_auth(request: Request, auth_mode: str, expected_api_ke
         api_key = (
             request.headers.get("X-API-Key")
             or request.headers.get("x-api-key")
+            or request.headers.get("api-key")
+            or request.headers.get("api_key")
             or request.query_params.get("api_key")
             or request.query_params.get("key")
         )
+        if not api_key:
+            auth_header = request.headers.get("Authorization") or request.headers.get("authorization") or ""
+            if auth_header:
+                if auth_header.lower().startswith("bearer "):
+                    api_key = auth_header[7:].strip()
+                elif auth_header.lower().startswith("apikey "):
+                    api_key = auth_header[7:].strip()
+                elif not auth_header.lower().startswith("basic "):
+                    api_key = auth_header.strip()
+
         if not api_key:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -67,16 +85,47 @@ async def _check_endpoint_auth(request: Request, auth_mode: str, expected_api_ke
         from backend.app.core.security import _extract_sid, resolve_session
         sid, _ = _extract_sid(request)
         if not sid:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Authentication required: Provide a valid session cookie ('sid'), 'X-Session-Id' header, or 'Authorization: Bearer <token>'.",
+            # Check additional header variations commonly used in Postman & REST clients
+            sid = (
+                request.headers.get("X-Session-Id")
+                or request.headers.get("x-session-id")
+                or request.headers.get("Session-Id")
+                or request.headers.get("session-id")
+                or request.headers.get("session_id")
+                or request.headers.get("X-Session-Token")
+                or request.headers.get("session-token")
+                or request.headers.get("X-Auth-Token")
             )
-        try:
-            await resolve_session(sid)
-        except Exception as ex:
+            if not sid:
+                auth = request.headers.get("Authorization") or request.headers.get("authorization") or ""
+                if auth.lower().startswith("bearer "):
+                    sid = auth[7:].strip()
+                elif auth and not auth.lower().startswith("basic "):
+                    sid = auth.strip()
+
+        if not sid:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=f"Invalid or expired authentication session: {ex}",
+                detail="Authentication required: Provide a valid session token via 'Authorization: Bearer <token>' or 'X-Session-Id' header.",
+            )
+
+        clean_sid = sid.strip()
+
+        # 1. Fast match: if caller provided the exact session ID recorded during node execution
+        if expected_session_id and clean_sid == str(expected_session_id).strip():
+            return
+
+        # 2. General validation: check against active database sessions
+        try:
+            await resolve_session(clean_sid)
+            return
+        except Exception:
+            # If resolve_session fails (e.g. UM DB offline or mock) but matches expected_session_id
+            if expected_session_id and clean_sid == str(expected_session_id).strip():
+                return
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired session token. Please provide an active session token in the 'Authorization: Bearer <token>' or 'X-Session-Id' header.",
             )
 
 
@@ -250,7 +299,13 @@ async def _resolve_endpoint_response(
     # Step 3: Validate authentication
     auth_mode = cached.get("auth_mode", "None (Public)")
     expected_api_key = cached.get("api_key")
-    await _check_endpoint_auth(request, auth_mode, expected_api_key=expected_api_key)
+    expected_session_id = cached.get("session_id") or cached.get("auth_session_id")
+    await _check_endpoint_auth(
+        request,
+        auth_mode,
+        expected_api_key=expected_api_key,
+        expected_session_id=expected_session_id,
+    )
 
     # Step 4: Extract and format payload
     raw_data = cached.get("data")
