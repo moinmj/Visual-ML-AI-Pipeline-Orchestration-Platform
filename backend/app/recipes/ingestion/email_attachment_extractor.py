@@ -252,7 +252,7 @@ class EmailAttachmentExtractorRecipe(BaseRecipe):
         import imaplib
 
         attachments: List[Dict[str, Any]] = []
-        mail = imaplib.IMAP4_SSL(server, port, timeout=4.0)
+        mail = imaplib.IMAP4_SSL(server, port, timeout=15.0)
         try:
             mail.login(username, password)
             mail.select(folder)
@@ -470,9 +470,12 @@ class EmailAttachmentExtractorRecipe(BaseRecipe):
                     mark_as_read=mark_as_read,
                 )
             except Exception as e:
-                logger.warning(f"IMAP connection to {imap_server}:{port} failed: {e}")
+                err_str = str(e)
+                if "AUTHENTICATIONFAILED" in err_str and "gmail" in imap_server.lower():
+                    err_str += " (Hint: Google requires a 16-character App Password when 2FA is active. Regular account passwords are not accepted over IMAP)."
+                logger.warning(f"IMAP connection to {imap_server}:{port} failed: {err_str}")
                 if not simulation_fallback:
-                    raise ExecutionException(f"Failed connecting to IMAP server '{imap_server}:{port}': {e}")
+                    raise ExecutionException(f"Failed connecting to IMAP server '{imap_server}:{port}': {err_str}")
                 attachments = self._generate_synthetic_attachments(attachment_pattern, max_emails)
                 is_simulation = True
 
