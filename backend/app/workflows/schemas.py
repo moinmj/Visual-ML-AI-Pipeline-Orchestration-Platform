@@ -235,6 +235,8 @@ class NodeInferredSchema(BaseModel):
     available_left_columns: List[str] = Field(default_factory=list)
     available_right_columns: List[str] = Field(default_factory=list)
     ports: Dict[str, NodePortSchema] = Field(default_factory=dict)
+    saved_credential_id: Optional[str] = Field(None, description="ID of newly saved credential if save_credential was enabled")
+    saved_credential_name: Optional[str] = Field(None, description="Name of newly saved credential if save_credential was enabled")
 
 
 class WorkflowInferSchemaRequest(BaseModel):
@@ -282,6 +284,8 @@ class NodeTestStepResponse(BaseModel):
     available_left_columns: List[str] = Field(default_factory=list)
     available_right_columns: List[str] = Field(default_factory=list)
     ports: Dict[str, NodePortSchema] = Field(default_factory=dict)
+    saved_credential_id: Optional[str] = Field(None, description="ID of newly saved credential if save_credential was enabled")
+    saved_credential_name: Optional[str] = Field(None, description="Name of newly saved credential if save_credential was enabled")
 
 
 class SessionClearResponse(BaseModel):

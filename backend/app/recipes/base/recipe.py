@@ -185,6 +185,92 @@ class BaseRecipe(ABC):
                 else:
                     prop_data["input_type"] = "text"
 
+        schema = cls.enrich_credential_management_schema(schema)
+        return schema
+
+    @classmethod
+    def enrich_credential_management_schema(cls, schema: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Dynamically enriches schemas for recipes requiring authentication/credentials
+        with a 'save_credential' toggle and 'credential_name' input so users can save
+        credentials directly from the canvas settings drawer without a separate API.
+        """
+        if not isinstance(schema, dict):
+            return schema
+
+        props = schema.get("properties")
+        if not isinstance(props, dict):
+            return schema
+
+        # Check if already defined
+        if "save_credential" in props:
+            return schema
+
+        # Check if this recipe takes credentials or connection parameters
+        cred_trigger_keywords = (
+            "credential_id", "password", "api_key", "secret_key", "sasl_password",
+            "access_token", "auth_token", "account_key", "private_key", "client_secret",
+            "app_password", "connection_mode", "bot_token", "api_token"
+        )
+        has_credentials = any(
+            any(kw in k.lower() for kw in cred_trigger_keywords)
+            for k in props.keys()
+        )
+
+        if not has_credentials:
+            return schema
+
+        # Find target section if sections exist
+        target_section = None
+        sections = schema.get("sections")
+        if isinstance(sections, list) and sections:
+            section_ids = [s.get("id") for s in sections if isinstance(s, dict)]
+            for cand in ("connection", "credentials", "auth", "authentication", "security"):
+                if cand in section_ids:
+                    target_section = cand
+                    break
+            if not target_section:
+                # Find section of the first credential property
+                for k, v in props.items():
+                    if isinstance(v, dict) and any(kw in k.lower() for kw in cred_trigger_keywords):
+                        target_section = v.get("section")
+                        if target_section:
+                            break
+
+        save_cred_prop: Dict[str, Any] = {
+            "type": "boolean",
+            "title": "Save Credential for Future Use",
+            "input_type": "toggle",
+            "default": False,
+            "description": "Securely encrypt and save these credentials in your workspace vault for reuse across other pipelines."
+        }
+        if target_section:
+            save_cred_prop["section"] = target_section
+        if "connection_mode" in props:
+            save_cred_prop["visible_when"] = {
+                "field": "connection_mode",
+                "not_equals": "credential"
+            }
+
+        cred_name_prop: Dict[str, Any] = {
+            "type": "string",
+            "title": "Saved Credential Name",
+            "input_type": "text",
+            "placeholder": "e.g. My Saved Credential",
+            "description": "Friendly name to identify this stored credential in the platform vault.",
+            "visible_when": {
+                "field": "save_credential",
+                "equals": True
+            }
+        }
+        if target_section:
+            cred_name_prop["section"] = target_section
+
+        if "save_credential" not in props:
+            props["save_credential"] = save_cred_prop
+        if "credential_name" not in props:
+            props["credential_name"] = cred_name_prop
+
         return schema
 
     def __init_subclass__(cls, **kwargs):

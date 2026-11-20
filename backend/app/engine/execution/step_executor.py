@@ -432,7 +432,14 @@ class NodeStepExecutor:
             if isinstance(override_cfg, dict) and "config" in override_cfg and isinstance(override_cfg["config"], dict):
                 inner_cfg = override_cfg["config"]
                 override_cfg = {**override_cfg, **inner_cfg}
-            merged_config = {**n_obj.get("config", {}), **override_cfg}
+            node_base_cfg = (
+                n_obj.get("config")
+                or (n_obj.get("data", {}).get("config") if isinstance(n_obj.get("data"), dict) else None)
+                or (n_obj.get("data", {}).get("parameters") if isinstance(n_obj.get("data"), dict) else None)
+                or n_obj.get("parameters")
+                or {}
+            )
+            merged_config = {**node_base_cfg, **override_cfg}
             if dry_run and is_target:
                 merged_config["dry_run"] = True
 
@@ -576,6 +583,28 @@ class NodeStepExecutor:
                 session_context["workflow_id"] = get_current_workflow_id() or session_id
                 session_context["execution_id"] = get_current_execution_id() or session_id
                 session_context["auth_session_id"] = get_current_session_id()
+
+                # Resolve credential from vault if credential_id is provided
+                cred_id = str(merged_config.get("credential_id", "")).strip()
+                if cred_id:
+                    try:
+                        from backend.app.credentials.service import CredentialService
+                        if db is not None:
+                            stored_cred = await CredentialService.get_credential_data(db=db, credential_id=cred_id, tenant_id=tenant_id)
+                        else:
+                            from backend.app.infrastructure.database.session import AsyncSessionLocal
+                            async with AsyncSessionLocal() as session:
+                                stored_cred = await CredentialService.get_credential_data(db=session, credential_id=cred_id, tenant_id=tenant_id)
+                        if stored_cred and isinstance(stored_cred, dict):
+                            if "credentials" not in session_context:
+                                session_context["credentials"] = {}
+                            session_context["credentials"][cred_id] = stored_cred
+                            for ck, cv in stored_cred.items():
+                                if ck not in merged_config or not merged_config[ck]:
+                                    merged_config[ck] = cv
+                    except Exception as cred_res_err:
+                        logger.warning(f"Failed to resolve credential '{cred_id}' for node '{nid}': {cred_res_err}")
+
                 outputs = await asyncio.to_thread(
                     recipe.execute,
                     inputs=node_inputs,
@@ -583,6 +612,59 @@ class NodeStepExecutor:
                     context=session_context
                 )
                 duration_ms = round((time.time() - n_start) * 1000.0, 2)
+
+                # Auto-save credential if save_credential toggle was enabled and execution succeeded
+                saved_cred_id = None
+                saved_cred_name = None
+                if bool(merged_config.get("save_credential", False)):
+                    try:
+                        from backend.app.credentials.service import CredentialService
+                        provider = r_id.replace("_connector", "").lower()
+                        saved_cred_name = (
+                            str(merged_config.get("credential_name", "")).strip()
+                            or f"{getattr(recipe, 'name', r_id)} ({merged_config.get('host') or merged_config.get('database') or merged_config.get('username') or 'Connection'})"
+                        )
+                        cred_payload = {
+                            k: v for k, v in merged_config.items()
+                            if k not in (
+                                "save_credential", "credential_name", "tenant_id", "dry_run",
+                                "sample_size", "auto_run_ancestors", "simulation_mode"
+                            ) and v is not None and v != ""
+                        }
+                        safe_meta = {
+                            k: merged_config[k]
+                            for k in ("host", "port", "database", "username", "account", "warehouse", "ssl_mode", "bucket", "project_id", "email")
+                            if k in merged_config and merged_config[k]
+                        }
+                        auth_type = "database" if "database" in getattr(recipe, "subgroup", "").lower() else "basic"
+
+                        if db is not None:
+                            cred_obj = await CredentialService.create_credential(
+                                db=db,
+                                provider=provider,
+                                name=saved_cred_name,
+                                data=cred_payload,
+                                tenant_id=tenant_id,
+                                metadata_info=safe_meta,
+                                auth_type=auth_type,
+                            )
+                        else:
+                            from backend.app.infrastructure.database.session import AsyncSessionLocal
+                            async with AsyncSessionLocal() as session:
+                                cred_obj = await CredentialService.create_credential(
+                                    db=session,
+                                    provider=provider,
+                                    name=saved_cred_name,
+                                    data=cred_payload,
+                                    tenant_id=tenant_id,
+                                    metadata_info=safe_meta,
+                                    auth_type=auth_type,
+                                )
+                        if cred_obj:
+                            saved_cred_id = cred_obj.id
+                            saved_cred_name = cred_obj.name
+                    except Exception as save_err:
+                        logger.warning(f"Failed to auto-save credential for node '{nid}': {save_err}")
 
                 # Save output to session cache
                 meta = cls.save_node_output(
@@ -594,6 +676,10 @@ class NodeStepExecutor:
                     available_left_columns=available_left_cols,
                     available_right_columns=available_right_cols
                 )
+
+                if saved_cred_id and isinstance(meta.get("output_summary"), dict):
+                    meta["output_summary"]["saved_credential_id"] = saved_cred_id
+                    meta["output_summary"]["saved_credential_name"] = saved_cred_name
 
                 response = NodeTestStepResponse(
                     success=True,
@@ -610,7 +696,9 @@ class NodeStepExecutor:
                     output_summary=meta.get("output_summary", {}),
                     metrics=meta.get("metrics"),
                     available_left_columns=available_left_cols,
-                    available_right_columns=available_right_cols
+                    available_right_columns=available_right_cols,
+                    saved_credential_id=saved_cred_id,
+                    saved_credential_name=saved_cred_name
                 )
                 return outputs, response
 
