@@ -159,6 +159,25 @@ def diagnose_execution_error(
             "message": err_str,
             "suggestion": "Check the custom SQL query for syntax issues. Ensure there are no dangling semicolons, unclosed quotes, or invalid clauses before pagination limits."
         }
+    # 9b. Message Broker & Streaming Connectivity (RabbitMQ, Kafka, MQTT, WebSockets)
+    is_streaming_or_broker = (
+        getattr(recipe, "subgroup", "") == "Streaming & Change Data"
+        or any(k in err_str.lower() for k in ["rabbitmq", "pika", "amqp", "kafka", "mqtt", "broker"])
+        or any(k in rec_name.lower() for k in ["rabbitmq", "kafka", "mqtt", "websocket", "streaming"])
+    )
+    if is_streaming_or_broker and any(c in err_str.lower() for c in ["connection refused", "broker", "failed connecting", "unreachable", "amqpconnectionerror", "timed out", "nobrokersavailable", "accessrefused", "login was refused", "authentication", "credential"]):
+        if any(a in err_str.lower() for a in ["accessrefused", "login was refused", "authentication", "credential", "permission denied", "auth failed"]):
+            return {
+                "title": "Message Broker Authentication Failed",
+                "message": f"Authentication rejected by {rec_name} broker: {err_str}",
+                "suggestion": "Verify your username, password, and virtual host settings in the processor configuration."
+            }
+        return {
+            "title": f"{rec_name} Broker Unreachable",
+            "message": f"Could not establish connection to the message broker: {err_str}",
+            "suggestion": "Verify that the message broker host and port are active, accessible from this server, and not blocked by firewall rules. Alternatively, enable Simulation Mode for demo runs."
+        }
+
     if any(k in err_str for k in ["Can't connect to MySQL server", "could not connect to server", "Connection refused", "OperationalError"]):
         return {
             "title": "Database Server Unreachable",
@@ -166,11 +185,21 @@ def diagnose_execution_error(
             "suggestion": "Verify the server host IP and port (e.g. 3306 for MySQL, 5432 for PostgreSQL) and ensure server firewall allows inbound connections."
         }
 
-    # Default fallback
+    # Default fallback (aware of source vs transformation nodes)
+    is_source = (
+        getattr(recipe, "category", "") == "ingestion"
+        or not getattr(recipe, "input_types", None)
+        or len(getattr(recipe, "input_types", [])) == 0
+    )
+    fallback_suggestion = (
+        "Verify processor configuration parameters, credentials, network accessibility, and file/resource paths."
+        if is_source
+        else "Check incoming connection handles and verify the processor configuration parameters."
+    )
     return {
         "title": f"Execution Error in {rec_name}",
         "message": err_str,
-        "suggestion": "Check incoming connection handles and verify the processor configuration parameters."
+        "suggestion": fallback_suggestion
     }
 
 

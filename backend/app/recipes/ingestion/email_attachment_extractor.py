@@ -34,7 +34,7 @@ class EmailAttachmentExtractorRecipe(BaseRecipe):
     group = "Ingestion & Orchestration"
     subgroup = "File & Web Ingestion"
     description = "Reads a mailbox and extracts CSV/Excel attachments as datasets into a DataFrame."
-    input_types = ["dataframe"]
+    input_types: List[str] = []
     output_types = ["dataframe"]
 
     inputs: List[RecipePort] = []

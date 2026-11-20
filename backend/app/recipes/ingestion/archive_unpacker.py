@@ -37,7 +37,7 @@ class ArchiveUnpackerRecipe(BaseRecipe):
     group = "Ingestion & Orchestration"
     subgroup = "File & Web Ingestion"
     description = "Unpacks ZIP/TAR archives and loads the contained data files into a DataFrame."
-    input_types = ["dataframe"]
+    input_types: List[str] = []
     output_types = ["dataframe"]
 
     inputs: List[RecipePort] = []

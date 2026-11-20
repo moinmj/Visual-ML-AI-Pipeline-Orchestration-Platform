@@ -31,7 +31,7 @@ class SnowflakeConnectorRecipe(BaseRecipe):
     group = "Ingestion & Orchestration"
     subgroup = "Database & Warehouse Connectors"
     description = "Reads tables or analytical query results from Snowflake Cloud Data Warehouse."
-    input_types = ["dataframe"]
+    input_types: List[str] = []
     output_types = ["dataframe"]
 
     inputs: List[RecipePort] = []

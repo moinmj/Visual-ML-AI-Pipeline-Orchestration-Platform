@@ -145,9 +145,97 @@ def test_rabbitmq_consumer_validation_and_execution():
     assert "rabbitmq_queue" in df.columns
     assert "delivery_tag" in df.columns
     assert "action" in df.columns
+    assert summary["title"] == "RabbitMQ Queue Ingestion Metrics"
+    assert summary["tag"] == "RABBITMQ"
     assert summary["queue_name"] == "orders-incoming"
     assert summary["messages_drained"] == 30
     assert summary["status"] == "SIMULATED"
+    assert isinstance(summary["messages_drained"], int)
+    assert isinstance(summary["columns_count"], int)
+    assert isinstance(summary["duration_ms"], int)
+
+
+def test_rabbitmq_consumer_live_connection_exception_handling():
+    """Verify live connection error raises ValidationException with human-readable broker unreachable guidance."""
+    from backend.app.core.exceptions import ValidationException
+    r = RabbitMQConsumerRecipe()
+
+    cfg = {
+        "connection_mode": "host_port",
+        "host": "127.0.0.1",
+        "port": 5679,  # Unreachable port
+        "queue_name": "orders-test",
+        "simulation_mode": False
+    }
+
+    with pytest.raises(ValidationException) as exc_info:
+        r.execute({}, cfg)
+
+    err_msg = str(exc_info.value)
+    assert "Failed connecting to RabbitMQ broker" in err_msg or "Connection refused" in err_msg
+    assert "5679" in err_msg
+
+
+def test_rabbitmq_consumer_flatten_json_toggle():
+    """Verify that when flatten_json is False, nested RabbitMQ payload remains inside a single 'payload' column."""
+    r = RabbitMQConsumerRecipe()
+
+    # 1. flatten_json = False (Unchecked)
+    cfg_unflat = {
+        "queue_name": "tasks-queue",
+        "max_messages": 10,
+        "flatten_json": False,
+        "simulation_mode": True
+    }
+    res_unflat = r.execute({}, cfg_unflat)
+    df_unflat = res_unflat["dataframe"]
+    assert "payload" in df_unflat.columns
+    assert "action" not in df_unflat.columns
+    assert "priority" not in df_unflat.columns
+
+    # Verify JSON structure inside payload column
+    parsed = json.loads(df_unflat["payload"].iloc[0])
+    assert "action" in parsed
+    assert "priority" in parsed
+
+    # 2. flatten_json = True (Checked)
+    cfg_flat = {
+        "queue_name": "tasks-queue",
+        "max_messages": 10,
+        "flatten_json": True,
+        "simulation_mode": True
+    }
+    res_flat = r.execute({}, cfg_flat)
+    df_flat = res_flat["dataframe"]
+    assert "action" in df_flat.columns
+    assert "priority" in df_flat.columns
+
+
+def test_rabbitmq_consumer_source_node_inputs_empty():
+    """Verify RabbitMQ consumer has empty input_types and inputs (is a standalone DAG root)."""
+    r = RabbitMQConsumerRecipe()
+    assert r.input_types == []
+    assert r.get_inputs() == []
+    meta = r.to_metadata()
+    assert meta.input_types == []
+    assert meta.inputs == []
+
+
+def test_source_node_error_diagnostics_no_handle_suggestion():
+    """Verify diagnose_execution_error on source ingestion nodes never suggests checking incoming connection handles."""
+    from backend.app.engine.execution.executor import diagnose_execution_error
+    r = RabbitMQConsumerRecipe()
+
+    diag = diagnose_execution_error(
+        recipe=r,
+        error=Exception("Connection refused to 127.0.0.1:5672"),
+        inputs={},
+        config={"queue_name": "test"},
+        context={}
+    )
+    assert "Check incoming connection handles" not in diag["suggestion"]
+    assert "Broker Unreachable" in diag["title"]
+    assert "message broker" in diag["suggestion"]
 
 
 def test_mqtt_iot_stream_validation_and_execution():
@@ -179,8 +267,149 @@ def test_mqtt_iot_stream_validation_and_execution():
     assert "temperature_c" in df.columns
     assert "humidity_pct" in df.columns
     assert "pressure_hpa" in df.columns
+    assert summary["title"] == "MQTT / IoT Sensor Stream Metrics"
+    assert summary["tag"] == "MQTT"
     assert summary["status"] == "SIMULATED"
     assert summary["messages_ingested"] == 20
+    assert isinstance(summary["messages_ingested"], int)
+    assert isinstance(summary["columns_count"], int)
+    assert isinstance(summary["duration_ms"], int)
+
+
+def test_mqtt_iot_stream_flatten_json_toggle():
+    """Verify that unchecking 'Flatten JSON Payloads' preserves the sensor payload as a single 'payload' raw JSON column."""
+    r = MQTTStreamRecipe()
+
+    # 1. flatten_json = False (Unchecked)
+    cfg_unflat = {
+        "broker_host": "broker.emqx.io",
+        "topic": "factory/sensors/#",
+        "max_messages": 10,
+        "flatten_json": False,
+        "simulation_mode": True
+    }
+    res_unflat = r.execute({}, cfg_unflat)
+    df_unflat = res_unflat["dataframe"]
+    assert "payload" in df_unflat.columns
+    assert "temperature_c" not in df_unflat.columns
+    assert "humidity_pct" not in df_unflat.columns
+    assert "pressure_hpa" not in df_unflat.columns
+
+    # Verify payload column contains valid JSON string
+    first_payload = json.loads(df_unflat["payload"].iloc[0])
+    assert "temperature_c" in first_payload
+    assert "humidity_pct" in first_payload
+    assert "device_id" in first_payload
+
+    # 2. flatten_json = True (Checked)
+    cfg_flat = {
+        "broker_host": "broker.emqx.io",
+        "topic": "factory/sensors/#",
+        "max_messages": 10,
+        "flatten_json": True,
+        "simulation_mode": True
+    }
+    res_flat = r.execute({}, cfg_flat)
+    df_flat = res_flat["dataframe"]
+    assert "temperature_c" in df_flat.columns
+    assert "humidity_pct" in df_flat.columns
+    assert "pressure_hpa" in df_flat.columns
+
+
+def test_mqtt_iot_stream_no_stray_delimiter_in_schema():
+    """Verify MQTT schema does not contain stray delimiter or CSV properties."""
+    r = MQTTStreamRecipe()
+    schema = r.get_schema()
+    props = schema["properties"]
+    assert "delimiter" not in props
+    assert "csv_delimiter" not in props
+    assert "quote_char" not in props
+
+
+def test_mqtt_iot_stream_live_connection_unreachable_exception():
+    """Verify live connection to unreachable broker raises ValidationException with human-readable guidance."""
+    from backend.app.core.exceptions import ValidationException
+    r = MQTTStreamRecipe()
+
+    cfg = {
+        "broker_host": "127.0.0.1",
+        "port": 1889,  # Non-existent port
+        "topic": "sensors/test",
+        "timeout_seconds": 1,
+        "simulation_mode": False
+    }
+
+    with pytest.raises(ValidationException) as exc_info:
+        r.execute({}, cfg)
+
+    err = str(exc_info.value)
+    assert "Failed connecting to MQTT broker" in err or "Connection refused" in err
+    assert "1889" in err
+
+
+def test_mqtt_iot_stream_live_message_conversion(monkeypatch):
+    """Verify live incoming messages convert into real table records with delivery status 'LIVE'."""
+    r = MQTTStreamRecipe()
+
+    class MockMQTTMessage:
+        def __init__(self, topic, payload, qos=0):
+            self.topic = topic
+            self.payload = payload.encode("utf-8") if isinstance(payload, str) else payload
+            self.qos = qos
+
+    class MockMQTTClient:
+        def __init__(self, *args, **kwargs):
+            self.on_connect = None
+            self.on_message = None
+
+        def username_pw_set(self, u, p):
+            pass
+
+        def connect(self, host, port, keepalive=30):
+            pass
+
+        def subscribe(self, topic, qos=0):
+            pass
+
+        def loop_start(self):
+            # Simulate broker connection ACK and arrival of live messages
+            if self.on_connect:
+                self.on_connect(self, None, {}, 0)
+            if self.on_message:
+                self.on_message(self, None, MockMQTTMessage("factory/sensors/temp", '{"device": "SENSOR_01", "temp": 24.8, "status": "OK"}'))
+                self.on_message(self, None, MockMQTTMessage("factory/sensors/vibe", '{"device": "SENSOR_02", "vibe": 0.04, "status": "OK"}'))
+
+        def loop_stop(self):
+            pass
+
+        def disconnect(self):
+            pass
+
+    import paho.mqtt.client as paho_client
+    monkeypatch.setattr(paho_client, "Client", MockMQTTClient)
+
+    cfg = {
+        "broker_host": "mock.broker.net",
+        "port": 1883,
+        "topic": "factory/sensors/#",
+        "timeout_seconds": 1,
+        "flatten_json": True,
+        "simulation_mode": False
+    }
+
+    res = r.execute({}, cfg)
+    assert res is not None
+    assert "dataframe" in res
+    df = res["dataframe"]
+    summary = res["output_summary"]
+    metrics = res["metrics"]
+
+    assert len(df) == 2
+    assert summary["status"] == "LIVE"
+    assert metrics["delivery_status"] == "LIVE"
+    assert "device" in df.columns
+    assert df["device"].tolist() == ["SENSOR_01", "SENSOR_02"]
+    assert "Ingested 2 live MQTT messages" in summary["message"]
 
 
 def test_websocket_listener_validation_and_execution():
@@ -298,7 +527,127 @@ def test_kafka_dag_workflow():
     res_k = next(r for r in exec_result.node_results if r.node_id == "node_kafka")
     assert res_k.status == "SUCCESS"
     summary_k = res_k.output_summary.get("output_summary") or res_k.output_summary
-    assert summary_k.get("title") == "Kafka Consumer Summary"
+    assert summary_k.get("title") == "Kafka Streaming Ingestion Metrics"
+    assert summary_k.get("tag") == "KAFKA"
+
+
+def test_kafka_consumer_resilient_offline_fallback():
+    """Verify Kafka consumer gracefully switches to simulated benchmark records when broker is offline/unreachable."""
+    r = KafkaConsumerRecipe()
+    cfg = {
+        "bootstrap_servers": "127.0.0.1:9099",  # Non-existent broker
+        "topic": "telemetry-events",
+        "group_id": "test-fallback-grp",
+        "poll_timeout_ms": 500,
+        "max_messages": 15,
+        "flatten_json": True,
+        "simulation_mode": False  # Live mode attempted, but must gracefully fall back without crashing
+    }
+    res = r.execute({}, cfg)
+    assert res is not None
+    assert "dataframe" in res
+    df = res["dataframe"]
+    assert len(df) == 15
+    summary = res["output_summary"]
+    metrics = res["metrics"]
+    assert summary["status"] == "SIMULATED"
+    assert summary["title"] == "Kafka Streaming Ingestion Metrics"
+    assert summary["tag"] == "KAFKA"
+    assert metrics["delivery_status"] == "SIMULATED"
+    assert "messages_polled" in summary
+    assert isinstance(summary["messages_polled"], int)
+    assert summary["messages_polled"] == 15
+
+
+def test_kafka_consumer_flatten_json_toggle():
+    """Verify that when flatten_json is False, nested event payload remains serialized inside a single 'payload' column."""
+    r = KafkaConsumerRecipe()
+    
+    # 1. flatten_json = False
+    cfg_unflattened = {
+        "topic": "telemetry-events",
+        "max_messages": 10,
+        "flatten_json": False,
+        "simulation_mode": True
+    }
+    res_unflat = r.execute({}, cfg_unflattened)
+    df_unflat = res_unflat["dataframe"]
+    assert "payload" in df_unflat.columns
+    assert "event_type" not in df_unflat.columns
+    assert "transaction_sar" not in df_unflat.columns
+    
+    # Verify payload column contains valid JSON strings
+    first_payload = json.loads(df_unflat["payload"].iloc[0])
+    assert "event_type" in first_payload
+    assert "transaction_sar" in first_payload
+
+    # 2. flatten_json = True
+    cfg_flattened = {
+        "topic": "telemetry-events",
+        "max_messages": 10,
+        "flatten_json": True,
+        "simulation_mode": True
+    }
+    res_flat = r.execute({}, cfg_flattened)
+    df_flat = res_flat["dataframe"]
+    assert "event_type" in df_flat.columns
+    assert "transaction_sar" in df_flat.columns
+
+
+def test_kafka_consumer_auto_offset_reset_simulation():
+    """Verify simulation starts offsets at 0 for 'earliest' and at high number (500000) for 'latest'."""
+    r = KafkaConsumerRecipe()
+
+    # earliest -> starts at 0
+    res_earliest = r.execute({}, {"auto_offset_reset": "earliest", "simulation_mode": True, "max_messages": 5})
+    df_earliest = res_earliest["dataframe"]
+    assert df_earliest["kafka_offset"].iloc[0] == 0
+    assert df_earliest["kafka_offset"].iloc[4] == 4
+
+    # latest -> starts at 500000
+    res_latest = r.execute({}, {"auto_offset_reset": "latest", "simulation_mode": True, "max_messages": 5})
+    df_latest = res_latest["dataframe"]
+    assert df_latest["kafka_offset"].iloc[0] == 500000
+    assert df_latest["kafka_offset"].iloc[4] == 500004
+
+
+def test_kafka_consumer_source_node_inputs_empty():
+    """Verify Kafka consumer has empty input_types and inputs (is a DAG root source)."""
+    r = KafkaConsumerRecipe()
+    assert r.input_types == []
+    assert r.get_inputs() == []
+    meta = r.to_metadata()
+    assert meta.input_types == []
+    assert meta.inputs == []
+
+
+def test_kafka_consumer_sasl_schema_visible_when():
+    """Verify SASL Mechanism, Username, and Password render for both SASL_PLAINTEXT and SASL_SSL."""
+    r = KafkaConsumerRecipe()
+    schema = r.get_schema()
+    props = schema["properties"]
+    
+    for f in ["sasl_mechanism", "sasl_username", "sasl_password"]:
+        vw = props[f]["visible_when"]
+        assert vw["field"] == "security_protocol"
+        assert "SASL_SSL" in vw.get("one_of", []) or vw.get("starts_with") == "SASL"
+
+
+def test_kafka_consumer_metrics_whole_integer_formatting():
+    """Verify metrics and summary counts are clean whole integers (no floating point decimals)."""
+    r = KafkaConsumerRecipe()
+    res = r.execute({}, {"simulation_mode": True, "max_messages": 10})
+    summary = res["output_summary"]
+    metrics = res["metrics"]
+
+    assert summary["title"] == "Kafka Streaming Ingestion Metrics"
+    assert summary["tag"] == "KAFKA"
+    assert metrics["title"] == "Kafka Streaming Ingestion Metrics"
+    assert metrics["tag"] == "KAFKA"
+
+    for count_key in ["messages_polled", "columns_count", "duration_ms"]:
+        assert isinstance(summary[count_key], int)
+        assert isinstance(metrics[count_key], int)
 
 
 def test_mqtt_to_event_bus_dag_workflow():

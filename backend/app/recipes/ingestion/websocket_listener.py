@@ -30,7 +30,7 @@ class WebSocketListenerRecipe(BaseRecipe):
     group = "Ingestion & Orchestration"
     subgroup = "Streaming & Change Data"
     description = "Listens to WebSocket streaming feeds and captures incoming messages into tabular micro-batches."
-    input_types = ["dataframe"]
+    input_types: List[str] = []
     output_types = ["dataframe"]
 
     inputs: List[RecipePort] = []
