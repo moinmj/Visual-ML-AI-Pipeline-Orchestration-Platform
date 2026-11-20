@@ -28,7 +28,7 @@ class CDCIngestionRecipe(BaseRecipe):
     group = "Ingestion & Orchestration"
     subgroup = "Streaming & Change Data"
     description = "Captures inserts, updates, and deletes from a database change log or streaming CDC topic."
-    input_types = ["dataframe"]
+    input_types: List[str] = []
     output_types = ["dataframe"]
 
     inputs: List[RecipePort] = []

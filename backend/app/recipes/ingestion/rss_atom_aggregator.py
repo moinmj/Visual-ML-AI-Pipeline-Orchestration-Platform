@@ -34,7 +34,7 @@ class RSSAtomAggregatorRecipe(BaseRecipe):
     group = "Ingestion & Orchestration"
     subgroup = "File & Web Ingestion"
     description = "Aggregates items from multiple RSS/Atom feeds and removes duplicates into a DataFrame."
-    input_types = ["dataframe"]
+    input_types: List[str] = []
     output_types = ["dataframe"]
 
     inputs: List[RecipePort] = []

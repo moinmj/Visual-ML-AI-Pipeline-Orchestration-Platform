@@ -29,7 +29,7 @@ class MQTTStreamRecipe(BaseRecipe):
     group = "Ingestion & Orchestration"
     subgroup = "Streaming & Change Data"
     description = "Subscribes to MQTT topics to ingest real-time IoT sensor readings into micro-batches of tabular rows."
-    input_types = ["dataframe"]
+    input_types: List[str] = []
     output_types = ["dataframe"]
 
     inputs: List[RecipePort] = []

@@ -32,7 +32,7 @@ class FTPSFTPWatcherRecipe(BaseRecipe):
     group = "Ingestion & Orchestration"
     subgroup = "File & Web Ingestion"
     description = "Watches an FTP/SFTP folder and loads new files as they arrive into a DataFrame."
-    input_types = ["dataframe"]
+    input_types: List[str] = []
     output_types = ["dataframe"]
 
     inputs: List[RecipePort] = []

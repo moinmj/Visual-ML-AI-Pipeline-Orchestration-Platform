@@ -29,7 +29,7 @@ class CDCReplicatorRecipe(BaseRecipe):
     group = "Ingestion & Orchestration"
     subgroup = "Streaming & Change Data"
     description = "Continuously applies database CDC change logs to maintain a synchronized, up-to-date replica dataset."
-    input_types = ["dataframe"]
+    input_types: List[str] = []
     output_types = ["dataframe"]
 
     inputs = [

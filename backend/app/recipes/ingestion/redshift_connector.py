@@ -30,7 +30,7 @@ class RedshiftConnectorRecipe(BaseRecipe):
     group = "Ingestion & Orchestration"
     subgroup = "Database & Warehouse Connectors"
     description = "Reads analytical tables or SQL queries from Amazon Redshift Cloud Data Warehouse."
-    input_types = ["dataframe"]
+    input_types: List[str] = []
     output_types = ["dataframe"]
 
     inputs: List[RecipePort] = []

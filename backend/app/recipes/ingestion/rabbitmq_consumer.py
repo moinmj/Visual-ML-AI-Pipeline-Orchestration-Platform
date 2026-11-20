@@ -29,7 +29,7 @@ class RabbitMQConsumerRecipe(BaseRecipe):
     group = "Ingestion & Orchestration"
     subgroup = "Streaming & Change Data"
     description = "Drains message queues from RabbitMQ brokers into micro-batches of tabular rows."
-    input_types = ["dataframe"]
+    input_types: List[str] = []
     output_types = ["dataframe"]
 
     inputs: List[RecipePort] = []

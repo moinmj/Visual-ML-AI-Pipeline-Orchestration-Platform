@@ -31,7 +31,7 @@ class WebScraperRecipe(BaseRecipe):
     group = "Ingestion & Orchestration"
     subgroup = "File & Web Ingestion"
     description = "Extracts HTML tables or page content from a web page into a DataFrame."
-    input_types = ["dataframe"]
+    input_types: List[str] = []
     output_types = ["dataframe"]
 
     inputs: List[RecipePort] = []

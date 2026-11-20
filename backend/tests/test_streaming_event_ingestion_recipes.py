@@ -298,7 +298,127 @@ def test_kafka_dag_workflow():
     res_k = next(r for r in exec_result.node_results if r.node_id == "node_kafka")
     assert res_k.status == "SUCCESS"
     summary_k = res_k.output_summary.get("output_summary") or res_k.output_summary
-    assert summary_k.get("title") == "Kafka Consumer Summary"
+    assert summary_k.get("title") == "Kafka Streaming Ingestion Metrics"
+    assert summary_k.get("tag") == "KAFKA"
+
+
+def test_kafka_consumer_resilient_offline_fallback():
+    """Verify Kafka consumer gracefully switches to simulated benchmark records when broker is offline/unreachable."""
+    r = KafkaConsumerRecipe()
+    cfg = {
+        "bootstrap_servers": "127.0.0.1:9099",  # Non-existent broker
+        "topic": "telemetry-events",
+        "group_id": "test-fallback-grp",
+        "poll_timeout_ms": 500,
+        "max_messages": 15,
+        "flatten_json": True,
+        "simulation_mode": False  # Live mode attempted, but must gracefully fall back without crashing
+    }
+    res = r.execute({}, cfg)
+    assert res is not None
+    assert "dataframe" in res
+    df = res["dataframe"]
+    assert len(df) == 15
+    summary = res["output_summary"]
+    metrics = res["metrics"]
+    assert summary["status"] == "SIMULATED"
+    assert summary["title"] == "Kafka Streaming Ingestion Metrics"
+    assert summary["tag"] == "KAFKA"
+    assert metrics["delivery_status"] == "SIMULATED"
+    assert "messages_polled" in summary
+    assert isinstance(summary["messages_polled"], int)
+    assert summary["messages_polled"] == 15
+
+
+def test_kafka_consumer_flatten_json_toggle():
+    """Verify that when flatten_json is False, nested event payload remains serialized inside a single 'payload' column."""
+    r = KafkaConsumerRecipe()
+    
+    # 1. flatten_json = False
+    cfg_unflattened = {
+        "topic": "telemetry-events",
+        "max_messages": 10,
+        "flatten_json": False,
+        "simulation_mode": True
+    }
+    res_unflat = r.execute({}, cfg_unflattened)
+    df_unflat = res_unflat["dataframe"]
+    assert "payload" in df_unflat.columns
+    assert "event_type" not in df_unflat.columns
+    assert "transaction_sar" not in df_unflat.columns
+    
+    # Verify payload column contains valid JSON strings
+    first_payload = json.loads(df_unflat["payload"].iloc[0])
+    assert "event_type" in first_payload
+    assert "transaction_sar" in first_payload
+
+    # 2. flatten_json = True
+    cfg_flattened = {
+        "topic": "telemetry-events",
+        "max_messages": 10,
+        "flatten_json": True,
+        "simulation_mode": True
+    }
+    res_flat = r.execute({}, cfg_flattened)
+    df_flat = res_flat["dataframe"]
+    assert "event_type" in df_flat.columns
+    assert "transaction_sar" in df_flat.columns
+
+
+def test_kafka_consumer_auto_offset_reset_simulation():
+    """Verify simulation starts offsets at 0 for 'earliest' and at high number (500000) for 'latest'."""
+    r = KafkaConsumerRecipe()
+
+    # earliest -> starts at 0
+    res_earliest = r.execute({}, {"auto_offset_reset": "earliest", "simulation_mode": True, "max_messages": 5})
+    df_earliest = res_earliest["dataframe"]
+    assert df_earliest["kafka_offset"].iloc[0] == 0
+    assert df_earliest["kafka_offset"].iloc[4] == 4
+
+    # latest -> starts at 500000
+    res_latest = r.execute({}, {"auto_offset_reset": "latest", "simulation_mode": True, "max_messages": 5})
+    df_latest = res_latest["dataframe"]
+    assert df_latest["kafka_offset"].iloc[0] == 500000
+    assert df_latest["kafka_offset"].iloc[4] == 500004
+
+
+def test_kafka_consumer_source_node_inputs_empty():
+    """Verify Kafka consumer has empty input_types and inputs (is a DAG root source)."""
+    r = KafkaConsumerRecipe()
+    assert r.input_types == []
+    assert r.get_inputs() == []
+    meta = r.to_metadata()
+    assert meta.input_types == []
+    assert meta.inputs == []
+
+
+def test_kafka_consumer_sasl_schema_visible_when():
+    """Verify SASL Mechanism, Username, and Password render for both SASL_PLAINTEXT and SASL_SSL."""
+    r = KafkaConsumerRecipe()
+    schema = r.get_schema()
+    props = schema["properties"]
+    
+    for f in ["sasl_mechanism", "sasl_username", "sasl_password"]:
+        vw = props[f]["visible_when"]
+        assert vw["field"] == "security_protocol"
+        assert "SASL_SSL" in vw.get("one_of", []) or vw.get("starts_with") == "SASL"
+
+
+def test_kafka_consumer_metrics_whole_integer_formatting():
+    """Verify metrics and summary counts are clean whole integers (no floating point decimals)."""
+    r = KafkaConsumerRecipe()
+    res = r.execute({}, {"simulation_mode": True, "max_messages": 10})
+    summary = res["output_summary"]
+    metrics = res["metrics"]
+
+    assert summary["title"] == "Kafka Streaming Ingestion Metrics"
+    assert summary["tag"] == "KAFKA"
+    assert metrics["title"] == "Kafka Streaming Ingestion Metrics"
+    assert metrics["tag"] == "KAFKA"
+
+    for count_key in ["messages_polled", "columns_count", "duration_ms"]:
+        assert isinstance(summary[count_key], int)
+        assert isinstance(metrics[count_key], int)
 
 
 def test_mqtt_to_event_bus_dag_workflow():

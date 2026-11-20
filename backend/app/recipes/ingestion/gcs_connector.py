@@ -29,7 +29,7 @@ class GCSConnectorRecipe(BaseRecipe):
     group = "Ingestion & Orchestration"
     subgroup = "Cloud Storage Connectors"
     description = "Loads CSV, Parquet, JSON, or JSONL files from a Google Cloud Storage bucket into a DataFrame."
-    input_types = ["dataframe"]
+    input_types: List[str] = []
     output_types = ["dataframe"]
 
     inputs: List[RecipePort] = []
