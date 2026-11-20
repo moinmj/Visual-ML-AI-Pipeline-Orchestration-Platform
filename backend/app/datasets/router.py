@@ -11,6 +11,8 @@ from backend.app.datasets.schemas import (
     DatasetProfileResponse,
     OzoneObjectResponse,
     OzoneBrowseGroupedResponse,
+    OzoneLandingSourcesResponse,
+    OzoneLandingTablesResponse,
 )
 from backend.app.datasets.service import dataset_service
 
@@ -91,7 +93,7 @@ async def upload_unstructured_files(
     return await unstructured_service.upload(tenant_id=user.tenant_id, files=real_files)
 
 
-@router.get("/ozone/browse", response_model=Union[OzoneBrowseGroupedResponse, List[OzoneObjectResponse]])
+@router.get("/ozone/browse", response_model=Union[OzoneLandingSourcesResponse, OzoneLandingTablesResponse, OzoneBrowseGroupedResponse, List[OzoneObjectResponse]])
 async def browse_ozone_datasets(
     user: CurrentUser,
     scope: Literal["all_tenant_data", "ml_workflow", "landing", "bucket"] = Query(
@@ -121,15 +123,37 @@ async def browse_ozone_datasets(
                     "(Structured datasets / Unstructured data), landing -> Data lake > Database, "
                     "all_tenant_data or bucket -> both.",
     ),
+    landing_view: Literal["all", "sources", "tables"] = Query(
+        "all",
+        description="Only for scope='landing'. 'all' (default): the old behaviour, every file. "
+                    "'sources': step 1, ONLY the list of data sources (no tables/files). "
+                    "'tables': step 2, the tables (with their files) of the one data source given in `source`.",
+    ),
+    source: Optional[str] = Query(
+        None,
+        description="Required when landing_view='tables'. The data source `id` returned by landing_view='sources' "
+                    "(e.g. 'u5_annual_survey').",
+    ),
     db: AsyncSession = Depends(get_db),
 ):
     """
     Lists files sitting in the caller's tenant folder in Ozone.
+    Landing drill-down: call with `scope=landing&landing_view=sources` for the data sources, then
+    `scope=landing&landing_view=tables&source=<id>` for the tables of the one the user picked.
     Default: a flat list of objects matching the DatasetResponse JSON shape.
     With `group_by=category`: the same objects grouped into folders for the frontend.
     """
     if scope == "bucket" and not user.has_role("Tenant Admin"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only a Tenant Admin can browse the whole bucket.")
+    if landing_view != "all":
+        if scope != "landing":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="landing_view only works with scope=landing.")
+        if landing_view == "sources":
+            return dataset_service.list_landing_sources(tenant_id=user.tenant_id)
+        clean_source = (source or "").strip().strip("/")
+        if not clean_source or "/" in clean_source or ".." in clean_source:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="landing_view=tables needs `source` (a single data source folder name, e.g. 'u5_annual_survey').")
+        prefix = f"{clean_source}/"
     meta: dict = {}
     items = dataset_service.browse_ozone(
         tenant_id=user.tenant_id,
@@ -143,6 +167,12 @@ async def browse_ozone_datasets(
     )
     # Adds dataset_id (UUID if already registered, else null) and can_register to each item.
     items = await dataset_service.annotate_ozone_items(db, user.tenant_id, items)
+    if landing_view == "tables":
+        if not items and not meta.get("truncated"):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No data source '{clean_source}' in landing.")
+        return dataset_service.group_landing_tables(
+            tenant_id=user.tenant_id, source=clean_source, items=items, truncated=bool(meta.get("truncated")),
+        )
     if group_by == "category":
         return dataset_service.group_ozone_items(
             tenant_id=user.tenant_id,

@@ -211,5 +211,10 @@ class StorageManager:
             meta=meta,
         )
 
+    def list_landing_sources(self, tenant_id: int, meta: Optional[dict] = None):
+        """Data source folders under landing/db/t<tenant_id>/ with table/file counts (no file list)."""
+        from backend.app.infrastructure.storage.ozone_client import list_landing_sources
+        return list_landing_sources(tenant_id=tenant_id, meta=meta)
+
 
 storage_manager = StorageManager()

@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     GROQ_API_KEY: Optional[str] = None
     GROQ_MODEL: str = "openai/gpt-oss-20b"
     GEMINI_API_KEY: Optional[str] = None
+    # Recommendation agent providers (OpenAI takes precedence when configured)
     OPENAI_API_KEY: Optional[str] = None
 
     # Auth / JWT Settings (LEGACY — kept so old config/.env files don't break;
@@ -138,6 +139,15 @@ class Settings(BaseSettings):
     SALESFORCE_INSTANCE_URL: Optional[str] = None
     HUBSPOT_ACCESS_TOKEN: Optional[str] = None
  
+    OPENAI_MODEL: str = "gpt-4o-mini"
+    GROQ_API_KEY: Optional[str] = None
+    GROQ_MODEL: str = "openai/gpt-oss-20b"
+    AGENT_MAX_WORKERS: int = Field(default=2, ge=1)
+    AGENT_MAX_QUEUED: int = Field(default=16, ge=0)
+    AGENT_MAX_GROQ_CONCURRENT: int = Field(default=8, ge=1)
+
+
+
     model_config = {
         "env_file": ".env",
         "extra": "ignore"
