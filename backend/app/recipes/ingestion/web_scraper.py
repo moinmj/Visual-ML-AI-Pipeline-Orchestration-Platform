@@ -173,19 +173,57 @@ class WebScraperRecipe(BaseRecipe):
             return response.read().decode(encoding, errors="replace")
 
     def _extract_html_tables(self, html: str, table_index: int) -> pd.DataFrame:
+        # 1. Try standard pandas read_html (uses lxml or html5lib if available)
         try:
             dfs = pd.read_html(io.StringIO(html))
-            if not dfs:
-                raise ExecutionException("No <table> elements found in the HTML content.")
-            idx = min(table_index, len(dfs) - 1)
-            selected_df = dfs[idx]
-            # Flatten multi-level columns if present
-            if isinstance(selected_df.columns, pd.MultiIndex):
-                selected_df.columns = ["_".join(str(c) for c in col).strip("_") for col in selected_df.columns]
-            return selected_df
+            if dfs:
+                idx = min(table_index, len(dfs) - 1)
+                selected_df = dfs[idx]
+                if isinstance(selected_df.columns, pd.MultiIndex):
+                    selected_df.columns = ["_".join(str(c) for c in col).strip("_") for col in selected_df.columns]
+                return selected_df
         except Exception as e:
-            # Fallback simple table regex extractor if read_html fails
-            return self._regex_parse_tables(html, table_index, e)
+            logger.info(f"pd.read_html failed ({e}), falling back to HTML parser")
+
+        # 2. Resilient BeautifulSoup / built-in parser fallback
+        try:
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(html, "html.parser")
+            tables = soup.find_all("table")
+            if tables:
+                idx = min(table_index, len(tables) - 1)
+                target_table = tables[idx]
+                rows: List[List[str]] = []
+                for tr in target_table.find_all("tr"):
+                    cells = [td.get_text(strip=True) for td in tr.find_all(["th", "td"])]
+                    if cells:
+                        rows.append(cells)
+                if rows:
+                    header = rows[0]
+                    seen: Dict[str, int] = {}
+                    clean_headers = []
+                    for h in header:
+                        name = str(h) if h else "col"
+                        if name in seen:
+                            seen[name] += 1
+                            name = f"{name}_{seen[name]}"
+                        else:
+                            seen[name] = 0
+                        clean_headers.append(name)
+                    data = rows[1:] if len(rows) > 1 else []
+                    padded_data = []
+                    for r in data:
+                        if len(r) < len(clean_headers):
+                            r = r + [""] * (len(clean_headers) - len(r))
+                        elif len(r) > len(clean_headers):
+                            r = r[:len(clean_headers)]
+                        padded_data.append(r)
+                    return pd.DataFrame(padded_data, columns=clean_headers)
+        except Exception as bs_err:
+            logger.warning(f"BeautifulSoup table parse failed: {bs_err}")
+
+        # 3. Final regex fallback
+        return self._regex_parse_tables(html, table_index, original_error=Exception("No HTML tables found or parser missing."))
 
     def _regex_parse_tables(self, html: str, table_index: int, original_error: Exception) -> pd.DataFrame:
         table_matches = re.findall(r"<table[^>]*>(.*?)</table>", html, re.DOTALL | re.IGNORECASE)
