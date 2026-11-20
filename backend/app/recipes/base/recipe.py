@@ -266,11 +266,34 @@ class BaseRecipe(ABC):
         if target_section:
             cred_name_prop["section"] = target_section
 
-        if "save_credential" not in props:
-            props["save_credential"] = save_cred_prop
-        if "credential_name" not in props:
-            props["credential_name"] = cred_name_prop
+        # Position credential_id, save_credential, and credential_name ABOVE at the very top (or right after connection_mode)
+        existing_cred_id_prop = props.get("credential_id")
+        cred_id_prop = existing_cred_id_prop or {
+            "type": "string",
+            "title": "Select Saved Credential",
+            "input_type": "credential_dropdown",
+            "description": "Select a previously stored credential from your workspace vault, or enter details below."
+        }
+        if target_section and "section" not in cred_id_prop:
+            cred_id_prop["section"] = target_section
 
+        new_props: Dict[str, Any] = {}
+
+        # 1. If connection_mode is in props, place connection_mode first
+        if "connection_mode" in props:
+            new_props["connection_mode"] = props["connection_mode"]
+
+        # 2. Place credential_id, save_credential, and credential_name right above
+        new_props["credential_id"] = cred_id_prop
+        new_props["save_credential"] = save_cred_prop
+        new_props["credential_name"] = cred_name_prop
+
+        # 3. Add all remaining properties in their original relative order
+        for k, v in props.items():
+            if k not in new_props:
+                new_props[k] = v
+
+        schema["properties"] = new_props
         return schema
 
     def __init_subclass__(cls, **kwargs):
