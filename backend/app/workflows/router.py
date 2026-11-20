@@ -3308,7 +3308,7 @@ async def get_test_step_table_preview(
         err_msg = meta.get("error_message") or "Node execution failed"
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Node '{node_id}' execution failed: {err_msg}. No database records were retrieved."
+            detail=f"Node '{node_id}' execution failed: {err_msg}."
         )
 
     rec_res = _RECENT_EXECUTION_RESULTS.get(session_id)
@@ -3321,7 +3321,7 @@ async def get_test_step_table_preview(
                 err_m = getattr(nr, "error_message", None) or (isinstance(nr, dict) and nr.get("error_message")) or "Node execution failed"
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Node '{node_id}' execution failed: {err_m}. No database records were retrieved."
+                    detail=f"Node '{node_id}' execution failed: {err_m}."
                 )
 
     if db is not None:
@@ -3335,7 +3335,7 @@ async def get_test_step_table_preview(
                         err_m = nr.get("error_message") or "Node execution failed"
                         raise HTTPException(
                             status_code=status.HTTP_404_NOT_FOUND,
-                            detail=f"Node '{node_id}' execution failed: {err_m}. No database records were retrieved."
+                            detail=f"Node '{node_id}' execution failed: {err_m}."
                         )
         except HTTPException:
             raise
