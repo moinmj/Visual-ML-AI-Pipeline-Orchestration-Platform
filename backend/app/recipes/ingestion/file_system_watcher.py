@@ -337,7 +337,7 @@ class FileSystemWatcherRecipe(BaseRecipe):
             except Exception:
                 raise ExecutionException(f"Failed to parse file '{filepath}' as {fmt}: {e}")
 
-    def execute(self, inputs: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+    def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
         t0 = time.time()
         dir_path = str(config.get("directory_path", "./data/incoming")).strip()
         if not dir_path:

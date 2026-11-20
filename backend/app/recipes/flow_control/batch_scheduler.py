@@ -249,7 +249,7 @@ class BatchSchedulerRecipe(BaseRecipe):
         }
         return df, dag
 
-    def execute(self, inputs: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+    def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
         t0 = time.time()
         strategy = str(config.get("batch_strategy", "partition_column")).strip().lower()
         part_col = str(config.get("partition_column", "batch_id")).strip()

@@ -185,3 +185,48 @@ def test_mysql_live_execution_table_and_query_mock(monkeypatch):
     # Semicolon stripped and LIMIT appended cleanly
     assert executed_sql == "SELECT id, name FROM products WHERE is_active = 1 LIMIT 50"
 
+
+def test_mysql_inspect_databases_without_database_name(monkeypatch):
+    """Verify action='databases' connects to MySQL with database=None when database is omitted."""
+    from unittest.mock import MagicMock
+    recipe = MySQLConnectorRecipe()
+
+    captured_connect_kwargs = {}
+
+    def mock_connect(**kwargs):
+        captured_connect_kwargs.update(kwargs)
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone.return_value = {"version": "8.0.35"}
+        mock_cursor.fetchall.return_value = [{"Database": "sales"}, {"Database": "inventory"}]
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+        return mock_conn
+
+    import sys
+    mock_pymysql = MagicMock()
+    mock_pymysql.connect = mock_connect
+    mock_pymysql.cursors.DictCursor = "DictCursor"
+    monkeypatch.setitem(sys.modules, "pymysql", mock_pymysql)
+    monkeypatch.setitem(sys.modules, "pymysql.cursors", mock_pymysql.cursors)
+
+    payload_config = {
+        "connection_mode": "host_port",
+        "host": "88.222.215.30",
+        "port": 3306,
+        "username": "Mysuer",
+        "password": "#MyUser@123",
+        "simulation_mode": False
+    }
+
+    res = recipe.inspect(action="databases", config=payload_config)
+    assert res["success"] is True
+    assert res["databases"] == ["sales", "inventory"]
+    assert res["count"] == 2
+    # Ensure database is None, so it doesn't fail with 'Unknown database shop_db'
+    assert captured_connect_kwargs.get("database") is None
+    assert captured_connect_kwargs.get("host") == "88.222.215.30"
+    assert captured_connect_kwargs.get("port") == 3306
+    assert captured_connect_kwargs.get("user") == "Mysuer"
+    assert captured_connect_kwargs.get("password") == "#MyUser@123"
+
+
