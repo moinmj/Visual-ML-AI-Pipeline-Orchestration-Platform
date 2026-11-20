@@ -850,7 +850,12 @@ class MySQLConnectorRecipe(BaseRecipe):
             try:
                 import pymysql
                 import pymysql.cursors
-                target_db = params.get("database") or None
+                target_db = config.get("database") or None
+                if action in ("test_connection", "databases", "get_databases", "list_databases", "schemas", "get_schemas"):
+                    if not config.get("database"):
+                        target_db = None
+                elif not target_db:
+                    target_db = params.get("database") or None
                 conn = pymysql.connect(
                     host=params.get("host", "localhost"),
                     port=int(params.get("port", 3306)),
