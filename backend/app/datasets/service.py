@@ -25,6 +25,14 @@ _MACHINE_NAME = re.compile(r"^(\d{8,14}_)?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA
 _SKIP_FOLDERS = {"landing", "db", "ml-workflow", "datasets", "unstructured"}
 
 
+_SOURCE_PREFIX = re.compile(r"^u\d+_")
+
+
+def landing_source_label(source: str) -> str:
+    """'u5_annual_survey' -> 'annual_survey' (display only; the raw folder name stays the id)."""
+    return _SOURCE_PREFIX.sub("", source) or source
+
+
 def ozone_display_name(key: str, stem: str, file_name: str) -> str:
     """
     Readable name for the UI. `key` and `file_name` are NOT changed; only `name` is.
@@ -250,6 +258,110 @@ class DatasetService:
                 "scope": scope,
             })
         return results
+
+    @staticmethod
+    def list_landing_sources(tenant_id: int) -> Dict[str, Any]:
+        """Step 1: every data source in landing/db/t<id>/ with table/file counts. No files are returned."""
+        from backend.app.infrastructure.storage.ozone_client import tenant_landing_prefix
+
+        meta: Dict[str, Any] = {}
+        try:
+            raw = storage_manager.list_landing_sources(tenant_id=tenant_id, meta=meta)
+        except ValueError as e:
+            raise ValidationException(str(e))
+        landing = tenant_landing_prefix(tenant_id)
+        sources = [{
+            "id": r["name"],
+            "label": landing_source_label(r["name"]),
+            "path": f"{landing}{r['name']}/",
+            "table_count": r["table_count"],
+            "file_count": r["file_count"],
+            "total_size_bytes": r["total_size_bytes"],
+            "last_modified": r["last_modified"],
+        } for r in raw]
+        return {
+            "view": "sources",
+            "source": "bucket",
+            "scope": "landing",
+            "total_sources": len(sources),
+            "total_tables": sum(x["table_count"] for x in sources),
+            "total_files": sum(x["file_count"] for x in sources),
+            "truncated": bool(meta.get("truncated")),
+            "sources": sources,
+        }
+
+    @staticmethod
+    def resolve_landing_source(tenant_id: int, source: str) -> List[str]:
+        """
+        Finds the real source folder for what the caller sent. Accepts the id ('u5_annual_survey')
+        or the label ('annual_survey'). Returns the matching raw folder names: [] = none, 1 = found,
+        2+ = the label is ambiguous (e.g. u5_x and u6_x) and the caller must send the id.
+        """
+        names = storage_manager.list_landing_source_names(tenant_id=tenant_id)
+        if source in names:
+            return [source]
+        return [n for n in names if landing_source_label(n) == source]
+
+    @staticmethod
+    def group_landing_tables(
+        tenant_id: int,
+        source: str,
+        items: List[Dict[str, Any]],
+        truncated: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Step 2: the files of ONE data source grouped by table (the folder right under the source).
+        landing/db/t4/<source>/<table>/<file>  ->  table node '<table>' holding that file.
+        """
+        from backend.app.infrastructure.storage.ozone_client import tenant_landing_prefix
+
+        landing = tenant_landing_prefix(tenant_id)
+        src_path = f"{landing}{source}/"
+        tables: Dict[str, Dict[str, Any]] = {}
+        newest: Dict[str, str] = {}  # table name -> updated_at of the file currently reported
+        newest_overall: Optional[str] = None
+        for it in items:
+            if it.get("media_type") == "folder":
+                continue
+            key = (it.get("key") or "").lstrip("/")
+            if not key.startswith(src_path):
+                continue
+            parts = key[len(src_path):].split("/")
+            name = parts[0] if len(parts) > 1 else parts[0].rsplit(".", 1)[0]
+            node = tables.setdefault(name, {
+                "id": name, "label": name, "path": f"{src_path}{name}/" if len(parts) > 1 else src_path,
+                "count": 0, "total_size_bytes": 0, "dataset_id": None, "can_register": True, "key": None,
+            })
+            node["count"] += 1
+            node["total_size_bytes"] += int(it.get("file_size_bytes") or 0)
+            stamp = str(it.get("updated_at") or "")
+            if stamp and (newest_overall is None or stamp > newest_overall):
+                newest_overall = stamp
+            if node["key"] is None or stamp > newest[name]:
+                newest[name] = stamp
+                node["key"] = key
+                node["dataset_id"] = it.get("dataset_id")
+                node["can_register"] = bool(it.get("can_register", True))
+
+        nodes = sorted(tables.values(), key=lambda n: n["label"].lower())
+        total_files = sum(n["count"] for n in nodes)
+        return {
+            "view": "tables",
+            "source": {
+                "id": source,
+                "label": landing_source_label(source),
+                "path": src_path,
+                "table_count": len(nodes),
+                "file_count": total_files,
+                "total_size_bytes": sum(n["total_size_bytes"] for n in nodes),
+                "last_modified": newest_overall,
+            },
+            "scope": "landing",
+            "total_tables": len(nodes),
+            "total_files": total_files,
+            "truncated": truncated,
+            "tables": nodes,
+        }
 
     @staticmethod
     def group_ozone_items(

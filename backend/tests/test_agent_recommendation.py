@@ -50,7 +50,8 @@ def test_agent_tools_discover_registered_trainers_for_requested_task():
     expected_regression_trainers = {
         metadata.recipe_id
         for metadata in recipe_registry.list_all(category="training")
-        if "regression"
+        if "model" not in metadata.input_types  # stackers/tuners need an existing model
+        and "regression"
         in recipe_registry.get(metadata.recipe_id)
         .get_schema()
         .get("properties", {})
@@ -212,9 +213,11 @@ async def test_agent_plan_selects_regression_from_dynamic_recipe_catalog(monkeyp
     assert plan["status"] == "ready_for_review"
     assert plan["task_type"] == "regression"
     assert plan["workflow"]["nodes"][1]["config"]["stratify"] is False
-    catalog_message = captured_messages["messages"][1]["content"]
-    assert "prophet_forecaster" in catalog_message
-    assert "isolation_forest" in catalog_message
+    # The full recipe catalog is no longer sent: every recipe is already a tool, and
+    # the extra text pushed requests over provider token limits.
+    user_message = captured_messages["messages"][1]["content"]
+    assert "dataset_profile" in user_message
+    assert "registered_recipe_catalog" not in user_message
 
 
 def test_agent_prefers_openai_and_falls_back_to_groq(monkeypatch):
@@ -434,6 +437,7 @@ def test_agent_job_manager_returns_job_id_and_rejects_over_capacity(monkeypatch)
             dataset_path="datasets/dataset.csv",
             user_request="Train a regression model.",
             max_attempts=1,
+            tenant_id=1,
         )
         assert job_id.startswith("agent_")
         assert worker_started.wait(timeout=2)
@@ -444,16 +448,17 @@ def test_agent_job_manager_returns_job_id_and_rejects_over_capacity(monkeypatch)
                 dataset_path="datasets/other.csv",
                 user_request="Train a classifier.",
                 max_attempts=1,
+                tenant_id=1,
             )
 
         release_worker.set()
         for _ in range(50):
-            job = manager.get_job(job_id)
+            job = manager.get_job(job_id, tenant_id=1)
             if job and job["status"] in {"SUCCESS", "FAILED"}:
                 break
             time.sleep(0.02)
 
-        assert manager.get_job(job_id)["status"] == "SUCCESS"
+        assert manager.get_job(job_id, tenant_id=1)["status"] == "SUCCESS"
     finally:
         release_worker.set()
         manager.shutdown()
