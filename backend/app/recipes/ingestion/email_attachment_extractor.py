@@ -398,7 +398,7 @@ class EmailAttachmentExtractorRecipe(BaseRecipe):
             bio.seek(0)
             return pd.read_csv(bio, sep=None, engine="python")
 
-    def execute(self, inputs: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+    def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
         t0 = time.time()
         imap_server = str(config.get("imap_server", "")).strip()
         if not imap_server:

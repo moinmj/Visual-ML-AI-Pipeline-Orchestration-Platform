@@ -432,7 +432,7 @@ class FTPSFTPWatcherRecipe(BaseRecipe):
             except Exception:
                 raise ExecutionException(f"Unable to parse remote file '{filename}' as {fmt}: {e}")
 
-    def execute(self, inputs: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+    def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
         t0 = time.time()
         protocol = str(config.get("protocol", "sftp")).strip().lower()
         if protocol not in ("sftp", "ftp"):

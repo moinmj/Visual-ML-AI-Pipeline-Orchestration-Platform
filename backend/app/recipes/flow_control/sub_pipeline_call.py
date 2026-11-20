@@ -214,7 +214,7 @@ class SubPipelineCallRecipe(BaseRecipe):
 
         return current_df, step_logs
 
-    def execute(self, inputs: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+    def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
         t0 = time.time()
         pipeline_id = str(config.get("pipeline_id", "")).strip()
         if not pipeline_id:

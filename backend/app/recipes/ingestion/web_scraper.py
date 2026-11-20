@@ -286,7 +286,7 @@ class WebScraperRecipe(BaseRecipe):
                 {"rank": 5, "country": "India", "gdp_nominal_trillion": 3.7, "share_global_pct": 3.5},
             ])
 
-    def execute(self, inputs: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+    def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
         t0 = time.time()
         url = str(config.get("url", "")).strip()
         if not url:

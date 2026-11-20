@@ -182,7 +182,7 @@ class DeadLetterQueueRecipe(BaseRecipe):
         ]
         return pd.DataFrame(clean_rows), pd.DataFrame(failed_rows)
 
-    def execute(self, inputs: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+    def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
         t0 = time.time()
         dlq_mode = str(config.get("dlq_mode", "trap_and_isolate")).strip().lower()
         valid_col = str(config.get("validation_column", "")).strip()
