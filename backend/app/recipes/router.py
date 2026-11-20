@@ -127,6 +127,8 @@ class RecipeRunResponse(BaseModel):
     columns: Optional[List[str]] = None
     total_rows: Optional[int] = None
     errors: Optional[List[str]] = None
+    saved_credential_id: Optional[str] = None
+    saved_credential_name: Optional[str] = None
 
 
 def _plain(obj: Any) -> Any:
@@ -145,6 +147,7 @@ async def run_recipe(
     recipe_id: str,
     body: RecipeRunRequest,
     user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
 ):
     """
     **Run a single recipe and get its result back immediately.**
@@ -235,6 +238,39 @@ async def run_recipe(
     output_summary = _plain(result.get("output_summary"))
     preview_items = (metrics or {}).get("preview_items") if metrics else None
 
+    saved_cred_id = None
+    saved_cred_name = None
+    if bool(config.get("save_credential", False)):
+        try:
+            provider = recipe_id.replace("_connector", "").lower()
+            default_name = str(config.get("credential_name") or f"{recipe.name} ({config.get('host', config.get('database', 'Connection'))})").strip()
+            safe_meta = {
+                k: config[k]
+                for k in ("host", "port", "database", "username", "account", "warehouse", "ssl_mode", "bucket", "project_id", "email")
+                if k in config and config[k]
+            }
+            cred_payload = {
+                k: v for k, v in config.items()
+                if k not in ("save_credential", "credential_name", "tenant_id", "dry_run", "sample_size") and v is not None and v != ""
+            }
+            cred = await CredentialService.create_credential(
+                db=db,
+                provider=provider,
+                name=default_name,
+                data=cred_payload,
+                tenant_id=user.tenant_id,
+                user_id=getattr(user, 'user_id', getattr(user, 'sub', None)),
+                metadata_info=safe_meta,
+                auth_type="database" if "database" in getattr(recipe, "subgroup", "").lower() else "basic",
+            )
+            saved_cred_id = cred.id
+            saved_cred_name = cred.name
+            if isinstance(output_summary, dict):
+                output_summary["saved_credential_id"] = saved_cred_id
+                output_summary["saved_credential_name"] = saved_cred_name
+        except Exception as save_err:
+            logger.warning(f"Failed to auto-save credential in run_recipe: {save_err}")
+
     return RecipeRunResponse(
         recipe_id=recipe_id,
         status="success",
@@ -244,6 +280,8 @@ async def run_recipe(
         rows=rows,
         columns=columns,
         total_rows=total_rows,
+        saved_credential_id=saved_cred_id,
+        saved_credential_name=saved_cred_name,
     )
 
 
@@ -277,6 +315,7 @@ class RecipeInspectResponse(BaseModel):
     message: Optional[str] = None
     error: Optional[str] = None
     saved_credential_id: Optional[str] = None
+    saved_credential_name: Optional[str] = None
 
 
 @router.post(
@@ -337,10 +376,15 @@ async def inspect_recipe(
     )
 
     saved_cred_id = None
-    if body.save_credential and res.get("success", False):
+    saved_cred_name = None
+    if (body.save_credential or config.get("save_credential")) and res.get("success", False):
         try:
             provider = recipe_id.replace("_connector", "").lower()
-            default_name = body.credential_name or f"{recipe.name} ({config.get('host', config.get('database', 'Connection'))})"
+            default_name = (
+                body.credential_name
+                or config.get("credential_name")
+                or f"{recipe.name} ({config.get('host', config.get('database', 'Connection'))})"
+            )
             safe_meta = {
                 k: config[k]
                 for k in ("host", "port", "database", "username", "account", "warehouse", "ssl_mode")
@@ -357,7 +401,9 @@ async def inspect_recipe(
                 auth_type="database",
             )
             saved_cred_id = cred.id
+            saved_cred_name = cred.name
             res["saved_credential_id"] = cred.id
+            res["saved_credential_name"] = cred.name
         except Exception as save_err:
             logger.warning(f"Failed to auto-save credential in inspect: {save_err}")
 
@@ -369,5 +415,6 @@ async def inspect_recipe(
         message=res.get("message"),
         error=res.get("error"),
         saved_credential_id=saved_cred_id,
+        saved_credential_name=saved_cred_name,
     )
 
