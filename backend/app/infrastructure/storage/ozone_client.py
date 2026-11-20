@@ -378,3 +378,60 @@ def list_ozone_objects(
         "last_modified": None,
     } for fkey in sorted(folders)]
     return folder_items + items
+
+def list_landing_sources(tenant_id: int, meta: Optional[dict] = None) -> list:
+    """
+    Step 1 of the landing drill-down: one entry per data source folder under 'landing/db/t<tenant_id>/'.
+
+      landing/db/t4/u5_annual_survey/<table>/<file>.parquet  ->  source = 'u5_annual_survey'
+
+    Keys are only counted, never returned, so the answer stays small however many files there are.
+    A file sitting directly in a source folder (no table folder) counts as its own table.
+    meta['truncated'] is set to True if MAX_SCANNED_KEYS was hit.
+    """
+    bucket = settings.OZONE_BUCKET
+    landing = tenant_landing_prefix(tenant_id)
+    s3 = get_s3_client()
+    sources: dict = {}
+    scanned, truncated, token = 0, False, None
+    while True:
+        kwargs = {"Bucket": bucket, "Prefix": landing, "MaxKeys": 1000}
+        if token:
+            kwargs["ContinuationToken"] = token
+        response = s3.list_objects_v2(**kwargs)
+        for obj in response.get("Contents", []):
+            scanned += 1
+            key = obj["Key"]
+            if key.endswith("/"):
+                continue
+            parts = key[len(landing):].split("/")
+            if len(parts) < 2:
+                continue  # a file straight in landing/db/t<id>/ belongs to no source
+            entry = sources.setdefault(parts[0], {
+                "name": parts[0], "tables": set(), "file_count": 0, "total_size_bytes": 0, "last_modified": None,
+            })
+            entry["tables"].add(parts[1] if len(parts) > 2 else parts[1].rsplit(".", 1)[0])
+            entry["file_count"] += 1
+            entry["total_size_bytes"] += int(obj.get("Size") or 0)
+            lm = obj.get("LastModified")
+            if lm and (entry["last_modified"] is None or lm > entry["last_modified"]):
+                entry["last_modified"] = lm
+        if scanned >= MAX_SCANNED_KEYS:
+            truncated = True
+            break
+        if not response.get("IsTruncated"):
+            break
+        token = response.get("NextContinuationToken")
+    if meta is not None:
+        meta["truncated"] = truncated
+    result = []
+    for e in sorted(sources.values(), key=lambda x: x["name"].lower()):
+        lm = e["last_modified"]
+        result.append({
+            "name": e["name"],
+            "table_count": len(e["tables"]),
+            "file_count": e["file_count"],
+            "total_size_bytes": e["total_size_bytes"],
+            "last_modified": lm.isoformat() if lm else None,
+        })
+    return result

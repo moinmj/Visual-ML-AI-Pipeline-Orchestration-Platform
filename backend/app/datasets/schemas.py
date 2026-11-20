@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any, List, ForwardRef
+from typing import Optional, Dict, Any, List, ForwardRef, Literal
 from datetime import datetime
 
 
@@ -74,6 +74,67 @@ class OzoneBrowseGroupedResponse(BaseModel):
     total: int = Field(..., description="Files across all folders")
     truncated: bool = Field(False, description="True when more files exist than `limit`; raise `limit` or narrow with `prefix`")
     groups: List[OzoneGroupNode]
+
+
+class OzoneSourceNode(BaseModel):
+    """One data source folder in landing (e.g. 'u5_annual_survey'). Tables are loaded in a second call."""
+    id: str = Field(..., description="Raw folder name. Send this as `source` to get the tables of this data source.")
+    label: str = Field(..., description="Display name (the folder name without its 'u<n>_' prefix)")
+    path: str = Field(..., description="Ozone key prefix of the source folder")
+    table_count: int = Field(0, description="Number of tables in this source")
+    file_count: int = Field(0, description="Number of files in this source")
+    total_size_bytes: int = Field(0, description="Total size of the files in this source")
+    last_modified: Optional[str] = Field(None, description="Newest file time in this source (ISO 8601)")
+
+
+class OzoneLandingSourcesResponse(BaseModel):
+    """landing_view=sources: the list of data sources only (no tables, no files)."""
+    view: Literal["sources"] = "sources"
+    source: str = Field("bucket", description="Where the data lives: the Ozone bucket")
+    scope: str = "landing"
+    total_sources: int
+    total_tables: int
+    total_files: int
+    truncated: bool = False
+    sources: List[OzoneSourceNode]
+
+
+class OzoneTableNode(BaseModel):
+    """One table of a data source (landing_view=tables). Carries the dataset fields so the UI needs no digging into `items`."""
+    id: str = Field(..., description="Table name (the folder under the data source)")
+    label: str = Field(..., description="Display name of the table")
+    path: Optional[str] = Field(None, description="Ozone key prefix of the table folder")
+    count: int = Field(0, description="Number of files in this table")
+    total_size_bytes: int = Field(0, description="Total size of the files in this table")
+    sub_groups: Optional[Dict[str, int]] = Field(None, description="File counts by media_type")
+    last_modified: Optional[str] = Field(None, description="Newest file time in this table (ISO 8601)")
+    dataset_id: Optional[str] = Field(None, description="Dataset UUID to use for this table: the newest file that is already registered. null = nothing registered yet (see can_register).")
+    dataset_ids: List[str] = Field(default_factory=list, description="Dataset UUIDs of ALL registered files of this table, newest first (a table can hold several files)")
+    is_registered: bool = Field(False, description="True when at least one file of this table is registered as a dataset")
+    can_register: bool = Field(False, description="True when at least one file of this table is not registered yet")
+    latest_file_key: Optional[str] = Field(None, description="Ozone key of the newest file of this table (what POST /datasets/ozone/register takes)")
+    items: List[OzoneObjectResponse] = Field(default_factory=list, description="The files of this table, newest first; each has its own dataset_id")
+
+
+class OzoneLandingTableNode(BaseModel):
+    """One table of a data source (landing_view=tables). dataset_id sits here, on the table, not inside any `items`."""
+    id: str = Field(..., description="Table name (the folder under the data source)")
+    label: str = Field(..., description="Display name of the table")
+    path: str = Field(..., description="Ozone key prefix of the table folder")
+    count: int = Field(0, description="Number of files in this table")
+    total_size_bytes: int = Field(0, description="Total size of the files in this table")
+    dataset_id: Optional[str] = Field(None, description="Dataset UUID of the table's newest file; null if nothing is registered yet")
+
+
+class OzoneLandingTablesResponse(BaseModel):
+    """landing_view=tables&source=...: the tables of ONE data source, each with its files."""
+    view: Literal["tables"] = "tables"
+    source: OzoneSourceNode
+    scope: str = "landing"
+    total_tables: int
+    total_files: int
+    truncated: bool = False
+    tables: List[OzoneLandingTableNode] = Field(..., description="One node per table, each with its dataset_id")
 
 
 class ColumnSchemaItem(BaseModel):
