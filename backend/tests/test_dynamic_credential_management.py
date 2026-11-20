@@ -62,6 +62,17 @@ def test_schema_auto_enrichment_for_credential_recipes():
             "equals": True
         }
 
+        # 3. Position: Ensure credential_id and save_credential appear ABOVE (not at the bottom)
+        assert "credential_id" in props, f"Recipe {recipe.recipe_id} should have 'credential_id' for GET credentials integration"
+        prop_keys = list(props.keys())
+        cred_id_idx = prop_keys.index("credential_id")
+        save_cred_idx = prop_keys.index("save_credential")
+        cred_name_idx = prop_keys.index("credential_name")
+
+        assert save_cred_idx == cred_id_idx + 1, "save_credential must immediately follow credential_id"
+        assert cred_name_idx == save_cred_idx + 1, "credential_name must immediately follow save_credential"
+        assert save_cred_idx < 5, f"save_credential must be near the top (index < 5), got {save_cred_idx}"
+
 
 def test_schema_non_credential_recipes_not_enriched():
     """Verify recipes without credentials (e.g. CSV Loader) do NOT get 'save_credential'."""
