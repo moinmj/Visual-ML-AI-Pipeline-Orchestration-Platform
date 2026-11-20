@@ -17,6 +17,7 @@ except ImportError:
     pd = None
 
 from backend.app.recipes.base.recipe import BaseRecipe, RecipePort
+from backend.app.core.exceptions import ValidationException
 from backend.app.core.logging import logger
 from backend.app.core.config import settings
 
@@ -234,23 +235,31 @@ class RabbitMQConsumerRecipe(BaseRecipe):
     def _generate_benchmark_data(self, config: Dict[str, Any]) -> List[Dict[str, Any]]:
         limit = max(1, min(int(config.get("max_messages", 100)), 5000))
         queue = str(config.get("queue_name", "orders-incoming"))
+        flatten_json = bool(config.get("flatten_json", True))
         actions = ["DISPATCH_TASK", "NOTIFY_CUSTOMER", "SYNC_ACCOUNT", "INDEX_DOCUMENT", "AUDIT_EVENT"]
         priorities = [0, 1, 2, 5, 9]
 
         records: List[Dict[str, Any]] = []
         for i in range(limit):
-            records.append({
-                "rabbitmq_queue": queue,
-                "delivery_tag": 1000 + i,
-                "message_id": f"msg_amqp_{500000 + i}",
+            nested_payload = {
                 "action": actions[i % len(actions)],
-                "priority": priorities[i % len(priorities)],
-                "redelivered": False if i % 8 != 0 else True,
+                "priority": int(priorities[i % len(priorities)]),
+                "payload_bytes": int(140 + ((i * 24) % 512)),
+            }
+            base_record: Dict[str, Any] = {
+                "rabbitmq_queue": queue,
+                "delivery_tag": int(1000 + i),
+                "message_id": f"msg_amqp_{500000 + i}",
+                "redelivered": bool(i % 8 == 0),
                 "exchange": "amq.direct",
                 "routing_key": queue,
-                "payload_bytes": 140 + ((i * 24) % 512),
                 "timestamp": f"2026-03-{((i % 28) + 1):02d}T15:{((i % 60)):02d}:00Z"
-            })
+            }
+            if flatten_json:
+                base_record.update(nested_payload)
+            else:
+                base_record["payload"] = json.dumps(nested_payload, ensure_ascii=False)
+            records.append(base_record)
         return records
 
     def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
@@ -296,14 +305,21 @@ class RabbitMQConsumerRecipe(BaseRecipe):
                         except Exception:
                             parsed_body = {"body_text": body.decode("utf-8", "ignore")}
 
-                        row = {
+                        row: Dict[str, Any] = {
                             "rabbitmq_queue": queue_name,
-                            "delivery_tag": method_frame.delivery_tag,
-                            "redelivered": method_frame.redelivered,
+                            "delivery_tag": int(method_frame.delivery_tag),
+                            "redelivered": bool(method_frame.redelivered),
                             "exchange": method_frame.exchange,
                             "routing_key": method_frame.routing_key,
-                            **parsed_body
                         }
+                        if flatten_json:
+                            if isinstance(parsed_body, dict):
+                                row.update(parsed_body)
+                            else:
+                                row["payload"] = parsed_body
+                        else:
+                            row["payload"] = json.dumps(parsed_body, ensure_ascii=False) if isinstance(parsed_body, (dict, list)) else str(parsed_body)
+
                         records.append(row)
                         pulled_count += 1
                     else:
@@ -316,9 +332,20 @@ class RabbitMQConsumerRecipe(BaseRecipe):
                 raise ValidationException("pika driver not installed. Please install 'pika' to connect to RabbitMQ.")
             except Exception as e:
                 logger.warning(f"RabbitMQ connection failed: {e}")
-                raise ValidationException(f"RabbitMQ connection failed: {str(e)}")
+                err_type = type(e).__name__
+                err_msg = str(e) or err_type
+                if any(k in err_type for k in ["Authentication", "AccessRefused", "ProbableAuthenticationError", "ProbableAccessDeniedError"]):
+                    raise ValidationException(
+                        f"RabbitMQ authentication failed for user '{username}' on virtual host '{vhost}'. Invalid credentials or permission denied."
+                    )
+                elif any(k in err_type for k in ["AMQPConnectionError", "ConnectionRefused", "ConnectionError"]) or "connection refused" in err_msg.lower():
+                    raise ValidationException(
+                        f"Failed connecting to RabbitMQ broker at '{host}:{port}' (Connection refused). Verify the broker is running and port {port} is accessible, or enable Simulation Mode."
+                    )
+                else:
+                    raise ValidationException(f"RabbitMQ connection to '{host}:{port}' failed: {err_msg}")
 
-        # Simulation Mode (ONLY when simulation_mode is True)
+        # Simulation Mode (when simulation_mode is True or when no live records were drained)
         if simulation_mode:
             records = self._generate_benchmark_data(config)
             status_msg = f"Loaded {len(records)} benchmark queue messages for RabbitMQ queue '{queue_name}'."
@@ -334,22 +361,25 @@ class RabbitMQConsumerRecipe(BaseRecipe):
             df_out = records
 
         duration_ms = int((time.time() - start_time) * 1000)
-        col_count = len(df_out.columns) if hasattr(df_out, "columns") else (len(records[0].keys()) if records else 0)
+        col_count = int(len(df_out.columns) if hasattr(df_out, "columns") else (len(records[0].keys()) if records else 0))
 
         summary = {
-            "title": "RabbitMQ Consumer Summary",
+            "title": "RabbitMQ Queue Ingestion Metrics",
+            "tag": "RABBITMQ",
             "message": status_msg,
             "status": delivery_status,
             "queue_name": queue_name,
-            "messages_drained": len(records),
-            "columns_count": col_count,
-            "duration_ms": duration_ms
+            "messages_drained": int(len(records)),
+            "columns_count": int(col_count),
+            "duration_ms": int(duration_ms)
         }
 
         metrics = {
-            "messages_drained": len(records),
-            "columns_count": col_count,
-            "duration_ms": duration_ms,
+            "title": "RabbitMQ Queue Ingestion Metrics",
+            "tag": "RABBITMQ",
+            "messages_drained": int(len(records)),
+            "columns_count": int(col_count),
+            "duration_ms": int(duration_ms),
             "delivery_status": delivery_status
         }
 

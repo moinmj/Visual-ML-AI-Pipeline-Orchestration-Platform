@@ -145,9 +145,97 @@ def test_rabbitmq_consumer_validation_and_execution():
     assert "rabbitmq_queue" in df.columns
     assert "delivery_tag" in df.columns
     assert "action" in df.columns
+    assert summary["title"] == "RabbitMQ Queue Ingestion Metrics"
+    assert summary["tag"] == "RABBITMQ"
     assert summary["queue_name"] == "orders-incoming"
     assert summary["messages_drained"] == 30
     assert summary["status"] == "SIMULATED"
+    assert isinstance(summary["messages_drained"], int)
+    assert isinstance(summary["columns_count"], int)
+    assert isinstance(summary["duration_ms"], int)
+
+
+def test_rabbitmq_consumer_live_connection_exception_handling():
+    """Verify live connection error raises ValidationException with human-readable broker unreachable guidance."""
+    from backend.app.core.exceptions import ValidationException
+    r = RabbitMQConsumerRecipe()
+
+    cfg = {
+        "connection_mode": "host_port",
+        "host": "127.0.0.1",
+        "port": 5679,  # Unreachable port
+        "queue_name": "orders-test",
+        "simulation_mode": False
+    }
+
+    with pytest.raises(ValidationException) as exc_info:
+        r.execute({}, cfg)
+
+    err_msg = str(exc_info.value)
+    assert "Failed connecting to RabbitMQ broker" in err_msg or "Connection refused" in err_msg
+    assert "5679" in err_msg
+
+
+def test_rabbitmq_consumer_flatten_json_toggle():
+    """Verify that when flatten_json is False, nested RabbitMQ payload remains inside a single 'payload' column."""
+    r = RabbitMQConsumerRecipe()
+
+    # 1. flatten_json = False (Unchecked)
+    cfg_unflat = {
+        "queue_name": "tasks-queue",
+        "max_messages": 10,
+        "flatten_json": False,
+        "simulation_mode": True
+    }
+    res_unflat = r.execute({}, cfg_unflat)
+    df_unflat = res_unflat["dataframe"]
+    assert "payload" in df_unflat.columns
+    assert "action" not in df_unflat.columns
+    assert "priority" not in df_unflat.columns
+
+    # Verify JSON structure inside payload column
+    parsed = json.loads(df_unflat["payload"].iloc[0])
+    assert "action" in parsed
+    assert "priority" in parsed
+
+    # 2. flatten_json = True (Checked)
+    cfg_flat = {
+        "queue_name": "tasks-queue",
+        "max_messages": 10,
+        "flatten_json": True,
+        "simulation_mode": True
+    }
+    res_flat = r.execute({}, cfg_flat)
+    df_flat = res_flat["dataframe"]
+    assert "action" in df_flat.columns
+    assert "priority" in df_flat.columns
+
+
+def test_rabbitmq_consumer_source_node_inputs_empty():
+    """Verify RabbitMQ consumer has empty input_types and inputs (is a standalone DAG root)."""
+    r = RabbitMQConsumerRecipe()
+    assert r.input_types == []
+    assert r.get_inputs() == []
+    meta = r.to_metadata()
+    assert meta.input_types == []
+    assert meta.inputs == []
+
+
+def test_source_node_error_diagnostics_no_handle_suggestion():
+    """Verify diagnose_execution_error on source ingestion nodes never suggests checking incoming connection handles."""
+    from backend.app.engine.execution.executor import diagnose_execution_error
+    r = RabbitMQConsumerRecipe()
+
+    diag = diagnose_execution_error(
+        recipe=r,
+        error=Exception("Connection refused to 127.0.0.1:5672"),
+        inputs={},
+        config={"queue_name": "test"},
+        context={}
+    )
+    assert "Check incoming connection handles" not in diag["suggestion"]
+    assert "Broker Unreachable" in diag["title"]
+    assert "message broker" in diag["suggestion"]
 
 
 def test_mqtt_iot_stream_validation_and_execution():
