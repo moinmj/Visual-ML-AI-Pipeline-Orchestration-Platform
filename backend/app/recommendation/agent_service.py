@@ -4,7 +4,8 @@ from copy import deepcopy
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
-from jsonschema import ValidationError as JsonSchemaValidationError, validate
+from jsonschema import Draft202012Validator, ValidationError as JsonSchemaValidationError, validate
+from jsonschema.exceptions import SchemaError
 from openai import AsyncOpenAI, OpenAIError
 
 import backend.app.recipes
@@ -17,6 +18,31 @@ from backend.app.recipes.base.registry import recipe_registry
 
 TRANSFORM_CATEGORIES = {"preprocessing", "nlp"}
 SUPPORTED_TASK_TYPES = ("classification", "regression")
+
+# Providers limit tokens per minute (e.g. Groq's free tier allows 8,000 for one request).
+# The recipe tools are the bulk of each request, so they are compacted and trimmed to
+# this estimated budget. Trainers are always kept; preprocessing tools are dropped
+# largest-first when the budget is exceeded.
+AGENT_TOOL_TOKEN_BUDGET = 4500
+_STRIP_SCHEMA_KEYS = {"description", "title", "examples", "$comment"}
+
+
+def _compact_schema(node: Any) -> Any:
+    """Drop prose-only keywords from a JSON schema to save tokens (validation is unchanged)."""
+    if isinstance(node, dict):
+        return {
+            key: _compact_schema(value)
+            for key, value in node.items()
+            if not (key in _STRIP_SCHEMA_KEYS and not isinstance(value, dict))
+        }
+    if isinstance(node, list):
+        return [_compact_schema(value) for value in node]
+    return node
+
+
+def _estimate_tokens(obj: Any) -> int:
+    """Rough, slightly pessimistic token estimate for a JSON-serializable object."""
+    return len(json.dumps(obj, ensure_ascii=True)) // 3
 
 
 class AgentPlanningError(Exception):
@@ -256,6 +282,7 @@ def build_agent_tools(
         is_trainer = (
             metadata.category == "training"
             and "train_data" in metadata.input_types
+            and "model" not in metadata.input_types  # stackers/tuners need an existing model
             and "model" in metadata.output_types
             and bool(_recipe_task_types(metadata.recipe_id))
             and (
@@ -264,6 +291,20 @@ def build_agent_tools(
             )
         )
         if not (is_transform or is_trainer):
+            continue
+
+        # Groq validates every tool schema against JSON Schema draft 2020-12 and rejects
+        # the whole request if one is invalid. Skip such recipes instead of failing.
+        try:
+            Draft202012Validator.check_schema(
+                _recipe_parameters(metadata.recipe_id, task_type)
+            )
+        except SchemaError as exc:
+            logger.warning(
+                "Skipping recipe '%s' for the agent: invalid tool schema (%s)",
+                metadata.recipe_id,
+                exc.message,
+            )
             continue
 
         recipe = recipe_registry.get(metadata.recipe_id)
@@ -275,13 +316,49 @@ def build_agent_tools(
                     "name": name,
                     "description": (
                         f"Add the registered {recipe.category} recipe "
-                        f"'{recipe.name}'. {recipe.description}"
+                        f"'{recipe.name}'. {(recipe.description or '')[:140]}"
                     ),
-                    "parameters": _recipe_parameters(metadata.recipe_id, task_type),
+                    "parameters": _compact_schema(
+                        _recipe_parameters(metadata.recipe_id, task_type)
+                    ),
                 },
             }
         )
         tool_recipes[name] = metadata.recipe_id
+
+    # Keep the request under the provider's tokens-per-minute limit.
+    total_tokens = sum(_estimate_tokens(tool) for tool in tools)
+    if total_tokens > AGENT_TOOL_TOKEN_BUDGET:
+        droppable = sorted(
+            (
+                tool
+                for tool in tools
+                if tool["function"]["name"] in tool_recipes
+                and recipe_registry.get(tool_recipes[tool["function"]["name"]]).category
+                != "training"
+            ),
+            key=_estimate_tokens,
+            reverse=True,
+        )
+        dropped = []
+        for tool in droppable:
+            if total_tokens <= AGENT_TOOL_TOKEN_BUDGET:
+                break
+            tools.remove(tool)
+            total_tokens -= _estimate_tokens(tool)
+            tool_recipes.pop(tool["function"]["name"], None)
+            dropped.append(tool["function"]["name"])
+        logger.warning(
+            "Agent tool list trimmed to fit the token budget; dropped %d preprocessing tools: %s",
+            len(dropped),
+            dropped,
+        )
+    logger.info(
+        "Agent tools: %d tools, ~%d estimated tokens (budget %d)",
+        len(tools),
+        total_tokens,
+        AGENT_TOOL_TOKEN_BUDGET,
+    )
 
     return tools, tool_recipes
 
@@ -453,17 +530,6 @@ async def create_agent_plan(
     ]
 
     logger.info("Mandatory trainer choices available: %s", trainer_tool_names)
-    recipe_catalog = [
-        {
-            "recipe_id": metadata.recipe_id,
-            "name": metadata.name,
-            "category": metadata.category,
-            "description": metadata.description,
-            "input_types": metadata.input_types,
-            "output_types": metadata.output_types,
-        }
-        for metadata in recipe_registry.list_all()
-    ]
     # choose_task_type may not be exposed when the task is fixed, so don't read it from tools[0].
     supported_tasks = (
         [requested_task_type]
@@ -524,7 +590,6 @@ async def create_agent_plan(
                 {
                     "request": user_request,
                     "dataset_profile": dataset_context,
-                    "registered_recipe_catalog": recipe_catalog,
                 },
                 ensure_ascii=True,
             ),

@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 
 from backend.app.core.config import settings
 from backend.app.core.logging import logger
+from backend.app.core.tenant_context import set_current_tenant_id, set_current_user_id
 
 
 class AgentQueueFullError(Exception):
@@ -31,6 +32,7 @@ class AgentJobManager:
         )
         self._capacity = threading.BoundedSemaphore(max_workers + max_queued)
         self._jobs: Dict[str, Dict[str, Any]] = {}
+        self._job_tenants: Dict[str, int] = {}
         self._lock = threading.Lock()
         self._max_history = max_history
 
@@ -41,6 +43,8 @@ class AgentJobManager:
         dataset_path: str,
         user_request: str,
         max_attempts: int,
+        tenant_id: int,
+        user_id: Optional[str] = None,
         requested_target: Optional[str] = None,
         requested_task_type: Optional[str] = None,
     ) -> str:
@@ -50,6 +54,7 @@ class AgentJobManager:
         job_id = f"agent_{uuid.uuid4().hex}"
         with self._lock:
             self._prune_history()
+            self._job_tenants[job_id] = int(tenant_id)
             self._jobs[job_id] = {
                 "job_id": job_id,
                 "status": "PENDING",
@@ -71,19 +76,25 @@ class AgentJobManager:
                 max_attempts,
                 requested_target,
                 requested_task_type,
+                tenant_id,
+                user_id,
             )
         except RuntimeError as exc:
             with self._lock:
                 self._jobs.pop(job_id, None)
+                self._job_tenants.pop(job_id, None)
             self._capacity.release()
             logger.error(f"Could not submit agent job {job_id}: {exc}")
             raise AgentQueueFullError("Agent workers are shutting down; retry the request.") from exc
         return job_id
 
-    def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
+    def get_job(self, job_id: str, tenant_id: int) -> Optional[Dict[str, Any]]:
+        """Return the job only if it belongs to the caller's tenant."""
         with self._lock:
             job = self._jobs.get(job_id)
-            return dict(job) if job else None
+            if job is None or self._job_tenants.get(job_id) != int(tenant_id):
+                return None
+            return dict(job)
 
     def shutdown(self) -> None:
         self._executor.shutdown(wait=True, cancel_futures=True)
@@ -97,8 +108,14 @@ class AgentJobManager:
         max_attempts: int,
         requested_target: Optional[str],
         requested_task_type: Optional[str],
+        tenant_id: int,
+        user_id: Optional[str],
     ) -> None:
         started = time.monotonic()
+        # Worker threads do not inherit the request's context, so set the caller's
+        # tenant/user here. The DB tenant guard and executors read it from there.
+        set_current_tenant_id(tenant_id)
+        set_current_user_id(user_id)
         with self._lock:
             job = self._jobs.get(job_id)
             if job:
@@ -114,6 +131,7 @@ class AgentJobManager:
                     max_attempts=max_attempts,
                     requested_target=requested_target,
                     requested_task_type=requested_task_type,
+                    tenant_id=tenant_id,
                 )
             )
             with self._lock:
@@ -129,6 +147,8 @@ class AgentJobManager:
                     job["status"] = "FAILED"
                     job["error"] = str(exc)
         finally:
+            set_current_tenant_id(None)
+            set_current_user_id(None)
             with self._lock:
                 job = self._jobs.get(job_id)
                 if job:
@@ -145,12 +165,13 @@ class AgentJobManager:
         max_attempts: int,
         requested_target: Optional[str],
         requested_task_type: Optional[str],
+        tenant_id: int,
     ) -> Dict[str, Any]:
         from backend.app.infrastructure.storage.storage_manager import storage_manager
         from backend.app.recommendation.agent_graph import run_pipeline_agent
         from backend.app.recommendation.agent_service import build_dataset_context
 
-        dataframe = storage_manager.read_dataframe(dataset_path)
+        dataframe = storage_manager.read_dataframe(dataset_path, tenant_id)
         if not all(isinstance(column, str) for column in dataframe.columns):
             raise ValueError("The agent planner requires dataset column names to be strings.")
         if dataframe.empty or len(dataframe.columns) < 2:
@@ -181,6 +202,7 @@ class AgentJobManager:
         )
         for _, job_id in terminal_jobs[self._max_history :]:
             self._jobs.pop(job_id, None)
+            self._job_tenants.pop(job_id, None)
 
 
 agent_job_manager = AgentJobManager(

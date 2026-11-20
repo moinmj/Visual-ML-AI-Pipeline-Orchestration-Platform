@@ -1,10 +1,11 @@
-from typing import Any, Dict, Literal, Optional
+from typing import Annotated, Any, Dict, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.app.core.security import TokenData, get_current_user
 from backend.app.infrastructure.database.session import get_db
 from backend.app.datasets.service import dataset_service
 from backend.app.recommendation.agent_jobs import (
@@ -22,7 +23,12 @@ from backend.app.recommendation.agent_service import (
 )
 
 
-router = APIRouter(prefix="/agent/pipelines", tags=["Recommendation Agent"])
+router = APIRouter(
+    prefix="/agent/pipelines",
+    tags=["Recommendation Agent"],
+    dependencies=[Depends(get_current_user)],
+)
+CurrentUser = Annotated[TokenData, Depends(get_current_user)]
 
 
 class AgentPlanRequest(BaseModel):
@@ -36,14 +42,15 @@ class AgentRunRequest(AgentPlanRequest):
     max_attempts: int = Field(5, ge=1, le=5)
 
 
-async def _load_agent_dataset(dataset_id: str, db: AsyncSession):
-    dataset = await dataset_service.get_dataset(db, dataset_id)
+async def _load_agent_dataset(dataset_id: str, db: AsyncSession, tenant_id: int):
+    dataset = await dataset_service.get_dataset(db, dataset_id, tenant_id)
     try:
         from backend.app.infrastructure.storage.storage_manager import storage_manager
 
         dataframe = await run_in_threadpool(
             storage_manager.read_dataframe,
             dataset.storage_path,
+            tenant_id,
         )
     except (OSError, ValueError, ImportError) as exc:
         raise HTTPException(
@@ -67,16 +74,17 @@ async def _load_agent_dataset(dataset_id: str, db: AsyncSession):
 @router.post("/plan", response_model=Dict[str, Any])
 async def plan_pipeline_with_agent(
     payload: AgentPlanRequest,
+    user: CurrentUser,
     db: AsyncSession = Depends(get_db),
 ):
     """Create a reviewable supervised workflow using registered recipes."""
-    dataset = await dataset_service.get_dataset(db, payload.dataset_id)
+    dataset = await dataset_service.get_dataset(db, payload.dataset_id, user.tenant_id)
     dataset_context = await run_in_threadpool(
         build_dataset_context_from_profile,
         dataset.profile or {},
     )
     if not dataset_context["columns"]:
-        dataframe = await _load_agent_dataset(payload.dataset_id, db)
+        dataframe = await _load_agent_dataset(payload.dataset_id, db, user.tenant_id)
         dataset_context = await run_in_threadpool(build_dataset_context, dataframe)
     if not all(isinstance(column, str) for column in dataset_context["columns"]):
         raise HTTPException(
@@ -110,6 +118,7 @@ async def plan_pipeline_with_agent(
 @router.post("/run", response_model=Dict[str, Any], status_code=status.HTTP_202_ACCEPTED)
 async def run_pipeline_with_agent(
     payload: AgentRunRequest,
+    user: CurrentUser,
     db: AsyncSession = Depends(get_db),
 ):
     """Queue an autonomous supervised-model search and return without waiting for training."""
@@ -118,7 +127,7 @@ async def run_pipeline_with_agent(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="No recommendation-agent provider is configured. Set OPENAI_API_KEY or GROQ_API_KEY.",
         )
-    dataset = await dataset_service.get_dataset(db, payload.dataset_id)
+    dataset = await dataset_service.get_dataset(db, payload.dataset_id, user.tenant_id)
     try:
         job_id = agent_job_manager.submit(
             dataset_id=payload.dataset_id,
@@ -127,6 +136,8 @@ async def run_pipeline_with_agent(
             max_attempts=payload.max_attempts,
             requested_target=payload.target_column,
             requested_task_type=payload.task_type,
+            tenant_id=user.tenant_id,
+            user_id=user.sub,
         )
     except AgentQueueFullError as exc:
         raise HTTPException(
@@ -143,9 +154,9 @@ async def run_pipeline_with_agent(
 
 
 @router.get("/jobs/{job_id}", response_model=Dict[str, Any])
-async def get_agent_job(job_id: str):
+async def get_agent_job(job_id: str, user: CurrentUser):
     """Get status and the result of an asynchronously running agent job."""
-    job = agent_job_manager.get_job(job_id)
+    job = agent_job_manager.get_job(job_id, tenant_id=user.tenant_id)
     if job is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
