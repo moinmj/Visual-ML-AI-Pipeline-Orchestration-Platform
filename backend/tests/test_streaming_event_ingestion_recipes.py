@@ -267,8 +267,149 @@ def test_mqtt_iot_stream_validation_and_execution():
     assert "temperature_c" in df.columns
     assert "humidity_pct" in df.columns
     assert "pressure_hpa" in df.columns
+    assert summary["title"] == "MQTT / IoT Sensor Stream Metrics"
+    assert summary["tag"] == "MQTT"
     assert summary["status"] == "SIMULATED"
     assert summary["messages_ingested"] == 20
+    assert isinstance(summary["messages_ingested"], int)
+    assert isinstance(summary["columns_count"], int)
+    assert isinstance(summary["duration_ms"], int)
+
+
+def test_mqtt_iot_stream_flatten_json_toggle():
+    """Verify that unchecking 'Flatten JSON Payloads' preserves the sensor payload as a single 'payload' raw JSON column."""
+    r = MQTTStreamRecipe()
+
+    # 1. flatten_json = False (Unchecked)
+    cfg_unflat = {
+        "broker_host": "broker.emqx.io",
+        "topic": "factory/sensors/#",
+        "max_messages": 10,
+        "flatten_json": False,
+        "simulation_mode": True
+    }
+    res_unflat = r.execute({}, cfg_unflat)
+    df_unflat = res_unflat["dataframe"]
+    assert "payload" in df_unflat.columns
+    assert "temperature_c" not in df_unflat.columns
+    assert "humidity_pct" not in df_unflat.columns
+    assert "pressure_hpa" not in df_unflat.columns
+
+    # Verify payload column contains valid JSON string
+    first_payload = json.loads(df_unflat["payload"].iloc[0])
+    assert "temperature_c" in first_payload
+    assert "humidity_pct" in first_payload
+    assert "device_id" in first_payload
+
+    # 2. flatten_json = True (Checked)
+    cfg_flat = {
+        "broker_host": "broker.emqx.io",
+        "topic": "factory/sensors/#",
+        "max_messages": 10,
+        "flatten_json": True,
+        "simulation_mode": True
+    }
+    res_flat = r.execute({}, cfg_flat)
+    df_flat = res_flat["dataframe"]
+    assert "temperature_c" in df_flat.columns
+    assert "humidity_pct" in df_flat.columns
+    assert "pressure_hpa" in df_flat.columns
+
+
+def test_mqtt_iot_stream_no_stray_delimiter_in_schema():
+    """Verify MQTT schema does not contain stray delimiter or CSV properties."""
+    r = MQTTStreamRecipe()
+    schema = r.get_schema()
+    props = schema["properties"]
+    assert "delimiter" not in props
+    assert "csv_delimiter" not in props
+    assert "quote_char" not in props
+
+
+def test_mqtt_iot_stream_live_connection_unreachable_exception():
+    """Verify live connection to unreachable broker raises ValidationException with human-readable guidance."""
+    from backend.app.core.exceptions import ValidationException
+    r = MQTTStreamRecipe()
+
+    cfg = {
+        "broker_host": "127.0.0.1",
+        "port": 1889,  # Non-existent port
+        "topic": "sensors/test",
+        "timeout_seconds": 1,
+        "simulation_mode": False
+    }
+
+    with pytest.raises(ValidationException) as exc_info:
+        r.execute({}, cfg)
+
+    err = str(exc_info.value)
+    assert "Failed connecting to MQTT broker" in err or "Connection refused" in err
+    assert "1889" in err
+
+
+def test_mqtt_iot_stream_live_message_conversion(monkeypatch):
+    """Verify live incoming messages convert into real table records with delivery status 'LIVE'."""
+    r = MQTTStreamRecipe()
+
+    class MockMQTTMessage:
+        def __init__(self, topic, payload, qos=0):
+            self.topic = topic
+            self.payload = payload.encode("utf-8") if isinstance(payload, str) else payload
+            self.qos = qos
+
+    class MockMQTTClient:
+        def __init__(self, *args, **kwargs):
+            self.on_connect = None
+            self.on_message = None
+
+        def username_pw_set(self, u, p):
+            pass
+
+        def connect(self, host, port, keepalive=30):
+            pass
+
+        def subscribe(self, topic, qos=0):
+            pass
+
+        def loop_start(self):
+            # Simulate broker connection ACK and arrival of live messages
+            if self.on_connect:
+                self.on_connect(self, None, {}, 0)
+            if self.on_message:
+                self.on_message(self, None, MockMQTTMessage("factory/sensors/temp", '{"device": "SENSOR_01", "temp": 24.8, "status": "OK"}'))
+                self.on_message(self, None, MockMQTTMessage("factory/sensors/vibe", '{"device": "SENSOR_02", "vibe": 0.04, "status": "OK"}'))
+
+        def loop_stop(self):
+            pass
+
+        def disconnect(self):
+            pass
+
+    import paho.mqtt.client as paho_client
+    monkeypatch.setattr(paho_client, "Client", MockMQTTClient)
+
+    cfg = {
+        "broker_host": "mock.broker.net",
+        "port": 1883,
+        "topic": "factory/sensors/#",
+        "timeout_seconds": 1,
+        "flatten_json": True,
+        "simulation_mode": False
+    }
+
+    res = r.execute({}, cfg)
+    assert res is not None
+    assert "dataframe" in res
+    df = res["dataframe"]
+    summary = res["output_summary"]
+    metrics = res["metrics"]
+
+    assert len(df) == 2
+    assert summary["status"] == "LIVE"
+    assert metrics["delivery_status"] == "LIVE"
+    assert "device" in df.columns
+    assert df["device"].tolist() == ["SENSOR_01", "SENSOR_02"]
+    assert "Ingested 2 live MQTT messages" in summary["message"]
 
 
 def test_websocket_listener_validation_and_execution():

@@ -9,6 +9,8 @@ JSON sensor payload deserialization with auto-flattening, benchmark simulation f
 import os
 import json
 import time
+import uuid
+import threading
 from typing import Dict, Any, List, Optional, Tuple
 
 try:
@@ -17,6 +19,7 @@ except ImportError:
     pd = None
 
 from backend.app.recipes.base.recipe import BaseRecipe, RecipePort
+from backend.app.core.exceptions import ValidationException
 from backend.app.core.logging import logger
 from backend.app.core.config import settings
 
@@ -197,6 +200,7 @@ class MQTTStreamRecipe(BaseRecipe):
         limit = max(1, min(int(config.get("max_messages", 100)), 5000))
         topic = str(config.get("topic", "factory/sensors/telemetry/#"))
         qos = int(config.get("qos", 0))
+        flatten_json = bool(config.get("flatten_json", True))
 
         sensors = ["TEMP_HUMIDITY", "VIBRATION_AXIS", "PRESSURE_BAR", "FLOW_METER", "CURRENT_AMPS"]
         models = ["SENS-X100", "BOSCH-BME680", "TI-TMP117", "OMRON-D6F", "STM-LSM6D"]
@@ -204,9 +208,7 @@ class MQTTStreamRecipe(BaseRecipe):
         records: List[Dict[str, Any]] = []
         for i in range(limit):
             dev_id = f"EDGE_NODE_{10 + (i % 20):03d}"
-            records.append({
-                "mqtt_topic": topic.replace("#", f"node_{dev_id}/data"),
-                "mqtt_qos": qos,
+            nested_payload = {
                 "device_id": dev_id,
                 "sensor_model": models[i % len(models)],
                 "sensor_type": sensors[i % len(sensors)],
@@ -214,10 +216,19 @@ class MQTTStreamRecipe(BaseRecipe):
                 "humidity_pct": round(45.0 + ((i * 2.1) % 50.0), 1),
                 "pressure_hpa": round(1013.25 + ((i * 0.45) % 25.0), 2),
                 "vibration_rms": round(0.02 + ((i * 0.05) % 1.5), 3),
-                "battery_pct": max(10, 100 - (i % 90)),
-                "payload_bytes": 96 + ((i * 16) % 256),
+                "battery_pct": int(max(10, 100 - (i % 90))),
+                "payload_bytes": int(96 + ((i * 16) % 256)),
+            }
+            base_record: Dict[str, Any] = {
+                "mqtt_topic": topic.replace("#", f"node_{dev_id}/data").replace("+", "sensor1"),
+                "mqtt_qos": int(qos),
                 "timestamp": f"2026-03-{((i % 28) + 1):02d}T16:{((i % 60)):02d}:00Z"
-            })
+            }
+            if flatten_json:
+                base_record.update(nested_payload)
+            else:
+                base_record["payload"] = json.dumps(nested_payload, ensure_ascii=False)
+            records.append(base_record)
         return records
 
     def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
@@ -230,65 +241,138 @@ class MQTTStreamRecipe(BaseRecipe):
         broker_host = str(config.get("broker_host", "broker.emqx.io")).strip()
         port = int(config.get("port", 1883))
         topic = str(config.get("topic", "factory/sensors/telemetry/#")).strip()
-        client_id = str(config.get("client_id", "ml_pipeline_iot_subscriber")).strip()
+        client_id_prefix = str(config.get("client_id", "ml_pipeline_iot_subscriber")).strip()
         qos = int(config.get("qos", 0))
 
         records: List[Dict[str, Any]] = []
         delivery_status = "SIMULATED"
         status_msg = ""
 
-        # Live Execution Attempt
+        # Live Execution Attempt with Paho MQTT
         if not simulation_mode and broker_host and topic:
             try:
                 import paho.mqtt.client as mqtt
 
+                unique_client_id = f"{client_id_prefix}_{uuid.uuid4().hex[:6]}" if client_id_prefix else f"subscriber_{uuid.uuid4().hex[:8]}"
                 collected_msgs: List[Dict[str, Any]] = []
+                connected_event = threading.Event()
+                connection_error: List[str] = []
+
+                def on_connect(client, userdata, flags, rc, *args):
+                    reason_code = getattr(rc, "value", rc)
+                    if reason_code == 0:
+                        connected_event.set()
+                        client.subscribe(topic, qos=qos)
+                    else:
+                        connection_error.append(f"Connection rejected by broker with reason code {reason_code}")
+                        connected_event.set()
 
                 def on_message(client, userdata, msg):
                     try:
-                        parsed = json.loads(msg.payload.decode("utf-8", "ignore"))
+                        raw_payload = msg.payload.decode("utf-8", "ignore")
+                        try:
+                            parsed = json.loads(raw_payload)
+                        except Exception:
+                            parsed = {"raw_payload": raw_payload}
                     except Exception:
-                        parsed = {"raw_payload": msg.payload.decode("utf-8", "ignore")}
-                    row = {
+                        parsed = {"raw_payload": str(msg.payload)}
+
+                    row: Dict[str, Any] = {
                         "mqtt_topic": msg.topic,
-                        "mqtt_qos": msg.qos,
-                        **parsed
+                        "mqtt_qos": int(msg.qos),
+                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                     }
+                    if flatten_json:
+                        if isinstance(parsed, dict):
+                            row.update(parsed)
+                        else:
+                            row["payload"] = parsed
+                    else:
+                        row["payload"] = json.dumps(parsed, ensure_ascii=False) if isinstance(parsed, (dict, list)) else str(parsed)
+
                     collected_msgs.append(row)
 
-                client = mqtt.Client(client_id=client_id)
+                try:
+                    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=unique_client_id)
+                except (AttributeError, TypeError):
+                    client = mqtt.Client(client_id=unique_client_id)
+
+                client.on_connect = on_connect
+                client.on_message = on_message
+
                 u = str(config.get("username", "")).strip()
                 p = str(config.get("password", "")).strip()
-                if u and p:
+                if u or p:
                     client.username_pw_set(u, p)
 
-                client.on_message = on_message
-                client.connect(broker_host, port, 10)
-                client.subscribe(topic, qos=qos)
+                # Connect with keepalive
+                client.connect(broker_host, port, keepalive=30)
                 client.loop_start()
 
+                # Wait for connection handshake (CONNACK)
+                conn_timeout = min(float(timeout_sec), 5.0)
+                connected_ok = connected_event.wait(timeout=conn_timeout)
+
+                if not connected_ok:
+                    client.loop_stop()
+                    try:
+                        client.disconnect()
+                    except Exception:
+                        pass
+                    raise ValidationException(
+                        f"Failed connecting to MQTT broker at '{broker_host}:{port}' within {conn_timeout:.1f}s. "
+                        f"Verify broker hostname, port {port}, and network accessibility, or enable Simulation Mode."
+                    )
+
+                if connection_error:
+                    client.loop_stop()
+                    try:
+                        client.disconnect()
+                    except Exception:
+                        pass
+                    raise ValidationException(
+                        f"MQTT broker '{broker_host}:{port}' rejected connection: {connection_error[0]}. "
+                        f"Check username, password, or client permissions."
+                    )
+
+                # Listen for incoming published messages
                 t_end = time.time() + timeout_sec
                 while time.time() < t_end and len(collected_msgs) < max_messages:
-                    time.sleep(0.1)
+                    time.sleep(0.05)
 
                 client.loop_stop()
-                client.disconnect()
+                try:
+                    client.disconnect()
+                except Exception:
+                    pass
 
-                records = collected_msgs
                 delivery_status = "LIVE"
-                status_msg = f"Ingested {len(records)} live MQTT messages from broker '{broker_host}' on topic '{topic}'."
+                if collected_msgs:
+                    records = collected_msgs
+                    status_msg = f"Ingested {len(records)} live MQTT messages from broker '{broker_host}' on topic '{topic}'."
+                else:
+                    records = []
+                    status_msg = f"Connected to live broker '{broker_host}', but no messages were published to '{topic}' during the {timeout_sec}s sampling window."
+
             except ImportError:
-                status_msg = "paho-mqtt driver not installed. Using benchmark simulation fallback."
-                logger.info(status_msg)
+                raise ValidationException("paho-mqtt driver not installed. Please install 'paho-mqtt' to connect to MQTT brokers.")
+            except ValidationException:
+                raise
             except Exception as e:
                 logger.warning(f"MQTT connection failed: {e}")
-                status_msg = f"MQTT connection failed ({e}). Using benchmark simulation fallback."
+                err_str = str(e) or type(e).__name__
+                if "refused" in err_str.lower() or "connectionrefused" in err_str.lower():
+                    raise ValidationException(
+                        f"Failed connecting to MQTT broker at '{broker_host}:{port}' (Connection refused). "
+                        f"Verify the broker is running and port {port} is accessible, or enable Simulation Mode."
+                    )
+                raise ValidationException(f"MQTT connection to '{broker_host}:{port}' failed: {err_str}")
 
-        # Fallback to realistic benchmark data
-        if not records:
+        # Simulation Mode (when simulation_mode is True)
+        if simulation_mode:
             records = self._generate_benchmark_data(config)
-            if not status_msg:
-                status_msg = f"Loaded {len(records)} benchmark IoT sensor records for topic '{topic}'."
+            delivery_status = "SIMULATED"
+            status_msg = f"Loaded {len(records)} benchmark IoT sensor records for topic '{topic}'."
 
         if pd is not None and records:
             if flatten_json:
@@ -301,23 +385,26 @@ class MQTTStreamRecipe(BaseRecipe):
             df_out = records
 
         duration_ms = int((time.time() - start_time) * 1000)
-        col_count = len(df_out.columns) if hasattr(df_out, "columns") else (len(records[0].keys()) if records else 0)
+        col_count = int(len(df_out.columns) if hasattr(df_out, "columns") else (len(records[0].keys()) if records else 0))
 
         summary = {
-            "title": "MQTT / IoT Sensor Stream Summary",
+            "title": "MQTT / IoT Sensor Stream Metrics",
+            "tag": "MQTT",
             "message": status_msg,
             "status": delivery_status,
             "broker": broker_host,
             "topic": topic,
-            "messages_ingested": len(records),
-            "columns_count": col_count,
-            "duration_ms": duration_ms
+            "messages_ingested": int(len(records)),
+            "columns_count": int(col_count),
+            "duration_ms": int(duration_ms)
         }
 
         metrics = {
-            "messages_ingested": len(records),
-            "columns_count": col_count,
-            "duration_ms": duration_ms,
+            "title": "MQTT / IoT Sensor Stream Metrics",
+            "tag": "MQTT",
+            "messages_ingested": int(len(records)),
+            "columns_count": int(col_count),
+            "duration_ms": int(duration_ms),
             "delivery_status": delivery_status
         }
 
