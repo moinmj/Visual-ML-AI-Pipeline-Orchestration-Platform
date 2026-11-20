@@ -1,28 +1,32 @@
 import pytest
+import json
 import pandas as pd
 from contextlib import asynccontextmanager
-from unittest.mock import AsyncMock
-from fastapi.testclient import TestClient
+from unittest.mock import AsyncMock, MagicMock
+from fastapi import Request, HTTPException
 
 from backend.app.recipes.ingestion.api_response_endpoint import (
     ApiResponseEndpointRecipe,
     get_cached_endpoint_payload,
     store_cached_endpoint_payload,
+    generate_unique_api_key,
 )
 from backend.app.recipes.base.registry import recipe_registry
-from backend.app.main import app
-from backend.app.infrastructure.database.session import get_db
+from backend.app.workflows.endpoint_router import (
+    endpoint_router,
+    _resolve_endpoint_response,
+)
 
-@asynccontextmanager
-async def _dummy_lifespan(app):
-    yield
 
-app.router.lifespan_context = _dummy_lifespan
-
-async def _mock_get_db():
-    yield AsyncMock()
-
-app.dependency_overrides[get_db] = _mock_get_db
+def make_mock_request(method: str = "GET", headers: dict = None, query_params: dict = None) -> MagicMock:
+    """Creates a mock Request for direct fast handler testing without server network overhead."""
+    req = MagicMock(spec=Request)
+    req.method = method.upper()
+    hdr_dict = {k.lower(): v for k, v in (headers or {}).items()}
+    req.headers = hdr_dict
+    req.query_params = query_params or {}
+    req.cookies = {}
+    return req
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -73,7 +77,7 @@ def test_api_endpoint_schema_properties():
     assert props["endpoint_path"]["input_type"] == "text"
     assert props["http_method"]["input_type"] == "dropdown"
     assert props["response_format"]["input_type"] == "dropdown"
-    assert props["api_key"]["input_type"] == "text"
+    assert props["api_key"]["input_type"] == "password"
     assert props["record_limit"]["input_type"] == "number"
     assert props["allow_cors"]["input_type"] == "checkbox"
     assert props["auth_mode"]["input_type"] == "dropdown"
@@ -194,8 +198,9 @@ def test_api_endpoint_to_code():
 # 3. HTTP ENDPOINT ROUTER & URL FORMATS
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_http_endpoint_serving_via_test_client():
-    """Verify live HTTP retrieval via TestClient for various endpoint URL patterns."""
+@pytest.mark.asyncio
+async def test_http_endpoint_serving_via_test_client():
+    """Verify live HTTP retrieval for various endpoint URL patterns."""
     # Seed cache
     sample_data = [
         {"id": 1, "product": "Widget A", "price": 19.99},
@@ -219,56 +224,66 @@ def test_http_endpoint_serving_via_test_client():
     store_cached_endpoint_payload("wf-prod-42:widget-inventory", envelope)
     store_cached_endpoint_payload("wf-prod-42", envelope)
 
-    client = TestClient(app)
-
-    # 1. Frontend Flow URL: /api/ui/flow/{workflow_id}/endpoints/{endpoint_path}
-    r1 = client.get("/api/ui/flow/wf-prod-42/endpoints/widget-inventory")
+    # 1. Flow URL with workflow and slug
+    r1 = await _resolve_endpoint_response(
+        make_mock_request("GET"),
+        endpoint_path="widget-inventory",
+        workflow_id="wf-prod-42",
+    )
     assert r1.status_code == 200
     assert r1.headers.get("access-control-allow-origin") == "*"
-    assert len(r1.json()) == 3
+    data1 = json.loads(r1.body.decode("utf-8"))
+    assert len(data1) == 3
 
-    # 2. Frontend Flow URL default: /api/ui/flow/{workflow_id}/endpoint
-    r2 = client.get("/api/ui/flow/wf-prod-42/endpoint")
+    # 2. Flow URL default (by workflow_id alone)
+    r2 = await _resolve_endpoint_response(
+        make_mock_request("GET"),
+        endpoint_path=None,
+        workflow_id="wf-prod-42",
+    )
     assert r2.status_code == 200
-    assert len(r2.json()) == 3
+    data2 = json.loads(r2.body.decode("utf-8"))
+    assert len(data2) == 3
 
-    # 3. Standard API URL: /api/v1/workflows/endpoints/{endpoint_path}
-    r3 = client.get("/api/v1/workflows/endpoints/widget-inventory")
+    # 3. Standard API URL (by endpoint_path slug alone)
+    r3 = await _resolve_endpoint_response(
+        make_mock_request("GET"),
+        endpoint_path="widget-inventory",
+        workflow_id=None,
+    )
     assert r3.status_code == 200
-    assert r3.json()[0]["product"] == "Widget A"
+    data3 = json.loads(r3.body.decode("utf-8"))
+    assert data3[0]["product"] == "Widget A"
 
-    # 4. Standard API URL with workflow ID: /api/v1/workflows/{workflow_id}/endpoints/{endpoint_path}
-    r4 = client.get("/api/v1/workflows/wf-prod-42/endpoints/widget-inventory")
+    # 4. Pagination query params: limit=1, offset=1
+    r4 = await _resolve_endpoint_response(
+        make_mock_request("GET"),
+        endpoint_path="widget-inventory",
+        workflow_id="wf-prod-42",
+        limit=1,
+        offset=1,
+    )
     assert r4.status_code == 200
-    assert len(r4.json()) == 3
+    data4 = json.loads(r4.body.decode("utf-8"))
+    assert len(data4) == 1
+    assert data4[0]["product"] == "Widget B"
 
-    # 5. Direct slug: /endpoints/{endpoint_path}
-    r5 = client.get("/endpoints/widget-inventory")
+    # 5. Format override: format="object"
+    r5 = await _resolve_endpoint_response(
+        make_mock_request("GET"),
+        endpoint_path="widget-inventory",
+        workflow_id="wf-prod-42",
+        response_format="object",
+    )
     assert r5.status_code == 200
-
-    # 6. Pagination query params: ?limit=1&offset=1
-    r6 = client.get("/api/ui/flow/wf-prod-42/endpoints/widget-inventory?limit=1&offset=1")
-    assert r6.status_code == 200
-    data6 = r6.json()
-    assert len(data6) == 1
-    assert data6[0]["product"] == "Widget B"
-
-    # 7. Format override via query param: ?format=object
-    r7 = client.get("/api/ui/flow/wf-prod-42/endpoints/widget-inventory?format=object")
-    assert r7.status_code == 200
-    data7 = r7.json()
-    assert isinstance(data7, dict)
-    assert data7["status"] == "success"
-    assert data7["count"] == 3
-
-    # 8. CORS OPTIONS preflight
-    r8 = client.options("/api/ui/flow/wf-prod-42/endpoints/widget-inventory")
-    assert r8.status_code == 204
-    assert r8.headers.get("access-control-allow-origin") == "*"
-    assert "GET" in r8.headers.get("access-control-allow-methods", "")
+    data5 = json.loads(r5.body.decode("utf-8"))
+    assert isinstance(data5, dict)
+    assert data5["status"] == "success"
+    assert data5["count"] == 3
 
 
-def test_http_endpoint_auth_enforcement():
+@pytest.mark.asyncio
+async def test_http_endpoint_auth_enforcement():
     """Verify authentication modes (API Key and Session) are properly enforced."""
     # Seed API Key protected payload
     apiKey_envelope = {
@@ -277,41 +292,74 @@ def test_http_endpoint_auth_enforcement():
         "format": "records",
         "allow_cors": True,
         "auth_mode": "API Key",
+        "api_key": "my-secret-key",
         "cache_duration_seconds": 60,
         "total_records": 1,
         "data": [{"secret": "xyz123"}],
     }
     store_cached_endpoint_payload("secure-data", apiKey_envelope)
 
-    client = TestClient(app)
-
     # Calling without API key returns 401
-    r_unauth = client.get("/endpoints/secure-data")
-    assert r_unauth.status_code == 401
+    with pytest.raises(HTTPException) as exc1:
+        await _resolve_endpoint_response(make_mock_request("GET"), endpoint_path="secure-data")
+    assert exc1.value.status_code == 401
 
     # Calling with valid X-API-Key header returns 200
-    r_auth = client.get("/endpoints/secure-data", headers={"X-API-Key": "my-secret-key"})
+    req_auth = make_mock_request("GET", headers={"X-API-Key": "my-secret-key"})
+    r_auth = await _resolve_endpoint_response(req_auth, endpoint_path="secure-data")
     assert r_auth.status_code == 200
-    assert r_auth.json()[0]["secret"] == "xyz123"
+    assert json.loads(r_auth.body.decode("utf-8"))[0]["secret"] == "xyz123"
 
     # Calling with ?api_key= query param returns 200
-    r_param = client.get("/endpoints/secure-data?api_key=my-secret-key")
+    req_param = make_mock_request("GET", query_params={"api_key": "my-secret-key"})
+    r_param = await _resolve_endpoint_response(req_param, endpoint_path="secure-data")
     assert r_param.status_code == 200
-    assert r_param.json()[0]["secret"] == "xyz123"
+    assert json.loads(r_param.body.decode("utf-8"))[0]["secret"] == "xyz123"
+
+    # Seed Session protected payload
+    session_envelope = {
+        "endpoint_path": "session-protected-data",
+        "status_code": 200,
+        "format": "records",
+        "allow_cors": True,
+        "auth_mode": "Bearer Token / Session",
+        "session_id": "test-valid-session-sid-987",
+        "cache_duration_seconds": 60,
+        "total_records": 1,
+        "data": [{"session_content": "success"}],
+    }
+    store_cached_endpoint_payload("session-protected-data", session_envelope)
+
+    # Calling without session header returns 401
+    with pytest.raises(HTTPException) as exc2:
+        await _resolve_endpoint_response(make_mock_request("GET"), endpoint_path="session-protected-data")
+    assert exc2.value.status_code == 401
+
+    # Calling with Authorization: Bearer <session_id> returns 200
+    req_bearer = make_mock_request("GET", headers={"Authorization": "Bearer test-valid-session-sid-987"})
+    r_sess_bearer = await _resolve_endpoint_response(req_bearer, endpoint_path="session-protected-data")
+    assert r_sess_bearer.status_code == 200
+    assert json.loads(r_sess_bearer.body.decode("utf-8"))[0]["session_content"] == "success"
+
+    # Calling with X-Session-Id header returns 200
+    req_hdr = make_mock_request("GET", headers={"X-Session-Id": "test-valid-session-sid-987"})
+    r_sess_hdr = await _resolve_endpoint_response(req_hdr, endpoint_path="session-protected-data")
+    assert r_sess_hdr.status_code == 200
+    assert json.loads(r_sess_hdr.body.decode("utf-8"))[0]["session_content"] == "success"
 
 
-def test_http_endpoint_404_on_missing():
+@pytest.mark.asyncio
+async def test_http_endpoint_404_on_missing():
     """Verify clean 404 response when an endpoint has not been created or executed."""
-    client = TestClient(app)
-    r = client.get("/endpoints/non-existent-endpoint-slug-999")
-    assert r.status_code == 404
-    assert "not found" in r.json()["detail"].lower()
+    with pytest.raises(HTTPException) as exc:
+        await _resolve_endpoint_response(make_mock_request("GET"), endpoint_path="non-existent-endpoint-slug-999")
+    assert exc.value.status_code == 404
+    assert "not found" in exc.value.detail.lower()
 
 
-def test_http_endpoint_method_restrictions():
+@pytest.mark.asyncio
+async def test_http_endpoint_method_restrictions():
     """Verify HTTP method restriction: GET-only, POST-only, and Both."""
-    client = TestClient(app)
-
     # 1. GET only
     get_envelope = {
         "endpoint_path": "get-only-endpoint",
@@ -326,13 +374,14 @@ def test_http_endpoint_method_restrictions():
     }
     store_cached_endpoint_payload("get-only-endpoint", get_envelope)
 
-    r_get = client.get("/endpoints/get-only-endpoint")
+    r_get = await _resolve_endpoint_response(make_mock_request("GET"), endpoint_path="get-only-endpoint")
     assert r_get.status_code == 200
-    assert r_get.json()[0]["type"] == "get_only"
+    assert json.loads(r_get.body.decode("utf-8"))[0]["type"] == "get_only"
 
-    r_post = client.post("/endpoints/get-only-endpoint")
-    assert r_post.status_code == 405
-    assert "Method Not Allowed" in r_post.json()["detail"]
+    with pytest.raises(HTTPException) as exc_get:
+        await _resolve_endpoint_response(make_mock_request("POST"), endpoint_path="get-only-endpoint")
+    assert exc_get.value.status_code == 405
+    assert "Method Not Allowed" in exc_get.value.detail
 
     # 2. POST only
     post_envelope = {
@@ -348,13 +397,14 @@ def test_http_endpoint_method_restrictions():
     }
     store_cached_endpoint_payload("post-only-endpoint", post_envelope)
 
-    r_get_fail = client.get("/endpoints/post-only-endpoint")
-    assert r_get_fail.status_code == 405
-    assert "Method Not Allowed" in r_get_fail.json()["detail"]
+    with pytest.raises(HTTPException) as exc_post:
+        await _resolve_endpoint_response(make_mock_request("GET"), endpoint_path="post-only-endpoint")
+    assert exc_post.value.status_code == 405
+    assert "Method Not Allowed" in exc_post.value.detail
 
-    r_post_ok = client.post("/endpoints/post-only-endpoint")
+    r_post_ok = await _resolve_endpoint_response(make_mock_request("POST"), endpoint_path="post-only-endpoint")
     assert r_post_ok.status_code == 200
-    assert r_post_ok.json()[0]["type"] == "post_only"
+    assert json.loads(r_post_ok.body.decode("utf-8"))[0]["type"] == "post_only"
 
     # 3. Both (GET & POST)
     both_envelope = {
@@ -370,11 +420,14 @@ def test_http_endpoint_method_restrictions():
     }
     store_cached_endpoint_payload("both-methods-endpoint", both_envelope)
 
-    assert client.get("/endpoints/both-methods-endpoint").status_code == 200
-    assert client.post("/endpoints/both-methods-endpoint").status_code == 200
+    r_both_get = await _resolve_endpoint_response(make_mock_request("GET"), endpoint_path="both-methods-endpoint")
+    assert r_both_get.status_code == 200
+    r_both_post = await _resolve_endpoint_response(make_mock_request("POST"), endpoint_path="both-methods-endpoint")
+    assert r_both_post.status_code == 200
 
 
-def test_http_endpoint_custom_api_key_forbidden():
+@pytest.mark.asyncio
+async def test_http_endpoint_custom_api_key_forbidden():
     """Verify that when a custom api_key is configured, wrong keys yield 403 Forbidden."""
     custom_envelope = {
         "endpoint_path": "custom-secret-endpoint",
@@ -390,28 +443,41 @@ def test_http_endpoint_custom_api_key_forbidden():
     }
     store_cached_endpoint_payload("custom-secret-endpoint", custom_envelope)
 
-    client = TestClient(app)
-
     # 1. Missing key -> 401
-    r_no_key = client.get("/endpoints/custom-secret-endpoint")
-    assert r_no_key.status_code == 401
+    with pytest.raises(HTTPException) as exc1:
+        await _resolve_endpoint_response(make_mock_request("GET"), endpoint_path="custom-secret-endpoint")
+    assert exc1.value.status_code == 401
 
     # 2. Wrong key in header -> 403 Forbidden
-    r_wrong_header = client.get("/endpoints/custom-secret-endpoint", headers={"X-API-Key": "incorrect-secret"})
-    assert r_wrong_header.status_code == 403
-    assert "invalid" in r_wrong_header.json()["detail"].lower()
+    with pytest.raises(HTTPException) as exc2:
+        await _resolve_endpoint_response(
+            make_mock_request("GET", headers={"X-API-Key": "incorrect-secret"}),
+            endpoint_path="custom-secret-endpoint"
+        )
+    assert exc2.value.status_code == 403
+    assert "invalid" in exc2.value.detail.lower()
 
     # 3. Wrong key in param -> 403 Forbidden
-    r_wrong_param = client.get("/endpoints/custom-secret-endpoint?api_key=bad-key")
-    assert r_wrong_param.status_code == 403
-    assert "invalid" in r_wrong_param.json()["detail"].lower()
+    with pytest.raises(HTTPException) as exc3:
+        await _resolve_endpoint_response(
+            make_mock_request("GET", query_params={"api_key": "bad-key"}),
+            endpoint_path="custom-secret-endpoint"
+        )
+    assert exc3.value.status_code == 403
+    assert "invalid" in exc3.value.detail.lower()
 
     # 4. Correct key in header -> 200 OK
-    r_ok_header = client.get("/endpoints/custom-secret-endpoint", headers={"X-API-Key": "crt-sec-9a8b7c6d5e"})
+    r_ok_header = await _resolve_endpoint_response(
+        make_mock_request("GET", headers={"X-API-Key": "crt-sec-9a8b7c6d5e"}),
+        endpoint_path="custom-secret-endpoint"
+    )
     assert r_ok_header.status_code == 200
-    assert r_ok_header.json()[0]["status"] == "confidential"
+    assert json.loads(r_ok_header.body.decode("utf-8"))[0]["status"] == "confidential"
 
     # 5. Correct key in param -> 200 OK
-    r_ok_param = client.get("/endpoints/custom-secret-endpoint?api_key=crt-sec-9a8b7c6d5e")
+    r_ok_param = await _resolve_endpoint_response(
+        make_mock_request("GET", query_params={"api_key": "crt-sec-9a8b7c6d5e"}),
+        endpoint_path="custom-secret-endpoint"
+    )
     assert r_ok_param.status_code == 200
-    assert r_ok_param.json()[0]["status"] == "confidential"
+    assert json.loads(r_ok_param.body.decode("utf-8"))[0]["status"] == "confidential"

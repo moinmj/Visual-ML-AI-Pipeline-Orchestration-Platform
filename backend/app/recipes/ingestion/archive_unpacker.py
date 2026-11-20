@@ -346,7 +346,7 @@ class ArchiveUnpackerRecipe(BaseRecipe):
             except Exception:
                 raise ExecutionException(f"Failed parsing inner archive member '{filename}': {e}")
 
-    def execute(self, inputs: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+    def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
         t0 = time.time()
         archive_path = str(config.get("archive_path", "./data/archives/daily_export.zip")).strip()
         if not archive_path:

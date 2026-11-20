@@ -215,7 +215,7 @@ class RetryErrorHandlerRecipe(BaseRecipe):
                 pass
         return False
 
-    def execute(self, inputs: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+    def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
         t0 = time.time()
         target_rid = str(config.get("target_recipe_id", "custom_python_step")).strip()
         if not target_rid:

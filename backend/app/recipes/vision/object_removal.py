@@ -166,7 +166,7 @@ class ObjectRemovalRecipe(BaseRecipe):
     category = "vision_audio"
     media_type = "image"
     description = "Finds and numbers objects (people by default), removes the ones you choose and fills the background in."
-    input_types = []  # source node: reads its own images
+    input_types = ["dataframe"]  # source node: reads its own images
     output_types = ["dataframe"]
 
     def get_schema(self) -> Dict[str, Any]:
