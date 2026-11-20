@@ -195,7 +195,7 @@ class VideoObjectTrackingRecipe(BaseRecipe):
     category = "vision_audio"
     media_type = "video"
     description = "Extracts frames from video and tracks objects across them. Optionally predicts the gender of tracked people."
-    input_types = []  # source node: reads its own files, takes no input
+    input_types = ["dataframe"]  # source node: reads its own files, takes no input
     output_types = ["dataframe"]
 
     def get_schema(self) -> Dict[str, Any]:
