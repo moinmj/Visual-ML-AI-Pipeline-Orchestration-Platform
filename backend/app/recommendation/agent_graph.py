@@ -1,5 +1,6 @@
 import json
 import math
+import os
 import uuid
 from typing import Any, Dict, List, Optional, Tuple, TypedDict
 
@@ -8,7 +9,7 @@ from fastapi.concurrency import run_in_threadpool
 from langgraph.graph import END, START, StateGraph
 from jsonschema import ValidationError as JsonSchemaValidationError, validate
 
-from backend.app.core.config import settings
+from backend.app.core.config import settings  # noqa: F401  (tests patch agent_graph.settings)
 from backend.app.core.logging import logger
 from backend.app.engine.dag.graph import WorkflowGraph
 from backend.app.engine.execution.executor import DAGExecutor
@@ -179,7 +180,13 @@ async def _review_attempt(
         elif function_name in recipe_tools:
             recipe_id = recipe_tools[function_name]
             if recipe_id in used_recipe_ids:
-                raise AgentPlanningError(f"OpenAI selected recipe '{recipe_id}' more than once.")
+                # Models sometimes emit the same tool call twice in one response.
+                # Keep the first selection instead of failing the whole job.
+                logger.warning(
+                    "Reviewer selected recipe '%s' more than once; ignoring the duplicate.",
+                    recipe_id,
+                )
+                continue
             try:
                 validate(arguments, _recipe_parameters(recipe_id))
             except JsonSchemaValidationError as exc:
@@ -208,6 +215,11 @@ async def _review_attempt(
     return {"action": "revise", "recipe_selections": recipe_selections}
 
 
+# The agent saves accepted models to a local SQLite MLflow store only.
+# It never touches the Postgres database or settings.MLFLOW_TRACKING_URI.
+MLFLOW_LOCAL_URI = "sqlite:///./data/mlflow.db"
+
+
 async def _save_accepted_model(
     execution_id: str,
     metrics: Dict[str, float],
@@ -222,16 +234,16 @@ async def _save_accepted_model(
 
     if not MLFLOW_AVAILABLE:
         return {"saved": False, "error": "MLflow is not installed."}
-    from mlflow.exceptions import MlflowException
 
     tracker = recipe_registry.get("mlflow_tracker")
     task_label = task_type.title()
     model_name = f"Agent{task_label}_{uuid.uuid4().hex[:10]}"
+    os.makedirs("data", exist_ok=True)
     config = {
         "experiment_name": f"Agent_{task_label}_Pipelines",
         "registered_model_name": model_name,
         "stage": "Staging",
-        "tracking_uri": settings.MLFLOW_TRACKING_URI,
+        "tracking_uri": MLFLOW_LOCAL_URI,
     }
     try:
         saved = await run_in_threadpool(
@@ -240,10 +252,10 @@ async def _save_accepted_model(
             config=config,
             context=None,
         )
-    except (ImportError, MlflowException, OSError, ValueError) as exc:
+    except Exception as exc:  # registry problems must not fail the job
         logger.error(f"Could not save accepted agent model: {exc}")
         return {"saved": False, "error": str(exc)}
-    return {"saved": True, **saved.get("governance_record", {})}
+    return {"saved": True, "store": "local_sqlite", **saved.get("governance_record", {})}
 
 
 class PipelineAgentState(TypedDict, total=False):
@@ -411,11 +423,38 @@ def _route_after_evaluation(state: PipelineAgentState) -> str:
     return "finalize"
 
 
+def _is_trainer(recipe_id: str) -> bool:
+    recipe = recipe_registry.get(recipe_id)
+    return bool(recipe and recipe.category == "training")
+
+
 async def _revise_pipeline(state: PipelineAgentState) -> Dict[str, Any]:
+    selections = list(state["review"]["recipe_selections"])
+    trainer_positions = [
+        index for index, (recipe_id, _) in enumerate(selections) if _is_trainer(recipe_id)
+    ]
+    if not trainer_positions:
+        # The reviewer changed preprocessing only: keep the trainer that was just executed.
+        for node in state["workflow"]["nodes"]:
+            if _is_trainer(node["recipe_id"]):
+                logger.info(
+                    "Reviewer selected no trainer; keeping '%s' from the current pipeline.",
+                    node["recipe_id"],
+                )
+                selections.append((node["recipe_id"], dict(node.get("config") or {})))
+                break
+    elif len(trainer_positions) > 1:
+        logger.info("Reviewer selected several trainers; keeping the first one.")
+        selections = [
+            item
+            for index, item in enumerate(selections)
+            if index == trainer_positions[0] or index not in trainer_positions
+        ]
+
     workflow = build_agent_workflow(
         dataset_id=state["dataset_id"],
         target_column=state["target_column"],
-        recipe_selections=state["review"]["recipe_selections"],
+        recipe_selections=selections,
         task_type=state["task_type"],
     )
     fingerprint = _candidate_fingerprint(workflow)
