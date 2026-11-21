@@ -183,3 +183,52 @@ def test_web_scraper_simulation_disabled_raises():
         with pytest.raises(ExecutionException) as exc:
             recipe.execute(inputs={}, config=config)
         assert "Failed to fetch content from URL" in str(exc.value)
+
+
+def test_web_scraper_headerless_numeric_table_column_names_are_strings():
+    """Verify headerless HTML tables producing integer column indices are sanitized to strings for Pydantic validation."""
+    from backend.app.workflows.schemas import NodeTestStepResponse
+    from backend.app.engine.execution.step_executor import NodeStepExecutor
+
+    recipe = WebScraperRecipe()
+    # Table without <th> headers (pandas read_html assigns RangeIndex(0, 3))
+    headerless_html = """
+    <html>
+      <body>
+        <table>
+          <tr><td>101</td><td>Alice</td><td>Finance</td></tr>
+          <tr><td>102</td><td>Bob</td><td>Engineering</td></tr>
+        </table>
+      </body>
+    </html>
+    """
+    config = {
+        "url": "https://mock.company.local/employees",
+        "mock_html": headerless_html,
+        "extraction_mode": "html_tables",
+        "include_metadata_columns": False,
+    }
+    res = recipe.execute(inputs={}, config=config)
+    df = res["dataframe"]
+    # All columns must be strings
+    assert all(isinstance(c, str) for c in df.columns)
+
+    # NodeStepExecutor output metadata and NodeTestStepResponse validation must succeed without Pydantic type errors
+    meta = NodeStepExecutor.save_node_output(
+        session_id="test_sess_scraper",
+        node_id="proc_scraper",
+        recipe_id="web_scraper",
+        outputs=res,
+        duration_ms=10.0,
+    )
+    assert all(isinstance(c, str) for c in meta["columns"])
+
+    test_step_resp = NodeTestStepResponse(
+        success=True,
+        node_id="proc_scraper",
+        recipe_id="web_scraper",
+        columns=[str(c) for c in meta["columns"]],
+        preview_rows=meta["preview_rows"]
+    )
+    assert test_step_resp.columns == [str(c) for c in df.columns]
+

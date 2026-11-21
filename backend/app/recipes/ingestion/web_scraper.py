@@ -160,17 +160,69 @@ class WebScraperRecipe(BaseRecipe):
         if not parsed.scheme or parsed.scheme not in ("http", "https"):
             raise ValidationException(f"Invalid URL '{url}'. Must start with 'http://' or 'https://'.")
 
+        default_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        ua = user_agent.strip() if user_agent and user_agent.strip() else default_ua
+
+        # 1. Try requests library first for robust HTTP/TLS connection handling
+        try:
+            import requests
+            headers = {
+                "User-Agent": ua,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.5",
+            }
+            resp = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True)
+            if resp.status_code == 403 and "wikipedia" in url.lower():
+                raise ExecutionException(
+                    f"HTTP 403 Forbidden accessing '{url}'. Wikimedia policy blocks automated scrapers without custom contact headers. "
+                    "Specify a descriptive User-Agent or enable Simulation Fallback."
+                )
+            resp.raise_for_status()
+            return resp.text
+        except ImportError:
+            pass
+        except requests.exceptions.RequestException as req_err:
+            err_str = str(req_err)
+            if "111" in err_str or "connection refused" in err_str.lower():
+                raise ExecutionException(
+                    f"Connection refused connecting to '{url}'. The server environment may lack outbound internet access "
+                    f"or the target host actively rejected the socket. Enable Simulation Fallback to use benchmark data."
+                )
+            if "403" in err_str and "wikipedia" in url.lower():
+                raise ExecutionException(
+                    f"HTTP 403 Forbidden accessing '{url}'. Wikimedia policy blocks automated scrapers. "
+                    "Specify a custom contact User-Agent or enable Simulation Fallback."
+                )
+            raise ExecutionException(f"Failed to fetch content from URL '{url}': {req_err}")
+
+        # 2. Urllib fallback
         req = urllib.request.Request(
             url,
             headers={
-                "User-Agent": user_agent,
+                "User-Agent": ua,
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.5",
             },
         )
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            encoding = response.headers.get_content_charset() or "utf-8"
-            return response.read().decode(encoding, errors="replace")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                encoding = response.headers.get_content_charset() or "utf-8"
+                return response.read().decode(encoding, errors="replace")
+        except urllib.error.HTTPError as he:
+            if he.code == 403 and "wikipedia" in url.lower():
+                raise ExecutionException(
+                    f"HTTP 403 Forbidden accessing '{url}'. Wikimedia policy blocks automated scrapers. "
+                    "Specify a custom contact User-Agent or enable Simulation Fallback."
+                )
+            raise ExecutionException(f"HTTP Error {he.code} {he.reason} fetching '{url}'")
+        except urllib.error.URLError as ue:
+            err_reason = str(ue.reason)
+            if "111" in err_reason or "connection refused" in err_reason.lower():
+                raise ExecutionException(
+                    f"Connection refused connecting to '{url}'. The server environment may lack outbound internet access "
+                    f"or the target host actively rejected the socket. Enable Simulation Fallback to use benchmark data."
+                )
+            raise ExecutionException(f"Failed to fetch content from URL '{url}': {err_reason}")
 
     def _extract_html_tables(self, html: str, table_index: int) -> pd.DataFrame:
         # 1. Try standard pandas read_html (uses lxml or html5lib if available)
@@ -181,6 +233,11 @@ class WebScraperRecipe(BaseRecipe):
                 selected_df = dfs[idx]
                 if isinstance(selected_df.columns, pd.MultiIndex):
                     selected_df.columns = ["_".join(str(c) for c in col).strip("_") for col in selected_df.columns]
+                # Guarantee all column names are non-empty strings (prevents integer RangeIndex Pydantic validation errors)
+                selected_df.columns = [
+                    str(c).strip() if str(c).strip() and str(c).lower() != "nan" else f"col_{i+1}"
+                    for i, c in enumerate(selected_df.columns)
+                ]
                 return selected_df
         except Exception as e:
             logger.info(f"pd.read_html failed ({e}), falling back to HTML parser")
@@ -380,6 +437,13 @@ class WebScraperRecipe(BaseRecipe):
                     raise ExecutionException(f"Failed to extract '{extraction_mode}' from webpage: {e}")
                 df = self._generate_synthetic_table(extraction_mode)
                 is_simulation = True
+
+        # Ensure all DataFrame columns are strictly strings
+        if df is not None and not df.empty:
+            df.columns = [
+                str(c).strip() if str(c).strip() and str(c).lower() != "nan" else f"col_{i+1}"
+                for i, c in enumerate(df.columns)
+            ]
 
         if include_meta and not df.empty:
             now_iso = datetime.now(timezone.utc).isoformat()

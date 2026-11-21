@@ -167,7 +167,7 @@ class NodeStepExecutor:
                 logger.warning(f"Failed to dump artifacts for node '{node_id}': {e}")
 
         # 4. Construct Metadata & Preview
-        columns = list(primary_df.columns) if isinstance(primary_df, pd.DataFrame) else []
+        columns = [str(col) for col in primary_df.columns] if isinstance(primary_df, pd.DataFrame) else []
         col_types = {str(col): str(dtype) for col, dtype in primary_df.dtypes.items()} if isinstance(primary_df, pd.DataFrame) else {}
         row_count = int(primary_df.shape[0]) if isinstance(primary_df, pd.DataFrame) else None
         
@@ -690,7 +690,7 @@ class NodeStepExecutor:
                     status="SUCCESS",
                     duration_ms=duration_ms,
                     row_count=meta.get("row_count"),
-                    columns=meta.get("columns", []),
+                    columns=[str(c) for c in meta.get("columns", [])],
                     column_types=meta.get("column_types", {}),
                     preview_rows=meta.get("preview_rows", []),
                     output_summary=meta.get("output_summary", {}),
