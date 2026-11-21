@@ -251,6 +251,11 @@ class BaseRecipe(ABC):
                 "field": "connection_mode",
                 "not_equals": "credential"
             }
+        elif "auth_mode" in props:
+            save_cred_prop["visible_when"] = {
+                "field": "auth_mode",
+                "not_equals": "none"
+            }
 
         cred_name_prop: Dict[str, Any] = {
             "type": "string",

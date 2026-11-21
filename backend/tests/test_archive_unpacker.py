@@ -178,3 +178,69 @@ def test_archive_unpacker_simulation_disabled_raises():
     with pytest.raises(ExecutionException) as exc:
         recipe.execute(inputs={}, config=config)
     assert "Archive file not found" in str(exc.value)
+
+
+def test_archive_unpacker_local_sample_archive_file():
+    """Verify reading local default sample archive file on disk."""
+    recipe = ArchiveUnpackerRecipe()
+    config = {
+        "archive_path": "./data/archives/daily_export.zip",
+        "simulation_fallback": False,
+    }
+    result = recipe.execute(inputs={}, config=config)
+    df = result["dataframe"]
+    metrics = result["metrics"]
+
+    assert len(df) == 8
+    assert "order_id" in df.columns
+    assert "product_category" in df.columns
+    assert metrics["title"] == "Zip / Archive Ingestion Metrics"
+    assert metrics["tag"] == "ARCHIVE"
+    assert metrics["delivery_status"] == "Live Archive File"
+    assert metrics["is_simulation"] is False
+    assert all(isinstance(c, str) for c in df.columns)
+
+
+def test_archive_unpacker_remote_url_download():
+    """Verify downloading and unpacking remote ZIP archive from HTTP URL."""
+    from unittest.mock import patch, MagicMock
+    recipe = ArchiveUnpackerRecipe()
+
+    bio = io.BytesIO()
+    with zipfile.ZipFile(bio, "w") as zf:
+        zf.writestr("remote_table.csv", "id,val\n99,Success\n")
+
+    with patch("requests.get") as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.content = bio.getvalue()
+        mock_get.return_value = mock_resp
+
+        config = {
+            "archive_path": "https://data.company.com/exports/quarterly.zip",
+            "simulation_fallback": False,
+        }
+        result = recipe.execute(inputs={}, config=config)
+        df = result["dataframe"]
+        metrics = result["metrics"]
+
+        assert len(df) == 1
+        assert df.iloc[0]["id"] == 99
+        assert df.iloc[0]["val"] == "Success"
+        assert metrics["delivery_status"] == "Live Archive File"
+        mock_get.assert_called_once()
+
+
+def test_archive_unpacker_upstream_dataframe_chaining():
+    """Verify reading archive path dynamically from an upstream DataFrame."""
+    recipe = ArchiveUnpackerRecipe()
+    upstream_df = pd.DataFrame({
+        "pipeline_job": ["job_101"],
+        "archive_path": ["./data/archives/daily_export.zip"]
+    })
+
+    result = recipe.execute(inputs={"dataframe": upstream_df}, config={"simulation_fallback": False})
+    df = result["dataframe"]
+    assert len(df) == 8
+    assert "order_id" in df.columns
+

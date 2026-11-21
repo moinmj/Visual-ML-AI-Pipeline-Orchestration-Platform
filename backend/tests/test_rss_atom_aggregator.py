@@ -182,3 +182,106 @@ def test_rss_atom_aggregator_simulation_disabled_raises():
         with pytest.raises(ExecutionException) as exc:
             recipe.execute(inputs={}, config=config)
         assert "Failed to retrieve entries from all provided feed URLs" in str(exc.value)
+
+
+def test_rss_atom_aggregator_rdf_rss10_and_category_parsing():
+    """Verify namespace-agnostic parsing of RDF/RSS 1.0 feeds and category extraction."""
+    recipe = RSSAtomAggregatorRecipe()
+    rdf_xml = """<?xml version="1.0"?>
+    <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns="http://purl.org/rss/1.0/" xmlns:dc="http://purl.org/dc/elements/1.1/">
+      <channel rdf:about="https://slashdot.org/">
+        <title>Slashdot Headlines</title>
+        <link>https://slashdot.org/</link>
+      </channel>
+      <item rdf:about="https://slashdot.org/story/1">
+        <title>New AI Chip Unveiled</title>
+        <link>https://slashdot.org/story/1</link>
+        <description>Semiconductor startup introduces ultra-low power ASIC.</description>
+        <dc:creator>Roblimo</dc:creator>
+        <dc:date>2026-11-21T08:00:00Z</dc:date>
+        <category>Hardware</category>
+        <category>AI</category>
+      </item>
+    </rdf:RDF>
+    """
+    config = {
+        "mock_feeds_xml": rdf_xml,
+    }
+    result = recipe.execute(inputs={}, config=config)
+    df = result["dataframe"]
+    metrics = result["metrics"]
+
+    assert len(df) == 1
+    assert metrics["title"] == "RSS / Atom Feed Ingestion Metrics"
+    assert metrics["tag"] == "RSS"
+    assert isinstance(metrics["unique_items"], int)
+    assert df.iloc[0]["feed_title"] == "Slashdot Headlines"
+    assert df.iloc[0]["title"] == "New AI Chip Unveiled"
+    assert df.iloc[0]["author"] == "Roblimo"
+    assert "Hardware" in df.iloc[0]["category"]
+
+
+def test_rss_atom_aggregator_auth_and_bearer_token():
+    """Verify bearer token and basic authentication parameter forwarding."""
+    recipe = RSSAtomAggregatorRecipe()
+
+    with patch("requests.get") as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.content = b"""<rss version="2.0"><channel><title>Protected Feed</title><item><title>Alert 1</title><link>http://sec.internal/1</link></item></channel></rss>"""
+        mock_get.return_value = mock_resp
+
+        # 1. Bearer Token
+        config_bearer = {
+            "feed_urls": "https://sec.internal/rss",
+            "auth_mode": "bearer_token",
+            "bearer_token": "feed-secret-jwt-1234",
+            "simulation_fallback": False,
+        }
+        res_bearer = recipe.execute(inputs={}, config=config_bearer)
+        assert len(res_bearer["dataframe"]) == 1
+        args, kwargs = mock_get.call_args
+        assert kwargs["headers"]["Authorization"] == "Bearer feed-secret-jwt-1234"
+
+        # 2. Basic Auth
+        mock_get.reset_mock()
+        mock_get.return_value = mock_resp
+        config_basic = {
+            "feed_urls": "https://sec.internal/rss",
+            "auth_mode": "basic_auth",
+            "auth_username": "rss_admin",
+            "auth_password": "rss_password",
+            "simulation_fallback": False,
+        }
+        res_basic = recipe.execute(inputs={}, config=config_basic)
+        assert len(res_basic["dataframe"]) == 1
+        args, kwargs = mock_get.call_args
+        assert kwargs["auth"] == ("rss_admin", "rss_password")
+
+
+def test_rss_atom_aggregator_dataframe_input_url_chaining():
+    """Verify reading feed URLs dynamically from an upstream DataFrame."""
+    recipe = RSSAtomAggregatorRecipe()
+    upstream_df = pd.DataFrame({
+        "channel_name": ["BBC Tech"],
+        "rss_url": ["https://feeds.bbci.co.uk/news/technology/rss.xml"]
+    })
+
+    with patch.object(recipe, "_fetch_url_bytes") as mock_fetch:
+        mock_fetch.return_value = b"""<rss version="2.0"><channel><title>BBC Tech</title><item><title>Tech News</title><link>https://bbc.com/tech</link></item></channel></rss>"""
+        result = recipe.execute(inputs={"dataframe": upstream_df}, config={"simulation_fallback": False})
+
+    df = result["dataframe"]
+    assert len(df) == 1
+    assert df.iloc[0]["title"] == "Tech News"
+    mock_fetch.assert_called_once_with(
+        url="https://feeds.bbci.co.uk/news/technology/rss.xml",
+        timeout=10,
+        user_agent="Mozilla/5.0",
+        auth_mode="none",
+        auth_username="",
+        auth_password="",
+        bearer_token="",
+        custom_headers="",
+    )
+
