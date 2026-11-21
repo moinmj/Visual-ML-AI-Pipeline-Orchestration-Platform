@@ -2,6 +2,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.infrastructure.database.session import get_db
 from backend.app.credentials.service import CredentialService
 import json
+import os
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from backend.app.core.security import TokenData, get_current_user
 from typing import Annotated, List, Optional, Dict, Any
@@ -71,12 +72,12 @@ async def get_recipe_icon(recipe_id: str):
     from backend.app.main import ROOT_DIR
     meta = recipe_registry.get_metadata(recipe_id)
     if meta.icon_url and meta.icon_url.startswith("/static/"):
-        rel_path = meta.icon_url.replace("/static/", "", 1)
-        full_path = os.path.join(ROOT_DIR, "backend", "app", "static", rel_path)
+        rel_path = meta.icon_url.replace("/static/", "", 1).strip("/")
+        full_path = os.path.normpath(os.path.join(ROOT_DIR, "backend", "app", "static", *rel_path.split("/")))
         if os.path.exists(full_path):
             return FileResponse(full_path, media_type="image/svg+xml")
 
-    default_path = os.path.join(ROOT_DIR, "backend", "app", "static", "icons", "recipes", "default.svg")
+    default_path = os.path.normpath(os.path.join(ROOT_DIR, "backend", "app", "static", "icons", "recipes", "default.svg"))
     if os.path.exists(default_path):
         return FileResponse(default_path, media_type="image/svg+xml")
     raise HTTPException(status_code=404, detail="Icon not found")

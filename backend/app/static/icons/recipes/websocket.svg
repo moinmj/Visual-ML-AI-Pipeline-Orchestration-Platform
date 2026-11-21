@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
+  <rect width="24" height="24" rx="5" fill="#FAF5FF"/>
+  <!-- Bi-directional Streaming Arrows -->
+  <path d="M7 9h10l-3-3M17 15H7l3 3" stroke="#8B5CF6" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="6" cy="9" r="1.5" fill="#8B5CF6"/>
+  <circle cx="18" cy="15" r="1.5" fill="#8B5CF6"/>
+</svg>

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
+  <rect width="24" height="24" rx="5" fill="#F0F9FF"/>
+  <!-- Envelope -->
+  <rect x="4" y="6" width="13" height="10" rx="1.5" stroke="#0284C7" stroke-width="1.3"/>
+  <path d="M4 7l6.5 5 6.5-5" stroke="#0284C7" stroke-width="1.3"/>
+  <!-- Paperclip Attachment -->
+  <path d="M17 12l2.5-2.5a2 2 0 0 1 2.8 2.8l-4 4a2.8 2.8 0 0 1-4-4l3.5-3.5" stroke="#0284C7" stroke-width="1.4" stroke-linecap="round"/>
+</svg>

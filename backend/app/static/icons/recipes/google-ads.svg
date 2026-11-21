@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
+  <rect width="24" height="24" rx="5" fill="#EFF6FF"/>
+  <!-- Blue and Green Pill Rings -->
+  <rect x="5.5" y="7" width="5" height="11" rx="2.5" transform="rotate(-30 5.5 7)" fill="#4285F4"/>
+  <rect x="13" y="4" width="5" height="11" rx="2.5" transform="rotate(30 13 4)" fill="#34A853"/>
+  <circle cx="7" cy="16" r="2.2" fill="#FBBC04"/>
+</svg>

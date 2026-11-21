@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
+  <rect width="24" height="24" rx="5" fill="#F0F9FF"/>
+  <!-- Classical Architecture Capitol Pediment -->
+  <path d="M12 4.5l8 4H4l8-4z" fill="#0284C7" fill-opacity="0.3" stroke="#0284C7" stroke-width="1.3" stroke-linejoin="round"/>
+  <!-- Columns -->
+  <line x1="6" y1="9.5" x2="6" y2="17" stroke="#0284C7" stroke-width="1.4"/>
+  <line x1="10" y1="9.5" x2="10" y2="17" stroke="#0284C7" stroke-width="1.4"/>
+  <line x1="14" y1="9.5" x2="14" y2="17" stroke="#0284C7" stroke-width="1.4"/>
+  <line x1="18" y1="9.5" x2="18" y2="17" stroke="#0284C7" stroke-width="1.4"/>
+  <path d="M4 17h16v2H4v-2z" fill="#0284C7"/>
+</svg>

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
+  <rect width="24" height="24" rx="5" fill="#FEF2F2"/>
+  <!-- Gmail 'M' Folding Envelope -->
+  <path d="M5 7v10a1 1 0 0 0 1 1h2.5V11L12 13.5 15.5 11v7H18a1 1 0 0 0 1-1V7a1 1 0 0 0-1.5-.8L12 10.5 6.5 6.2A1 1 0 0 0 5 7z" fill="#EA4335"/>
+  <path d="M5 7l7 4.5 7-4.5" stroke="#EA4335" stroke-width="1.2"/>
+</svg>

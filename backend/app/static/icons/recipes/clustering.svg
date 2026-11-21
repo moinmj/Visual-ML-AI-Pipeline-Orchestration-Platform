@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
+  <rect width="24" height="24" rx="5" fill="#FAF5FF"/>
+  <!-- Cluster 1 (Purple) -->
+  <circle cx="8" cy="8" r="1.5" fill="#7C3AED"/>
+  <circle cx="6" cy="10" r="1.2" fill="#7C3AED"/>
+  <circle cx="10" cy="9" r="1.2" fill="#7C3AED"/>
+  <!-- Cluster 2 (Pink) -->
+  <circle cx="16" cy="15" r="1.5" fill="#EC4899"/>
+  <circle cx="14" cy="17" r="1.2" fill="#EC4899"/>
+  <circle cx="18" cy="16" r="1.2" fill="#EC4899"/>
+  <!-- Centroid Cross -->
+  <path d="M8 7v2M7 8h2M16 14v2M15 15h2" stroke="#FFFFFF" stroke-width="0.8"/>
+</svg>

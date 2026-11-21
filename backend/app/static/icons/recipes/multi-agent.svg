@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
+  <rect width="24" height="24" rx="5" fill="#EEF2FF"/>
+  <!-- Supervisor Agent Center -->
+  <circle cx="12" cy="8" r="2.5" fill="#6366F1"/>
+  <!-- Sub-Agents Left & Right -->
+  <circle cx="6.5" cy="16" r="2" fill="#818CF8"/>
+  <circle cx="17.5" cy="16" r="2" fill="#818CF8"/>
+  <circle cx="12" cy="17" r="2" fill="#818CF8"/>
+  <!-- Network Connections -->
+  <path d="M12 10.5l-5 4M12 10.5v5M12 10.5l5 4" stroke="#6366F1" stroke-width="1.3"/>
+</svg>

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
+  <rect width="24" height="24" rx="5" fill="#F0F9FF"/>
+  <!-- Airtable Tri-Shape -->
+  <path d="M11.5 5.5l-6 3a1 1 0 0 0 0 1.8l6 3a1 1 0 0 0 .9 0l6-3a1 1 0 0 0 0-1.8l-6-3a1 1 0 0 0-.9 0z" fill="#FCB400"/>
+  <path d="M5.5 12v4.5a1 1 0 0 0 .5.9l5.5 2.5V14.5l-6-2.5z" fill="#18BFFF"/>
+  <path d="M12.5 14.5v5.4l5.5-2.5a1 1 0 0 0 .5-.9V12l-6 2.5z" fill="#F82B60"/>
+</svg>

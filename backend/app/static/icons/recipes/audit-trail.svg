@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
+  <rect width="24" height="24" rx="5" fill="#F8FAFC"/>
+  <!-- Audit Log List with Checkmarks -->
+  <rect x="5" y="4.5" width="14" height="15" rx="1.5" stroke="#475569" stroke-width="1.3"/>
+  <polyline points="7.5 8 9 9.5 12 6.5" stroke="#10B981" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+  <line x1="14" y1="8" x2="17" y2="8" stroke="#475569" stroke-width="1.2" stroke-linecap="round"/>
+  <polyline points="7.5 12 9 13.5 12 10.5" stroke="#10B981" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+  <line x1="14" y1="12" x2="17" y2="12" stroke="#475569" stroke-width="1.2" stroke-linecap="round"/>
+  <polyline points="7.5 16 9 17.5 12 14.5" stroke="#10B981" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+  <line x1="14" y1="16" x2="17" y2="16" stroke="#475569" stroke-width="1.2" stroke-linecap="round"/>
+</svg>
