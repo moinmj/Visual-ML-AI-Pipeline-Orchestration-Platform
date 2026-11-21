@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
+  <rect width="24" height="24" rx="5" fill="#FFFBEB"/>
+  <!-- Drift Curve Divergence -->
+  <path d="M5 16c3-1 5-7 8-7s5 6 6 7" stroke="#94A3B8" stroke-width="1.4" stroke-linecap="round"/>
+  <path d="M5 16c3-1 6-4 9-4s5 3 6 4" stroke="#F59E0B" stroke-width="1.8" stroke-linecap="round"/>
+  <!-- Drift Alert Mark -->
+  <path d="M15 6l.5 1 1 .5-1 .5-.5 1-.5-1-1-.5 1-.5z" fill="#EF4444"/>
+</svg>

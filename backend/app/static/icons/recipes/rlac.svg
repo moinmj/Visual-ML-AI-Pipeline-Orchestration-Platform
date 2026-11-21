@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
+  <rect width="24" height="24" rx="5" fill="#FEF2F2"/>
+  <!-- Table Rows with Lock -->
+  <rect x="4.5" y="5" width="9" height="14" rx="1.5" stroke="#EF4444" stroke-width="1.2"/>
+  <line x1="4.5" y1="9.5" x2="13.5" y2="9.5" stroke="#EF4444" stroke-width="1"/>
+  <line x1="4.5" y1="14.5" x2="13.5" y2="14.5" stroke="#EF4444" stroke-width="1"/>
+  <!-- Padlock -->
+  <rect x="14" y="11" width="6.5" height="6.5" rx="1" fill="#EF4444"/>
+  <path d="M15.5 11V9a1.8 1.8 0 0 1 3.5 0v2" stroke="#EF4444" stroke-width="1.2"/>
+  <circle cx="17.2" cy="14" r="0.7" fill="#FFFFFF"/>
+</svg>

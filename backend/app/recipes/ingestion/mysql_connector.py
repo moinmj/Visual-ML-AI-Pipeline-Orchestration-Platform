@@ -271,7 +271,7 @@ class MySQLConnectorRecipe(BaseRecipe):
                 "tables": {
                     "type": "array",
                     "title": "Table(s) to Read",
-                    "input_type": "tag_input",
+                    "input_type": "tags",
                     "items": {"type": "string"},
                     "default": [],
                     "section": "query_selection",
@@ -309,7 +309,7 @@ class MySQLConnectorRecipe(BaseRecipe):
                 "columns": {
                     "type": "array",
                     "title": "Columns to Select",
-                    "input_type": "tag_input",
+                    "input_type": "tags",
                     "items": {"type": "string"},
                     "default": [],
                     "section": "query_selection",

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
+  <rect width="24" height="24" rx="5" fill="#EFF6FF"/>
+  <!-- Mapbox 'm' navigation fold -->
+  <path d="M6 16.5V7.5l4 3 4-3v9l-4-3-4 3z" fill="#4264FB" fill-opacity="0.2" stroke="#4264FB" stroke-width="1.4" stroke-linejoin="round"/>
+  <circle cx="10" cy="10.5" r="1" fill="#4264FB"/>
+</svg>

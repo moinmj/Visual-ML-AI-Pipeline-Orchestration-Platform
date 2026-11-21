@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
+  <rect width="24" height="24" rx="5" fill="#FFF7ED"/>
+  <!-- Archive Box / Package -->
+  <path d="M4.5 7h15l-1.5 12h-12L4.5 7z" fill="#EA580C" fill-opacity="0.15" stroke="#EA580C" stroke-width="1.4" stroke-linejoin="round"/>
+  <path d="M3.5 5h17v2.5h-17V5z" fill="#EA580C" fill-opacity="0.3" stroke="#EA580C" stroke-width="1.4" stroke-linejoin="round"/>
+  <!-- Zipper Track down center -->
+  <path d="M12 7.5v8" stroke="#EA580C" stroke-width="1.4" stroke-linecap="round"/>
+  <rect x="11" y="11" width="2" height="3" rx="0.5" fill="#EA580C"/>
+</svg>

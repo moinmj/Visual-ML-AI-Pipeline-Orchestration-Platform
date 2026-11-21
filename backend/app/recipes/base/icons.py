@@ -2,12 +2,125 @@ from typing import Dict, Any, Optional, Tuple
 
 # Official Recipe Icon Registry: maps recipe_id -> official icon metadata
 OFFICIAL_RECIPE_ICONS: Dict[str, Dict[str, Any]] = {
-    # ── Cloud Data Warehouses & Lakes ──
-    "snowflake_connector": {
-        "icon": "snowflake",
-        "svg": "snowflake.svg",
-        "color": "#29B5E8",
-        "label": "Snowflake",
+    "ab_testing_framework": {
+        "icon": "ab-testing",
+        "svg": "ab-testing.svg",
+        "color": "#7C3AED",
+        "label": "A/B Testing",
+    },
+    "add_workflow": {
+        "icon": "sub-workflow",
+        "svg": "sub-workflow.svg",
+        "color": "#6366F1",
+        "label": "Sub-Workflow Runner",
+    },
+    "address_parser_standardizer": {
+        "icon": "address",
+        "svg": "google-maps.svg",
+        "color": "#EA4335",
+        "label": "Address Parser",
+    },
+    "agent_guardrail": {
+        "icon": "agent-guardrail",
+        "svg": "agent-guardrail.svg",
+        "color": "#EF4444",
+        "label": "Agent Guardrail",
+    },
+    "agent_handoff_router": {
+        "icon": "agent-handoff",
+        "svg": "switch.svg",
+        "color": "#6366F1",
+        "label": "Agent Handoff Router",
+    },
+    "aggregate": {
+        "icon": "aggregate",
+        "svg": "aggregate.svg",
+        "color": "#2563EB",
+        "label": "Aggregate",
+    },
+    "airtable_connector": {
+        "icon": "airtable",
+        "svg": "airtable.svg",
+        "color": "#18BFFF",
+        "label": "Airtable",
+    },
+    "api_response_endpoint": {
+        "icon": "api",
+        "svg": "api.svg",
+        "color": "#6366F1",
+        "label": "API Response Endpoint",
+    },
+    "archive_unpacker": {
+        "icon": "archive",
+        "svg": "archive.svg",
+        "color": "#EA580C",
+        "label": "Zip / Archive Unpacker",
+    },
+    "arima_forecaster": {
+        "icon": "arima",
+        "svg": "arima.svg",
+        "color": "#6366F1",
+        "label": "ARIMA Forecaster",
+    },
+    "asana_connector": {
+        "icon": "asana",
+        "svg": "asana.svg",
+        "color": "#F06A6A",
+        "label": "Asana",
+    },
+    "association_rule_mining": {
+        "icon": "association-rules",
+        "svg": "macro-library.svg",
+        "color": "#F97316",
+        "label": "Association Rule Mining",
+    },
+    "audit_log_exporter": {
+        "icon": "audit-log",
+        "svg": "audit-trail.svg",
+        "color": "#475569",
+        "label": "Audit Log Exporter",
+    },
+    "audit_trail_logger": {
+        "icon": "audit-trail",
+        "svg": "audit-trail.svg",
+        "color": "#475569",
+        "label": "Audit Trail Logger",
+    },
+    "automl_search": {
+        "icon": "automl",
+        "svg": "automl.svg",
+        "color": "#8B5CF6",
+        "label": "AutoML Search",
+    },
+    "azure_data_lake_connector": {
+        "icon": "azure",
+        "svg": "azure.svg",
+        "color": "#0089D6",
+        "label": "Azure ADLS",
+    },
+    "batch_scheduler": {
+        "icon": "batch-scheduler",
+        "svg": "batch-scheduler.svg",
+        "color": "#6366F1",
+        "label": "Batch Scheduler",
+    },
+    "bayesian_ab_estimator": {
+        "icon": "bayesian",
+        "svg": "ab-testing.svg",
+        "color": "#4F46E5",
+        "label": "Bayesian A/B Estimator",
+    },
+    "bi_tool_export": {
+        "icon": "bi-export",
+        "svg": "bi-export.svg",
+        "color": "#F59E0B",
+        "label": "BI Tool Export",
+    },
+    "bias_fairness_audit": {
+        "icon": "fairness",
+        "svg": "fairness.svg",
+        "color": "#0D9488",
+        "label": "Bias & Fairness Audit",
     },
     "bigquery_connector": {
         "icon": "google-bigquery",
@@ -15,85 +128,83 @@ OFFICIAL_RECIPE_ICONS: Dict[str, Dict[str, Any]] = {
         "color": "#4285F4",
         "label": "Google BigQuery",
     },
-    "s3_data_lake_connector": {
-        "icon": "amazon-s3",
-        "svg": "aws-s3.svg",
-        "color": "#569A31",
-        "label": "AWS S3 Data Lake",
-    },
-    "azure_data_lake_connector": {
-        "icon": "azure",
-        "svg": "azure.svg",
-        "color": "#0089D6",
-        "label": "Azure ADLS Gen2",
-    },
-    "gcs_connector": {
-        "icon": "google-cloud-storage",
-        "svg": "gcs.svg",
+    "business_day_holiday_calculator": {
+        "icon": "business-calendar",
+        "svg": "google-calendar.svg",
         "color": "#4285F4",
-        "label": "Google Cloud Storage",
+        "label": "Business Day Calculator",
     },
-    "databricks_connector": {
-        "icon": "databricks",
-        "svg": "databricks.svg",
-        "color": "#FF3621",
-        "label": "Databricks Lakehouse",
+    "canvas_comments": {
+        "icon": "canvas-comments",
+        "svg": "canvas-comment.svg",
+        "color": "#8B5CF6",
+        "label": "Canvas Comments",
     },
-    "iceberg_lakehouse_connector": {
-        "icon": "apache-iceberg",
-        "svg": "bigquery.svg",
-        "color": "#0087BE",
-        "label": "Apache Iceberg",
+    "canvas_group": {
+        "icon": "canvas-group",
+        "svg": "canvas-group.svg",
+        "color": "#3B82F6",
+        "label": "Canvas Group",
     },
-    "delta_lake_connector": {
-        "icon": "delta-lake",
-        "svg": "databricks.svg",
-        "color": "#001E2B",
-        "label": "Delta Lake",
+    "canvas_note": {
+        "icon": "canvas-note",
+        "svg": "canvas-note.svg",
+        "color": "#CA8A04",
+        "label": "Canvas Note",
     },
-
-    # ── Relational & NoSQL Databases ──
-    "postgresql_connector": {
-        "icon": "postgresql",
-        "svg": "postgresql.svg",
-        "color": "#336791",
-        "label": "PostgreSQL",
+    "catboost_trainer": {
+        "icon": "catboost",
+        "svg": "catboost.svg",
+        "color": "#FFCC00",
+        "label": "CatBoost",
     },
-    "mysql_connector": {
-        "icon": "mysql",
-        "svg": "mysql.svg",
-        "color": "#00758F",
-        "label": "MySQL",
+    "categorical_encoder": {
+        "icon": "encoder",
+        "svg": "categorical-encoder.svg",
+        "color": "#F59E0B",
+        "label": "Categorical Encoder",
     },
-    "oracle_db_connector": {
-        "icon": "oracle",
-        "svg": "default.svg",
-        "color": "#F80000",
-        "label": "Oracle Database",
+    "category_sanitizer": {
+        "icon": "sanitizer",
+        "svg": "category-sanitizer.svg",
+        "color": "#8B5CF6",
+        "label": "Category Sanitizer",
     },
-    "sqlserver_connector": {
-        "icon": "microsoft-sql-server",
-        "svg": "azure.svg",
-        "color": "#CC292B",
-        "label": "Microsoft SQL Server",
+    "cdc_ingestion": {
+        "icon": "cdc",
+        "svg": "cdc.svg",
+        "color": "#0284C7",
+        "label": "Change Data Capture (CDC)",
     },
-    "mongodb_connector": {
-        "icon": "mongodb",
-        "svg": "mongodb.svg",
-        "color": "#47A248",
-        "label": "MongoDB",
+    "cdc_replicator": {
+        "icon": "cdc-replicator",
+        "svg": "cdc-replicator.svg",
+        "color": "#0284C7",
+        "label": "CDC Replicator",
     },
-    "redis_connector": {
-        "icon": "redis",
-        "svg": "redis.svg",
-        "color": "#DC382D",
-        "label": "Redis",
+    "champion_challenger": {
+        "icon": "champion-challenger",
+        "svg": "ab-testing.svg",
+        "color": "#EA580C",
+        "label": "Champion-Challenger",
     },
-    "elasticsearch_connector": {
-        "icon": "elasticsearch",
-        "svg": "elasticsearch.svg",
-        "color": "#005571",
-        "label": "Elasticsearch",
+    "chart_visualization": {
+        "icon": "chart",
+        "svg": "chart-visualization.svg",
+        "color": "#10B981",
+        "label": "Chart Visualization",
+    },
+    "chatbot_endpoint": {
+        "icon": "chatbot",
+        "svg": "canvas-comment.svg",
+        "color": "#6366F1",
+        "label": "Chatbot Endpoint",
+    },
+    "class_imbalance_resampler": {
+        "icon": "resampler",
+        "svg": "feature-scaler.svg",
+        "color": "#10B981",
+        "label": "Class Imbalance Resampler",
     },
     "clickhouse_connector": {
         "icon": "clickhouse",
@@ -101,14 +212,462 @@ OFFICIAL_RECIPE_ICONS: Dict[str, Dict[str, Any]] = {
         "color": "#FFCC01",
         "label": "ClickHouse",
     },
-    "sqlite_connector": {
-        "icon": "sqlite",
-        "svg": "postgresql.svg",
-        "color": "#003B57",
-        "label": "SQLite",
+    "clustering": {
+        "icon": "clustering",
+        "svg": "clustering.svg",
+        "color": "#7C3AED",
+        "label": "Clustering (KMeans/DBSCAN)",
     },
-
-    # ── Streaming & Event Ingestion / CDC ──
+    "code_execution_sandbox": {
+        "icon": "code-sandbox",
+        "svg": "code-sandbox.svg",
+        "color": "#10B981",
+        "label": "Code Execution Sandbox",
+    },
+    "column_selector": {
+        "icon": "columns",
+        "svg": "column-selector.svg",
+        "color": "#475569",
+        "label": "Column Selector",
+    },
+    "combine": {
+        "icon": "combine",
+        "svg": "combine.svg",
+        "color": "#3B82F6",
+        "label": "Combine Tables",
+    },
+    "compliance_tokenization": {
+        "icon": "tokenization",
+        "svg": "encryption.svg",
+        "color": "#0D9488",
+        "label": "Compliance Tokenization",
+    },
+    "conversation_memory": {
+        "icon": "conversation-memory",
+        "svg": "conversation-memory.svg",
+        "color": "#3B82F6",
+        "label": "Conversational Memory",
+    },
+    "correlation_filter": {
+        "icon": "correlation",
+        "svg": "correlation.svg",
+        "color": "#2563EB",
+        "label": "Correlation Filter",
+    },
+    "cost_attribution_report": {
+        "icon": "cost-attribution",
+        "svg": "cost-latency.svg",
+        "color": "#3B82F6",
+        "label": "Cost Attribution Report",
+    },
+    "cost_aware_model_router": {
+        "icon": "model-router",
+        "svg": "switch.svg",
+        "color": "#6366F1",
+        "label": "Cost-Aware Model Router",
+    },
+    "cost_latency_monitor": {
+        "icon": "cost-latency",
+        "svg": "cost-latency.svg",
+        "color": "#3B82F6",
+        "label": "Cost / Latency Monitor",
+    },
+    "credential_rotation_manager": {
+        "icon": "credential-rotation",
+        "svg": "credential-rotation.svg",
+        "color": "#DC2626",
+        "label": "Credential Rotation Manager",
+    },
+    "cron_trigger": {
+        "icon": "clock",
+        "svg": "clock.svg",
+        "color": "#8B5CF6",
+        "label": "Cron Schedule Trigger",
+    },
+    "cross_tab_generator": {
+        "icon": "crosstab",
+        "svg": "pivot.svg",
+        "color": "#3B82F6",
+        "label": "Cross-Tab Generator",
+    },
+    "csv_loader": {
+        "icon": "csv",
+        "svg": "csv.svg",
+        "color": "#107C41",
+        "label": "CSV File Loader",
+    },
+    "currency_exchange_api": {
+        "icon": "currency",
+        "svg": "currency.svg",
+        "color": "#0D9488",
+        "label": "Currency Exchange API",
+    },
+    "currency_unit_normalizer": {
+        "icon": "currency",
+        "svg": "currency.svg",
+        "color": "#0D9488",
+        "label": "Currency Unit Normalizer",
+    },
+    "custom_python_step": {
+        "icon": "python",
+        "svg": "python.svg",
+        "color": "#3776AB",
+        "label": "Custom Python Step",
+    },
+    "dashboard_publisher": {
+        "icon": "dashboard",
+        "svg": "dashboard.svg",
+        "color": "#6366F1",
+        "label": "Dashboard Publisher",
+    },
+    "data_anonymization_differential_privacy": {
+        "icon": "anonymization",
+        "svg": "pii-masking.svg",
+        "color": "#EF4444",
+        "label": "Data Anonymization",
+    },
+    "data_drift_detector": {
+        "icon": "data-drift",
+        "svg": "drift-monitor.svg",
+        "color": "#F59E0B",
+        "label": "Data Drift Detector",
+    },
+    "data_guardrails": {
+        "icon": "guardrails",
+        "svg": "agent-guardrail.svg",
+        "color": "#DC2626",
+        "label": "Data Guardrails",
+    },
+    "data_profiling_report": {
+        "icon": "profiling",
+        "svg": "chart-visualization.svg",
+        "color": "#0D9488",
+        "label": "Data Profiling Report",
+    },
+    "data_type_converter": {
+        "icon": "convert",
+        "svg": "type-converter.svg",
+        "color": "#7C3AED",
+        "label": "Data Type Converter",
+    },
+    "databricks_connector": {
+        "icon": "databricks",
+        "svg": "databricks.svg",
+        "color": "#FF3621",
+        "label": "Databricks",
+    },
+    "dataset_join": {
+        "icon": "join",
+        "svg": "dataset-join.svg",
+        "color": "#0284C7",
+        "label": "Dataset Join / Merge",
+    },
+    "date_range_expander": {
+        "icon": "date-expander",
+        "svg": "google-calendar.svg",
+        "color": "#4285F4",
+        "label": "Date Range Expander",
+    },
+    "dead_letter_queue": {
+        "icon": "dlq",
+        "svg": "dlq.svg",
+        "color": "#EF4444",
+        "label": "Dead-Letter Queue",
+    },
+    "delay": {
+        "icon": "delay",
+        "svg": "delay.svg",
+        "color": "#6366F1",
+        "label": "Delay / Wait",
+    },
+    "delta_lake_connector": {
+        "icon": "delta-lake",
+        "svg": "delta-lake.svg",
+        "color": "#001E2B",
+        "label": "Delta Lake",
+    },
+    "discord": {
+        "icon": "discord",
+        "svg": "discord.svg",
+        "color": "#5865F2",
+        "label": "Discord",
+    },
+    "document_parsing": {
+        "icon": "document-parsing",
+        "svg": "ocr.svg",
+        "color": "#3B82F6",
+        "label": "Document Parsing",
+    },
+    "document_qa_agent": {
+        "icon": "document-qa",
+        "svg": "ocr.svg",
+        "color": "#3B82F6",
+        "label": "Document Q&A Agent",
+    },
+    "dropbox_sync": {
+        "icon": "dropbox",
+        "svg": "dropbox.svg",
+        "color": "#0061FF",
+        "label": "Dropbox",
+    },
+    "duplicate_remover": {
+        "icon": "dedup",
+        "svg": "duplicate-remover.svg",
+        "color": "#6366F1",
+        "label": "Duplicate Row Remover",
+    },
+    "elasticsearch_connector": {
+        "icon": "elasticsearch",
+        "svg": "elasticsearch.svg",
+        "color": "#005571",
+        "label": "Elasticsearch",
+    },
+    "email_attachment_extractor": {
+        "icon": "email-attachment",
+        "svg": "email-attachment.svg",
+        "color": "#0284C7",
+        "label": "Email Attachment Extractor",
+    },
+    "email_domain_validator": {
+        "icon": "email-validator",
+        "svg": "gmail.svg",
+        "color": "#EA4335",
+        "label": "Email / Domain Validator",
+    },
+    "email_trigger_imap": {
+        "icon": "email",
+        "svg": "email-attachment.svg",
+        "color": "#0EA5E9",
+        "label": "Email IMAP Trigger",
+    },
+    "embedding_generator": {
+        "icon": "embedding",
+        "svg": "vector-db.svg",
+        "color": "#10B981",
+        "label": "Embedding Generator",
+    },
+    "encryption_toggle": {
+        "icon": "encryption",
+        "svg": "encryption.svg",
+        "color": "#0D9488",
+        "label": "Encryption Toggle",
+    },
+    "ensemble_stacker": {
+        "icon": "ensemble-stacker",
+        "svg": "ensemble-stacker.svg",
+        "color": "#10B981",
+        "label": "Ensemble Stacker",
+    },
+    "event_bus_publisher": {
+        "icon": "event-bus",
+        "svg": "event-bus.svg",
+        "color": "#6366F1",
+        "label": "Event Bus Publisher",
+    },
+    "excel_loader": {
+        "icon": "excel",
+        "svg": "excel.svg",
+        "color": "#107C41",
+        "label": "Excel Loader",
+    },
+    "export_writer": {
+        "icon": "export",
+        "svg": "export-writer.svg",
+        "color": "#0D9488",
+        "label": "Data Export Writer",
+    },
+    "fairness_slicing_report": {
+        "icon": "fairness-slicing",
+        "svg": "fairness.svg",
+        "color": "#0D9488",
+        "label": "Fairness Slicing Report",
+    },
+    "feature_scaler": {
+        "icon": "scaler",
+        "svg": "feature-scaler.svg",
+        "color": "#10B981",
+        "label": "Feature Scaler",
+    },
+    "feature_selector": {
+        "icon": "selector",
+        "svg": "feature-selector.svg",
+        "color": "#EC4899",
+        "label": "Feature Selector",
+    },
+    "file_system_watcher": {
+        "icon": "file-watcher",
+        "svg": "file-watcher.svg",
+        "color": "#4F46E5",
+        "label": "File System Watcher",
+    },
+    "fine_tuning_trigger": {
+        "icon": "fine-tuning",
+        "svg": "hyperparameter-tuner.svg",
+        "color": "#EC4899",
+        "label": "Fine-Tuning Trigger",
+    },
+    "formula_calculator": {
+        "icon": "calculator",
+        "svg": "calculator.svg",
+        "color": "#2563EB",
+        "label": "Formula Calculator",
+    },
+    "freshdesk_connector": {
+        "icon": "freshdesk",
+        "svg": "freshdesk.svg",
+        "color": "#10B981",
+        "label": "Freshdesk",
+    },
+    "ftp_sftp_watcher": {
+        "icon": "ftp",
+        "svg": "ftp.svg",
+        "color": "#2563EB",
+        "label": "FTP / SFTP Watcher",
+    },
+    "fuzzy_match_deduplication": {
+        "icon": "fuzzy-match",
+        "svg": "duplicate-remover.svg",
+        "color": "#6366F1",
+        "label": "Fuzzy-Match Deduplication",
+    },
+    "gcs_connector": {
+        "icon": "google-cloud-storage",
+        "svg": "gcs.svg",
+        "color": "#4285F4",
+        "label": "Google Cloud Storage",
+    },
+    "geocode_distance_calculator": {
+        "icon": "geocode",
+        "svg": "google-maps.svg",
+        "color": "#EA4335",
+        "label": "Geocode / Distance Calculator",
+    },
+    "github_connector": {
+        "icon": "github",
+        "svg": "github.svg",
+        "color": "#181717",
+        "label": "GitHub",
+    },
+    "gitlab_connector": {
+        "icon": "gitlab",
+        "svg": "gitlab.svg",
+        "color": "#FC6D26",
+        "label": "GitLab",
+    },
+    "gmail": {
+        "icon": "gmail",
+        "svg": "gmail.svg",
+        "color": "#EA4335",
+        "label": "Gmail",
+    },
+    "google_ads_connector": {
+        "icon": "google-ads",
+        "svg": "google-ads.svg",
+        "color": "#4285F4",
+        "label": "Google Ads",
+    },
+    "google_calendar_connector": {
+        "icon": "google-calendar",
+        "svg": "google-calendar.svg",
+        "color": "#4285F4",
+        "label": "Google Calendar",
+    },
+    "google_drive": {
+        "icon": "google-drive",
+        "svg": "google-drive.svg",
+        "color": "#4285F4",
+        "label": "Google Drive",
+    },
+    "google_maps_connector": {
+        "icon": "google-maps",
+        "svg": "google-maps.svg",
+        "color": "#EA4335",
+        "label": "Google Maps",
+    },
+    "google_sheets": {
+        "icon": "google-sheets",
+        "svg": "google-sheets.svg",
+        "color": "#0F9D58",
+        "label": "Google Sheets",
+    },
+    "graph_network_analysis": {
+        "icon": "graph-network",
+        "svg": "graph-network.svg",
+        "color": "#7C3AED",
+        "label": "Graph Network Analysis",
+    },
+    "hierarchical_tree_flattener": {
+        "icon": "tree-flattener",
+        "svg": "graph-network.svg",
+        "color": "#7C3AED",
+        "label": "Hierarchical Tree Flattener",
+    },
+    "hubspot_connector": {
+        "icon": "hubspot",
+        "svg": "hubspot.svg",
+        "color": "#FF7A59",
+        "label": "HubSpot",
+    },
+    "hyperparameter_tuner": {
+        "icon": "hyperparameter-tuner",
+        "svg": "hyperparameter-tuner.svg",
+        "color": "#EC4899",
+        "label": "Hyperparameter Tuner",
+    },
+    "iceberg_lakehouse_connector": {
+        "icon": "apache-iceberg",
+        "svg": "apache-iceberg.svg",
+        "color": "#0087BE",
+        "label": "Apache Iceberg",
+    },
+    "if_condition": {
+        "icon": "if-condition",
+        "svg": "if-condition.svg",
+        "color": "#6366F1",
+        "label": "IF Condition",
+    },
+    "image_classifier": {
+        "icon": "image-classifier",
+        "svg": "image-classifier.svg",
+        "color": "#EC4899",
+        "label": "Image Classifier",
+    },
+    "image_embedding_generator": {
+        "icon": "image-embedding",
+        "svg": "image-classifier.svg",
+        "color": "#EC4899",
+        "label": "Image Embedding Generator",
+    },
+    "intercom_connector": {
+        "icon": "intercom",
+        "svg": "intercom.svg",
+        "color": "#1F8CEB",
+        "label": "Intercom",
+    },
+    "isolation_forest": {
+        "icon": "isolation-forest",
+        "svg": "isolation-forest.svg",
+        "color": "#059669",
+        "label": "Isolation Forest",
+    },
+    "jira_connector": {
+        "icon": "jira",
+        "svg": "jira.svg",
+        "color": "#0052CC",
+        "label": "Jira",
+    },
+    "json_loader": {
+        "icon": "json",
+        "svg": "json.svg",
+        "color": "#F59E0B",
+        "label": "JSON Document Loader",
+    },
+    "json_xml_flattener_nester": {
+        "icon": "flattener",
+        "svg": "json.svg",
+        "color": "#F59E0B",
+        "label": "JSON/XML Flattener",
+    },
     "kafka_consumer": {
         "icon": "apache-kafka",
         "svg": "kafka.svg",
@@ -121,253 +680,557 @@ OFFICIAL_RECIPE_ICONS: Dict[str, Dict[str, Any]] = {
         "color": "#231F20",
         "label": "Apache Kafka Publisher",
     },
-    "rabbitmq_consumer": {
-        "icon": "rabbitmq",
-        "svg": "rabbitmq.svg",
-        "color": "#FF6600",
-        "label": "RabbitMQ Consumer",
-    },
-    "event_bus_publisher": {
-        "icon": "event-bus",
-        "svg": "api.svg",
-        "color": "#6366F1",
-        "label": "Event Bus Publisher",
-    },
-    "cdc_ingestion": {
-        "icon": "cdc",
-        "svg": "kafka.svg",
-        "color": "#0284C7",
-        "label": "Change Data Capture (CDC)",
-    },
-    "websocket_listener": {
-        "icon": "websocket",
-        "svg": "api.svg",
-        "color": "#8B5CF6",
-        "label": "WebSocket Listener",
-    },
-
-    # ── File & API Ingestion ──
-    "csv_loader": {
-        "icon": "csv",
-        "svg": "csv.svg",
-        "color": "#107C41",
-        "label": "CSV File Loader",
-    },
-    "parquet_loader": {
-        "icon": "parquet",
-        "svg": "csv.svg",
-        "color": "#2563EB",
-        "label": "Apache Parquet Loader",
-    },
-    "json_loader": {
-        "icon": "json",
-        "svg": "api.svg",
-        "color": "#F59E0B",
-        "label": "JSON Document Loader",
-    },
-    "excel_loader": {
-        "icon": "excel",
-        "svg": "csv.svg",
-        "color": "#107C41",
-        "label": "Excel Loader",
-    },
-    "export_writer": {
-        "icon": "export",
-        "svg": "csv.svg",
-        "color": "#0D9488",
-        "label": "Data Export Writer",
-    },
-    "manual_data_entry": {
-        "icon": "manual-entry",
-        "svg": "csv.svg",
-        "color": "#64748B",
-        "label": "Manual Data Entry",
-    },
-    "api_response_endpoint": {
-        "icon": "api",
-        "svg": "api.svg",
-        "color": "#6366F1",
-        "label": "API Response Endpoint",
-    },
-
-    # ── Triggers & Orchestration ──
-    "cron_trigger": {
-        "icon": "clock",
-        "svg": "clock.svg",
-        "color": "#8B5CF6",
-        "label": "Cron Schedule Trigger",
-    },
-    "webhook_trigger": {
-        "icon": "webhook",
-        "svg": "webhook.svg",
-        "color": "#F43F5E",
-        "label": "HTTP Webhook Trigger",
-    },
-    "email_trigger_imap": {
-        "icon": "email",
-        "svg": "api.svg",
-        "color": "#0EA5E9",
-        "label": "Email IMAP Trigger",
-    },
-
-    # ── Supervised & Unsupervised ML Trainers ──
-    "xgboost_trainer": {
-        "icon": "xgboost",
-        "svg": "xgboost.svg",
-        "color": "#FF6F00",
-        "label": "XGBoost Classifier / Regressor",
-    },
-    "lightgbm_trainer": {
-        "icon": "lightgbm",
-        "svg": "lightgbm.svg",
-        "color": "#02569B",
-        "label": "LightGBM Trainer",
-    },
-    "catboost_trainer": {
-        "icon": "catboost",
-        "svg": "catboost.svg",
-        "color": "#FFCC00",
-        "label": "CatBoost Trainer",
-    },
-    "random_forest_trainer": {
-        "icon": "scikit-learn",
-        "svg": "scikit-learn.svg",
-        "color": "#F7931E",
-        "label": "Random Forest",
-    },
-    "linear_trainer": {
-        "icon": "scikit-learn",
-        "svg": "scikit-learn.svg",
-        "color": "#2563EB",
-        "label": "Linear Regression",
-    },
-    "logistic_regression_trainer": {
-        "icon": "scikit-learn",
-        "svg": "scikit-learn.svg",
-        "color": "#3B82F6",
-        "label": "Logistic Regression",
-    },
-    "neural_network_trainer": {
-        "icon": "pytorch",
-        "svg": "pytorch.svg",
-        "color": "#EE4C2C",
-        "label": "Neural Network (PyTorch)",
-    },
-    "automl_search": {
-        "icon": "automl",
-        "svg": "target.svg",
-        "color": "#8B5CF6",
-        "label": "AutoML Search",
-    },
-    "hyperparameter_tuner": {
-        "icon": "tuning",
-        "svg": "target.svg",
-        "color": "#EC4899",
-        "label": "Hyperparameter Tuner",
-    },
-    "ensemble_stacker": {
-        "icon": "stack",
-        "svg": "scikit-learn.svg",
-        "color": "#10B981",
-        "label": "Ensemble Stacker",
-    },
-    "model_calibration": {
-        "icon": "calibration",
-        "svg": "target.svg",
-        "color": "#06B6D4",
-        "label": "Probability Calibration",
-    },
-
-    # ── Forecasting & Time Series ──
-    "prophet_forecaster": {
-        "icon": "meta-prophet",
-        "svg": "clock.svg",
-        "color": "#1877F2",
-        "label": "Prophet Forecaster",
-    },
-    "arima_forecaster": {
-        "icon": "arima",
-        "svg": "clock.svg",
-        "color": "#6366F1",
-        "label": "ARIMA / SARIMAX Forecaster",
-    },
     "lag_feature_engineering": {
         "icon": "time-series",
         "svg": "clock.svg",
         "color": "#0284C7",
         "label": "Lag Feature Generator",
     },
-
-    # ── Anomaly Detection & Guardrails ──
-    "isolation_forest": {
-        "icon": "isolation-forest",
-        "svg": "scikit-learn.svg",
-        "color": "#059669",
-        "label": "Isolation Forest Anomaly Guard",
+    "lightgbm_trainer": {
+        "icon": "lightgbm",
+        "svg": "lightgbm.svg",
+        "color": "#02569B",
+        "label": "LightGBM",
     },
-    "statistical_guardrail": {
-        "icon": "guardrail",
-        "svg": "target.svg",
-        "color": "#DC2626",
-        "label": "Statistical Guardrail",
+    "limit": {
+        "icon": "limit",
+        "svg": "limit.svg",
+        "color": "#64748B",
+        "label": "Limit Rows",
     },
-
-    # ── Evaluation & Governance ──
-    "model_evaluator": {
-        "icon": "target",
-        "svg": "target.svg",
-        "color": "#E11D48",
-        "label": "Model Evaluator & Metrics",
+    "linear_connector": {
+        "icon": "linear",
+        "svg": "linear.svg",
+        "color": "#5E6AD2",
+        "label": "Linear",
     },
-    "ab_testing_framework": {
-        "icon": "ab-testing",
-        "svg": "target.svg",
+    "linear_trainer": {
+        "icon": "linear-regression",
+        "svg": "linear-regression.svg",
+        "color": "#2563EB",
+        "label": "Linear Regression",
+    },
+    "linkedin_connector": {
+        "icon": "linkedin",
+        "svg": "linkedin.svg",
+        "color": "#0A66C2",
+        "label": "LinkedIn",
+    },
+    "llm_agent": {
+        "icon": "llm-agent",
+        "svg": "llm-agent.svg",
         "color": "#7C3AED",
-        "label": "A/B Testing Framework",
+        "label": "Autonomous LLM Agent",
     },
-    "bayesian_ab_estimator": {
-        "icon": "bayesian",
-        "svg": "target.svg",
-        "color": "#4F46E5",
-        "label": "Bayesian A/B Estimator",
+    "llm_evaluation": {
+        "icon": "llm-eval",
+        "svg": "model-evaluator.svg",
+        "color": "#E11D48",
+        "label": "LLM Evaluation",
     },
-    "champion_challenger": {
-        "icon": "champion-challenger",
-        "svg": "target.svg",
-        "color": "#EA580C",
-        "label": "Champion-Challenger Router",
+    "logistic_regression_trainer": {
+        "icon": "logistic-regression",
+        "svg": "logistic-regression.svg",
+        "color": "#3B82F6",
+        "label": "Logistic Regression",
     },
-    "bias_fairness_audit": {
-        "icon": "fairness",
-        "svg": "target.svg",
-        "color": "#0D9488",
-        "label": "Bias & Fairness Audit",
+    "loop": {
+        "icon": "loop",
+        "svg": "loop.svg",
+        "color": "#6366F1",
+        "label": "Loop Iterator",
+    },
+    "manual_data_entry": {
+        "icon": "manual-entry",
+        "svg": "manual-entry.svg",
+        "color": "#64748B",
+        "label": "Manual Data Entry",
+    },
+    "mapbox_connector": {
+        "icon": "mapbox",
+        "svg": "mapbox.svg",
+        "color": "#4264FB",
+        "label": "Mapbox",
+    },
+    "merge": {
+        "icon": "merge",
+        "svg": "merge.svg",
+        "color": "#6366F1",
+        "label": "Merge / Union",
+    },
+    "meta_ads_connector": {
+        "icon": "meta-ads",
+        "svg": "meta-ads.svg",
+        "color": "#0081FB",
+        "label": "Meta Ads",
+    },
+    "missing_value_imputer": {
+        "icon": "imputer",
+        "svg": "missing-value.svg",
+        "color": "#8B5CF6",
+        "label": "Missing Value Imputer",
     },
     "mlflow_tracker": {
         "icon": "mlflow",
         "svg": "mlflow.svg",
         "color": "#0194E2",
-        "label": "MLflow Experiment Tracking",
+        "label": "MLflow Tracking",
     },
-    "shap_explainer": {
-        "icon": "shap",
-        "svg": "sparkles.svg",
-        "color": "#DB2777",
-        "label": "SHAP Explainability",
+    "model_calibration": {
+        "icon": "calibration",
+        "svg": "calibration.svg",
+        "color": "#06B6D4",
+        "label": "Model Calibration",
+    },
+    "model_card_generator": {
+        "icon": "model-card",
+        "svg": "scheduled-report.svg",
+        "color": "#0D9488",
+        "label": "Model Card Generator",
+    },
+    "model_drift_monitor": {
+        "icon": "drift-monitor",
+        "svg": "drift-monitor.svg",
+        "color": "#F59E0B",
+        "label": "Model Drift Monitor",
+    },
+    "model_evaluator": {
+        "icon": "model-evaluator",
+        "svg": "model-evaluator.svg",
+        "color": "#E11D48",
+        "label": "Model Evaluator",
     },
     "model_explainability": {
         "icon": "explainability",
-        "svg": "sparkles.svg",
+        "svg": "shap.svg",
         "color": "#DB2777",
         "label": "Model Explainability",
     },
-
-    # ── Data Preparation & Splitting ──
-    "train_test_split": {
-        "icon": "scissors",
-        "svg": "scissors.svg",
+    "model_serving_endpoint": {
+        "icon": "model-serving",
+        "svg": "model-serving.svg",
+        "color": "#10B981",
+        "label": "Model Serving Endpoint",
+    },
+    "mongodb_connector": {
+        "icon": "mongodb",
+        "svg": "mongodb.svg",
+        "color": "#47A248",
+        "label": "MongoDB",
+    },
+    "mqtt_iot_stream": {
+        "icon": "mqtt",
+        "svg": "mqtt.svg",
+        "color": "#7C3AED",
+        "label": "MQTT / IoT Sensor Stream",
+    },
+    "ms_teams_notifier": {
+        "icon": "ms-teams",
+        "svg": "ms-teams.svg",
+        "color": "#6264A7",
+        "label": "Microsoft Teams",
+    },
+    "multi_agent_orchestrator": {
+        "icon": "multi-agent",
+        "svg": "multi-agent.svg",
+        "color": "#6366F1",
+        "label": "Multi-Agent Orchestrator",
+    },
+    "multimodal_agent": {
+        "icon": "multimodal-agent",
+        "svg": "image-classifier.svg",
+        "color": "#EC4899",
+        "label": "Multi-Modal Agent",
+    },
+    "mysql_connector": {
+        "icon": "mysql",
+        "svg": "mysql.svg",
+        "color": "#00758F",
+        "label": "MySQL",
+    },
+    "neural_network_trainer": {
+        "icon": "pytorch",
+        "svg": "pytorch.svg",
+        "color": "#EE4C2C",
+        "label": "PyTorch Neural Network",
+    },
+    "news_api": {
+        "icon": "news",
+        "svg": "news.svg",
+        "color": "#475569",
+        "label": "News API",
+    },
+    "next_best_offer": {
+        "icon": "next-best-offer",
+        "svg": "recommendation.svg",
+        "color": "#F59E0B",
+        "label": "Next Best Offer",
+    },
+    "notifications": {
+        "icon": "bell",
+        "svg": "notifications.svg",
+        "color": "#2563EB",
+        "label": "Notifications",
+    },
+    "notion_connector": {
+        "icon": "notion",
+        "svg": "notion.svg",
+        "color": "#000000",
+        "label": "Notion",
+    },
+    "object_detection": {
+        "icon": "object-detection",
+        "svg": "object-detection.svg",
+        "color": "#F43F5E",
+        "label": "Object Detection",
+    },
+    "object_removal": {
+        "icon": "object-removal",
+        "svg": "image-classifier.svg",
+        "color": "#EC4899",
+        "label": "Object Removal",
+    },
+    "ocr": {
+        "icon": "ocr",
+        "svg": "ocr.svg",
+        "color": "#3B82F6",
+        "label": "OCR",
+    },
+    "onedrive_sync": {
+        "icon": "onedrive",
+        "svg": "onedrive.svg",
+        "color": "#0078D4",
+        "label": "Microsoft OneDrive",
+    },
+    "open_data_api": {
+        "icon": "open-data",
+        "svg": "open-data.svg",
+        "color": "#0284C7",
+        "label": "Open Data API",
+    },
+    "openweathermap": {
+        "icon": "weather",
+        "svg": "weather.svg",
+        "color": "#F59E0B",
+        "label": "OpenWeatherMap",
+    },
+    "oracle_db_connector": {
+        "icon": "oracle",
+        "svg": "oracle.svg",
+        "color": "#F80000",
+        "label": "Oracle Database",
+    },
+    "outlier_handler": {
+        "icon": "outlier",
+        "svg": "outlier.svg",
+        "color": "#DC2626",
+        "label": "Outlier Handler",
+    },
+    "outlook_calendar_connector": {
+        "icon": "outlook",
+        "svg": "outlook.svg",
+        "color": "#0078D4",
+        "label": "Microsoft Outlook",
+    },
+    "parameter_sweep_runner": {
+        "icon": "parameter-sweep",
+        "svg": "parameter-sweep.svg",
+        "color": "#8B5CF6",
+        "label": "Parameter Sweep Runner",
+    },
+    "parquet_loader": {
+        "icon": "parquet",
+        "svg": "parquet.svg",
+        "color": "#2563EB",
+        "label": "Parquet Loader",
+    },
+    "parse_date": {
+        "icon": "parse-date",
+        "svg": "google-calendar.svg",
+        "color": "#4285F4",
+        "label": "Parse Date",
+    },
+    "pca": {
+        "icon": "pca",
+        "svg": "pca.svg",
+        "color": "#0284C7",
+        "label": "PCA",
+    },
+    "phone_number_validator": {
+        "icon": "phone-validator",
+        "svg": "sms.svg",
+        "color": "#10B981",
+        "label": "Phone Number Validator",
+    },
+    "pii_entity_masking": {
+        "icon": "pii-masking",
+        "svg": "pii-masking.svg",
+        "color": "#EF4444",
+        "label": "PII / Entity Masking",
+    },
+    "pipeline_diff_viewer": {
+        "icon": "pipeline-diff",
+        "svg": "pipeline-diff.svg",
+        "color": "#6366F1",
+        "label": "Pipeline Diff Viewer",
+    },
+    "pivot": {
+        "icon": "pivot",
+        "svg": "pivot.svg",
+        "color": "#3B82F6",
+        "label": "Pivot Table",
+    },
+    "postgresql_connector": {
+        "icon": "postgresql",
+        "svg": "postgresql.svg",
+        "color": "#336791",
+        "label": "PostgreSQL",
+    },
+    "prompt_template_manager": {
+        "icon": "prompt-template",
+        "svg": "prompt-template.svg",
+        "color": "#F59E0B",
+        "label": "Prompt Template Manager",
+    },
+    "prophet_forecaster": {
+        "icon": "meta-prophet",
+        "svg": "prophet.svg",
+        "color": "#1877F2",
+        "label": "Prophet Forecaster",
+    },
+    "push_notification_sender": {
+        "icon": "push-notification",
+        "svg": "push-notification.svg",
+        "color": "#6366F1",
+        "label": "Push Notification Sender",
+    },
+    "rabbitmq_consumer": {
+        "icon": "rabbitmq",
+        "svg": "rabbitmq.svg",
+        "color": "#FF6600",
+        "label": "RabbitMQ",
+    },
+    "rag_pipeline": {
+        "icon": "rag",
+        "svg": "rag.svg",
+        "color": "#8B5CF6",
+        "label": "RAG Pipeline",
+    },
+    "random_forest_trainer": {
+        "icon": "random-forest",
+        "svg": "random-forest.svg",
+        "color": "#15803D",
+        "label": "Random Forest",
+    },
+    "readonly_pipeline_snapshot": {
+        "icon": "readonly-snapshot",
+        "svg": "readonly-snapshot.svg",
+        "color": "#475569",
+        "label": "Read-Only Snapshot",
+    },
+    "recommendation_engine": {
+        "icon": "recommendation",
+        "svg": "recommendation.svg",
+        "color": "#F59E0B",
+        "label": "Recommendation Engine",
+    },
+    "reddit_connector": {
+        "icon": "reddit",
+        "svg": "reddit.svg",
+        "color": "#FF4500",
+        "label": "Reddit",
+    },
+    "redis_connector": {
+        "icon": "redis",
+        "svg": "redis.svg",
+        "color": "#DC382D",
+        "label": "Redis",
+    },
+    "redshift_connector": {
+        "icon": "amazon-redshift",
+        "svg": "amazon-redshift.svg",
+        "color": "#CC292B",
+        "label": "Amazon Redshift",
+    },
+    "regex_replace_extract": {
+        "icon": "regex",
+        "svg": "column-reorder.svg",
+        "color": "#6366F1",
+        "label": "Regex Replace / Extract",
+    },
+    "replace_value": {
+        "icon": "replace",
+        "svg": "type-converter.svg",
+        "color": "#7C3AED",
+        "label": "Replace Value",
+    },
+    "rest_graphql_caller": {
+        "icon": "rest-graphql",
+        "svg": "rest-graphql.svg",
+        "color": "#E10098",
+        "label": "REST / GraphQL",
+    },
+    "retry_error_handler": {
+        "icon": "retry",
+        "svg": "retry-handler.svg",
+        "color": "#6366F1",
+        "label": "Retry Error Handler",
+    },
+    "rollback_trigger": {
+        "icon": "rollback",
+        "svg": "rollback.svg",
+        "color": "#EF4444",
+        "label": "Rollback Trigger",
+    },
+    "row_filter": {
+        "icon": "filter",
+        "svg": "filter.svg",
+        "color": "#6366F1",
+        "label": "Filter Rows",
+    },
+    "row_level_access_control": {
+        "icon": "rlac",
+        "svg": "rlac.svg",
+        "color": "#EF4444",
+        "label": "Row-Level Access Control",
+    },
+    "rss_atom_aggregator": {
+        "icon": "rss",
+        "svg": "rss.svg",
+        "color": "#F97316",
+        "label": "RSS / Atom Aggregator",
+    },
+    "rss_news_reader": {
+        "icon": "rss",
+        "svg": "rss.svg",
+        "color": "#F97316",
+        "label": "RSS News Reader",
+    },
+    "s3_data_lake_connector": {
+        "icon": "amazon-s3",
+        "svg": "aws-s3.svg",
+        "color": "#569A31",
+        "label": "Amazon S3",
+    },
+    "salesforce_connector": {
+        "icon": "salesforce",
+        "svg": "salesforce.svg",
+        "color": "#00A1E0",
+        "label": "Salesforce",
+    },
+    "sampling_operator": {
+        "icon": "sampling",
+        "svg": "filter.svg",
+        "color": "#6366F1",
+        "label": "Sampling Operator",
+    },
+    "scheduled_report_generator": {
+        "icon": "report",
+        "svg": "scheduled-report.svg",
         "color": "#0D9488",
-        "label": "Train/Test Split",
+        "label": "Scheduled Report Generator",
+    },
+    "schema_contract_validation": {
+        "icon": "schema-validation",
+        "svg": "agent-guardrail.svg",
+        "color": "#10B981",
+        "label": "Schema Contract Validation",
+    },
+    "secrets_manager_block": {
+        "icon": "secrets-manager",
+        "svg": "secrets-manager.svg",
+        "color": "#DC2626",
+        "label": "Secrets Manager",
+    },
+    "select_rename_reorder": {
+        "icon": "reorder",
+        "svg": "column-reorder.svg",
+        "color": "#6366F1",
+        "label": "Select (Rename / Reorder)",
+    },
+    "semantic_deduplication": {
+        "icon": "semantic-dedup",
+        "svg": "duplicate-remover.svg",
+        "color": "#6366F1",
+        "label": "Semantic Deduplication",
+    },
+    "sentiment_analysis": {
+        "icon": "sentiment",
+        "svg": "sentiment.svg",
+        "color": "#10B981",
+        "label": "Sentiment Analysis",
+    },
+    "shap_explainer": {
+        "icon": "shap",
+        "svg": "shap.svg",
+        "color": "#DB2777",
+        "label": "SHAP Explainability",
+    },
+    "shopify_connector": {
+        "icon": "shopify",
+        "svg": "shopify.svg",
+        "color": "#96BF48",
+        "label": "Shopify",
+    },
+    "slack": {
+        "icon": "slack",
+        "svg": "slack.svg",
+        "color": "#4A154B",
+        "label": "Slack",
+    },
+    "sms_sender": {
+        "icon": "sms",
+        "svg": "sms.svg",
+        "color": "#10B981",
+        "label": "SMS Sender",
+    },
+    "snowflake_connector": {
+        "icon": "snowflake",
+        "svg": "snowflake.svg",
+        "color": "#29B5E8",
+        "label": "Snowflake",
+    },
+    "sort": {
+        "icon": "sort",
+        "svg": "sort.svg",
+        "color": "#475569",
+        "label": "Sort Rows",
+    },
+    "speech_to_text": {
+        "icon": "speech-to-text",
+        "svg": "speech-to-text.svg",
+        "color": "#0284C7",
+        "label": "Speech-to-Text",
+    },
+    "sql_step": {
+        "icon": "sql",
+        "svg": "sql.svg",
+        "color": "#0284C7",
+        "label": "Custom SQL Step",
+    },
+    "sqlite_connector": {
+        "icon": "sqlite",
+        "svg": "sqlite.svg",
+        "color": "#003B57",
+        "label": "SQLite",
+    },
+    "sqlserver_connector": {
+        "icon": "microsoft-sql-server",
+        "svg": "sqlserver.svg",
+        "color": "#CC292B",
+        "label": "Microsoft SQL Server",
+    },
+    "statistical_guardrail": {
+        "icon": "guardrail",
+        "svg": "agent-guardrail.svg",
+        "color": "#DC2626",
+        "label": "Statistical Guardrail",
+    },
+    "stock_market_api": {
+        "icon": "stock-market",
+        "svg": "stock-market.svg",
+        "color": "#10B981",
+        "label": "Stock Market API",
     },
     "stratified_split": {
         "icon": "scissors",
@@ -375,11 +1238,161 @@ OFFICIAL_RECIPE_ICONS: Dict[str, Dict[str, Any]] = {
         "color": "#0D9488",
         "label": "Stratified Split",
     },
+    "stripe_connector": {
+        "icon": "stripe",
+        "svg": "stripe.svg",
+        "color": "#635BFF",
+        "label": "Stripe",
+    },
+    "structured_output_enforcer": {
+        "icon": "structured-output",
+        "svg": "json.svg",
+        "color": "#F59E0B",
+        "label": "Structured-Output Enforcer",
+    },
+    "sub_pipeline_call": {
+        "icon": "sub-pipeline",
+        "svg": "sub-workflow.svg",
+        "color": "#6366F1",
+        "label": "Sub-Pipeline Call",
+    },
+    "summarization": {
+        "icon": "summarization",
+        "svg": "summarization.svg",
+        "color": "#8B5CF6",
+        "label": "Summarization",
+    },
+    "survival_model": {
+        "icon": "survival",
+        "svg": "survival.svg",
+        "color": "#DC2626",
+        "label": "Survival Analysis",
+    },
+    "switch": {
+        "icon": "switch",
+        "svg": "switch.svg",
+        "color": "#6366F1",
+        "label": "Switch Router",
+    },
+    "telegram": {
+        "icon": "telegram",
+        "svg": "telegram.svg",
+        "color": "#229ED9",
+        "label": "Telegram",
+    },
+    "template_macro_library": {
+        "icon": "macro-library",
+        "svg": "macro-library.svg",
+        "color": "#F97316",
+        "label": "Template Macro Library",
+    },
+    "text_preprocessor": {
+        "icon": "text-clean",
+        "svg": "category-sanitizer.svg",
+        "color": "#8B5CF6",
+        "label": "Text Preprocessor",
+    },
+    "text_summarization": {
+        "icon": "summarization",
+        "svg": "summarization.svg",
+        "color": "#8B5CF6",
+        "label": "Summarization",
+    },
+    "text_to_speech": {
+        "icon": "text-to-speech",
+        "svg": "text-to-speech.svg",
+        "color": "#8B5CF6",
+        "label": "Text-to-Speech",
+    },
+    "text_translation": {
+        "icon": "translation",
+        "svg": "translation.svg",
+        "color": "#3B82F6",
+        "label": "Translation",
+    },
+    "text_vectorizer": {
+        "icon": "text-vectorizer",
+        "svg": "categorical-encoder.svg",
+        "color": "#F59E0B",
+        "label": "Text Vectorizer",
+    },
+    "threshold_alert_monitor": {
+        "icon": "alert-monitor",
+        "svg": "threshold-alert.svg",
+        "color": "#F59E0B",
+        "label": "Alert / Threshold Monitor",
+    },
     "time_series_split": {
         "icon": "clock",
         "svg": "clock.svg",
         "color": "#0284C7",
         "label": "Time Series Split",
+    },
+    "timezone_converter": {
+        "icon": "timezone",
+        "svg": "clock.svg",
+        "color": "#0284C7",
+        "label": "Timezone Converter",
+    },
+    "train_test_split": {
+        "icon": "scissors",
+        "svg": "scissors.svg",
+        "color": "#0D9488",
+        "label": "Train / Test Split",
+    },
+    "translation": {
+        "icon": "translation",
+        "svg": "translation.svg",
+        "color": "#3B82F6",
+        "label": "Translation",
+    },
+    "tsne": {
+        "icon": "tsne",
+        "svg": "clustering.svg",
+        "color": "#EC4899",
+        "label": "t-SNE",
+    },
+    "twilio_connector": {
+        "icon": "twilio",
+        "svg": "twilio.svg",
+        "color": "#F22F46",
+        "label": "Twilio",
+    },
+    "twitter_connector": {
+        "icon": "twitter",
+        "svg": "twitter.svg",
+        "color": "#000000",
+        "label": "Twitter / X",
+    },
+    "umap": {
+        "icon": "umap",
+        "svg": "pca.svg",
+        "color": "#6366F1",
+        "label": "UMAP",
+    },
+    "variance_filter": {
+        "icon": "variance",
+        "svg": "variance.svg",
+        "color": "#F97316",
+        "label": "Variance Filter",
+    },
+    "vector_db_indexer": {
+        "icon": "vector-db",
+        "svg": "vector-db.svg",
+        "color": "#10B981",
+        "label": "Vector DB Indexer",
+    },
+    "version_snapshot": {
+        "icon": "version-snapshot",
+        "svg": "version-snapshot.svg",
+        "color": "#6366F1",
+        "label": "Version Snapshot",
+    },
+    "video_object_tracking": {
+        "icon": "video-tracking",
+        "svg": "object-detection.svg",
+        "color": "#F43F5E",
+        "label": "Video Object Tracking",
     },
     "walk_forward_split": {
         "icon": "clock",
@@ -387,105 +1400,79 @@ OFFICIAL_RECIPE_ICONS: Dict[str, Dict[str, Any]] = {
         "color": "#0284C7",
         "label": "Walk-Forward Split",
     },
-    "missing_value_imputer": {
-        "icon": "imputer",
-        "svg": "sparkles.svg",
-        "color": "#8B5CF6",
-        "label": "Missing Value Imputer",
-    },
-    "outlier_handler": {
-        "icon": "outlier",
-        "svg": "sparkles.svg",
-        "color": "#DC2626",
-        "label": "Outlier Handler",
-    },
-    "duplicate_remover": {
-        "icon": "dedup",
-        "svg": "sparkles.svg",
-        "color": "#6366F1",
-        "label": "Duplicate Remover",
-    },
-    "feature_scaler": {
-        "icon": "scaler",
-        "svg": "sparkles.svg",
-        "color": "#10B981",
-        "label": "Feature Scaler",
-    },
-    "categorical_encoder": {
-        "icon": "encoder",
-        "svg": "sparkles.svg",
-        "color": "#F59E0B",
-        "label": "Categorical Encoder",
-    },
-    "feature_selector": {
-        "icon": "selector",
-        "svg": "sparkles.svg",
-        "color": "#EC4899",
-        "label": "Feature Selector",
-    },
-    "correlation_filter": {
-        "icon": "correlation",
-        "svg": "target.svg",
-        "color": "#3B82F6",
-        "label": "Correlation Filter",
-    },
-    "variance_filter": {
-        "icon": "variance",
-        "svg": "target.svg",
-        "color": "#F97316",
-        "label": "Variance Filter",
-    },
-    "column_selector": {
-        "icon": "columns",
-        "svg": "csv.svg",
-        "color": "#475569",
-        "label": "Column Selector",
-    },
-    "data_type_converter": {
-        "icon": "convert",
-        "svg": "sparkles.svg",
-        "color": "#6366F1",
-        "label": "Data Type Converter",
-    },
-    "dataset_join": {
-        "icon": "join",
-        "svg": "csv.svg",
+    "web_browsing_agent": {
+        "icon": "web-browsing-agent",
+        "svg": "web-scraper.svg",
         "color": "#0284C7",
-        "label": "Dataset Join / Merge",
+        "label": "Web-Browsing Agent",
     },
-    # ── Flow Control & Sub-Workflows ──
-    "add_workflow": {
-        "icon": "sub-workflow",
-        "svg": "api.svg",
-        "color": "#6366F1",
-        "label": "Sub-Workflow Runner",
+    "web_scraper": {
+        "icon": "web-scraper",
+        "svg": "web-scraper.svg",
+        "color": "#0284C7",
+        "label": "Web Scraper",
     },
-    "workflow_start": {
-        "icon": "workflow-start",
-        "svg": "clock.svg",
-        "color": "#10B981",
-        "label": "Workflow Start Anchor",
+    "webhook_trigger": {
+        "icon": "webhook",
+        "svg": "webhook.svg",
+        "color": "#F43F5E",
+        "label": "Webhook Trigger",
+    },
+    "websocket_listener": {
+        "icon": "websocket",
+        "svg": "websocket.svg",
+        "color": "#8B5CF6",
+        "label": "WebSocket Streaming",
     },
     "workflow_end": {
         "icon": "workflow-end",
-        "svg": "target.svg",
+        "svg": "workflow-end.svg",
         "color": "#EF4444",
         "label": "Workflow End Anchor",
     },
+    "workflow_start": {
+        "icon": "workflow-start",
+        "svg": "workflow-start.svg",
+        "color": "#10B981",
+        "label": "Workflow Start Anchor",
+    },
+    "xgboost_trainer": {
+        "icon": "xgboost",
+        "svg": "xgboost.svg",
+        "color": "#FF6F00",
+        "label": "XGBoost",
+    },
+    "zendesk_connector": {
+        "icon": "zendesk",
+        "svg": "zendesk.svg",
+        "color": "#03363D",
+        "label": "Zendesk",
+    },
 }
 
-# Category fallback icon mapping
+# Category fallback icon mapping: (icon_slug, svg_filename, color)
 CATEGORY_FALLBACK_ICONS: Dict[str, Tuple[str, str, str]] = {
-    "ingestion": ("database", "csv.svg", "#0284C7"),
+    "ingestion": ("database", "database.svg", "#0284C7"),
     "triggers": ("zap", "webhook.svg", "#F43F5E"),
-    "flow_control": ("sub-workflow", "api.svg", "#6366F1"),
-    "preprocessing": ("sliders", "sparkles.svg", "#8B5CF6"),
-    "feature_engineering": ("sparkles", "sparkles.svg", "#EC4899"),
+    "flow_control": ("sub-workflow", "sub-workflow.svg", "#6366F1"),
+    "preprocessing": ("sliders", "type-converter.svg", "#8B5CF6"),
+    "feature_engineering": ("sparkles", "feature-selector.svg", "#EC4899"),
     "splitting": ("scissors", "scissors.svg", "#0D9488"),
     "training": ("cpu", "scikit-learn.svg", "#7C3AED"),
-    "evaluation": ("bar-chart", "target.svg", "#E11D48"),
-    "anomaly": ("shield-alert", "target.svg", "#DC2626"),
+    "evaluation": ("bar-chart", "model-evaluator.svg", "#E11D48"),
+    "anomaly": ("shield-alert", "isolation-forest.svg", "#DC2626"),
     "forecasting": ("trending-up", "clock.svg", "#0284C7"),
+    "nlp": ("type", "translation.svg", "#06B6D4"),
+    "vision_audio": ("eye", "object-detection.svg", "#EC4899"),
+    "agents": ("bot", "llm-agent.svg", "#7C3AED"),
+    "agents & llm orchestration": ("bot", "llm-agent.svg", "#7C3AED"),
+    "integrations": ("plug", "api.svg", "#F59E0B"),
+    "monitoring": ("activity", "drift-monitor.svg", "#EAB308"),
+    "governance": ("shield", "audit-trail.svg", "#0D9488"),
+    "reporting": ("file-text", "scheduled-report.svg", "#0D9488"),
+    "security": ("lock", "encryption.svg", "#EF4444"),
+    "canvas": ("layout", "canvas-note.svg", "#3B82F6"),
+    "export": ("download", "export-writer.svg", "#0D9488"),
 }
 
 
@@ -498,27 +1485,31 @@ def resolve_recipe_icon(
     """
     Resolves the official icon slug and icon_url for a recipe.
     Priority order:
-    1. Explicit class icon and icon_url
-    2. Registry entry in OFFICIAL_RECIPE_ICONS
+    1. Registry entry in OFFICIAL_RECIPE_ICONS (highest priority for official branding)
+    2. Explicit class icon and icon_url (if custom and not generic fallback)
     3. Category fallback
     4. Default generic icon
     """
-    if existing_icon and existing_icon_url:
-        return existing_icon, existing_icon_url
-
-    if existing_icon:
-        return existing_icon, f"/static/icons/recipes/{existing_icon}.svg"
-
+    # 1. Official recipe icon registry entry
     info = OFFICIAL_RECIPE_ICONS.get(recipe_id)
     if info:
         icon_slug = info["icon"]
         svg_file = info.get("svg", f"{icon_slug}.svg")
         return icon_slug, f"/static/icons/recipes/{svg_file}"
 
+    # 2. Explicit custom icon and icon_url
+    if existing_icon and existing_icon_url:
+        return existing_icon, existing_icon_url
+
+    if existing_icon:
+        return existing_icon, f"/static/icons/recipes/{existing_icon}.svg"
+
+    # 3. Category fallback
     if category:
         cat_info = CATEGORY_FALLBACK_ICONS.get(category.lower())
         if cat_info:
             icon_slug, svg_file, _ = cat_info
             return icon_slug, f"/static/icons/recipes/{svg_file}"
 
+    # 4. Default
     return "default", "/static/icons/recipes/default.svg"

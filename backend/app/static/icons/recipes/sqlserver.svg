@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
+  <rect width="24" height="24" rx="5" fill="#FEF2F2"/>
+  <!-- Top Ellipse -->
+  <ellipse cx="12" cy="7" rx="6.5" ry="2.5" fill="#CC292B" fill-opacity="0.2" stroke="#CC292B" stroke-width="1.4"/>
+  <!-- Middle Ring -->
+  <path d="M5.5 7v4.5c0 1.4 2.9 2.5 6.5 2.5s6.5-1.1 6.5-2.5V7" stroke="#CC292B" stroke-width="1.4"/>
+  <!-- Bottom Ring -->
+  <path d="M5.5 11.5V16c0 1.4 2.9 2.5 6.5 2.5s6.5-1.1 6.5-2.5v-4.5" stroke="#CC292B" stroke-width="1.4"/>
+  <!-- Cylinder accent -->
+  <path d="M12 9.5v7" stroke="#CC292B" stroke-width="1.2" stroke-linecap="round" stroke-dasharray="1 2"/>
+</svg>

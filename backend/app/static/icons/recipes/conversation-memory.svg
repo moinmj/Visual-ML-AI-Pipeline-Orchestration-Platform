@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
+  <rect width="24" height="24" rx="5" fill="#EFF6FF"/>
+  <!-- Speech Bubbles & Storage Disc -->
+  <path d="M5 6.5A1.5 1.5 0 0 1 6.5 5h8A1.5 1.5 0 0 1 16 6.5V11a1.5 1.5 0 0 1-1.5 1.5H9l-3 2.5v-2.5H6.5A1.5 1.5 0 0 1 5 11V6.5z" stroke="#3B82F6" stroke-width="1.3"/>
+  <ellipse cx="15.5" cy="16" rx="4" ry="1.5" stroke="#2563EB" stroke-width="1.2"/>
+  <path d="M11.5 16v2.5c0 .8 1.8 1.5 4 1.5s4-.7 4-1.5V16" stroke="#2563EB" stroke-width="1.2"/>
+</svg>

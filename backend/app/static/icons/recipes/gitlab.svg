@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
+  <rect width="24" height="24" rx="5" fill="#FFF7ED"/>
+  <!-- GitLab Fox Head -->
+  <path d="M12 18.5l3.5-9.5H8.5L12 18.5z" fill="#E24329"/>
+  <path d="M12 18.5l-3.5-9.5H4l8 13.5z" fill="#FC6D26"/>
+  <path d="M4 9h4.5l-2-6.5a.5.5 0 0 0-.9 0L4 9z" fill="#FCA326"/>
+  <path d="M12 18.5l3.5-9.5H20l-8 13.5z" fill="#FC6D26"/>
+  <path d="M20 9h-4.5l2-6.5a.5.5 0 0 1 .9 0L20 9z" fill="#FCA326"/>
+</svg>

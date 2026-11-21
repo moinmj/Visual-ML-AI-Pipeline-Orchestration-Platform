@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
+  <rect width="24" height="24" rx="5" fill="#FEF2F2"/>
+  <!-- Google Maps Pin -->
+  <path d="M12 4a5 5 0 0 0-5 5c0 3.5 5 9.5 5 9.5s5-6 5-9.5a5 5 0 0 0-5-5z" fill="#EA4335" stroke="#EA4335" stroke-width="1.2"/>
+  <circle cx="12" cy="9" r="2" fill="#FFFFFF"/>
+</svg>

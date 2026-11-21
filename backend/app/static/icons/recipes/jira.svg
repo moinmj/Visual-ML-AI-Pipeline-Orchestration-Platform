@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
+  <rect width="24" height="24" rx="5" fill="#EFF6FF"/>
+  <!-- Jira Blue Corner Diamond Arrows -->
+  <path d="M11.5 4.5l-6 6a2 2 0 0 0 0 2.8l6 6c.8.8 2 .8 2.8 0l1.2-1.2-4.6-4.6 4.6-4.6-1.2-1.2a2 2 0 0 0-2.8 0z" fill="#0052CC"/>
+  <path d="M14.5 7.5l-4.5 4.5 4.5 4.5 2.5-2.5-2-2 2-2-2.5-2.5z" fill="#2684FF"/>
+</svg>
