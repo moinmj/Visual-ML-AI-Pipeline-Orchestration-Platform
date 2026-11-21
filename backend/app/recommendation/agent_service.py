@@ -3,31 +3,31 @@ import json
 import threading
 from copy import deepcopy
 from typing import Any, Dict, List, Optional, Tuple
- 
+
 import pandas as pd
 from jsonschema import Draft202012Validator, ValidationError as JsonSchemaValidationError, validate
 from jsonschema.exceptions import SchemaError
 from openai import AsyncOpenAI, BadRequestError, OpenAIError
- 
+
 import backend.app.recipes
 from backend.app.core.config import settings
 from backend.app.core.logging import logger
 from backend.app.engine.dag.graph import WorkflowEdge, WorkflowGraph, WorkflowNode
 from backend.app.profiling.profiler import DataProfiler
 from backend.app.recipes.base.registry import recipe_registry
- 
- 
+
+
 TRANSFORM_CATEGORIES = {"preprocessing", "nlp"}
 SUPPORTED_TASK_TYPES = ("classification", "regression")
- 
+
 # Providers limit tokens per minute (e.g. Groq's free tier allows 8,000 for one request).
 # The recipe tools are the bulk of each request, so they are compacted and trimmed to
 # this estimated budget. Trainers are always kept; preprocessing tools are dropped
 # largest-first when the budget is exceeded.
 AGENT_TOOL_TOKEN_BUDGET = 4500
 _STRIP_SCHEMA_KEYS = {"description", "title", "examples", "$comment"}
- 
- 
+
+
 def _compact_schema(node: Any) -> Any:
     """Drop prose-only keywords from a JSON schema to save tokens (validation is unchanged)."""
     if isinstance(node, dict):
@@ -39,11 +39,11 @@ def _compact_schema(node: Any) -> Any:
     if isinstance(node, list):
         return [_compact_schema(value) for value in node]
     return node
- 
- 
+
+
 # Recipes that execute user/LLM-supplied code or SQL must never be offered to the planner.
 AGENT_EXCLUDED_RECIPES = frozenset({"custom_python_step", "sql_step", "formula_calculator"})
- 
+
 # Core tabular preprocessing recipes: kept last when the tool list has to be trimmed.
 AGENT_PREFERRED_PREPROCESSING = frozenset(
     {
@@ -58,14 +58,14 @@ AGENT_PREFERRED_PREPROCESSING = frozenset(
         "parse_date",
     }
 )
- 
+
 _JSON_SCHEMA_TYPES = {"array", "boolean", "integer", "null", "number", "object", "string"}
 _UNTOUCHED_SCHEMA_KEYS = {"default", "enum", "const", "examples"}
- 
- 
+
+
 def _normalize_ui_types(node: Any, name: str = "") -> Any:
     """Map UI-only `type` values (select, column, textarea, ...) to JSON Schema types.
- 
+
     Recipe schemas also drive the form UI, so some use types such as "select" or
     "column". Providers reject those, so they are mapped to the nearest JSON type.
     """
@@ -73,7 +73,7 @@ def _normalize_ui_types(node: Any, name: str = "") -> Any:
         return [_normalize_ui_types(item) for item in node]
     if not isinstance(node, dict):
         return node
- 
+
     result: Dict[str, Any] = {}
     for key, value in node.items():
         if key == "properties" and isinstance(value, dict):
@@ -85,7 +85,7 @@ def _normalize_ui_types(node: Any, name: str = "") -> Any:
             result[key] = value
         else:
             result[key] = _normalize_ui_types(value)
- 
+
     node_type = result.get("type")
     if isinstance(node_type, str) and node_type not in _JSON_SCHEMA_TYPES:
         ui_type = node_type.lower()
@@ -101,41 +101,41 @@ def _normalize_ui_types(node: Any, name: str = "") -> Any:
         else:
             result["type"] = "string"
     return result
- 
- 
+
+
 def _estimate_tokens(obj: Any) -> int:
     """Rough, slightly pessimistic token estimate for a JSON-serializable object."""
     return len(json.dumps(obj, ensure_ascii=True)) // 3
- 
- 
+
+
 class AgentPlanningError(Exception):
     """Raised when the model returns a plan that cannot safely become a workflow."""
- 
- 
+
+
 class AgentConfigurationError(AgentPlanningError):
     """Raised when no supported model provider is configured."""
- 
- 
+
+
 class AgentCapacityError(AgentPlanningError):
     """Raised when the process has reached its agent request concurrency limit."""
- 
- 
+
+
 _AGENT_CAPACITY = threading.BoundedSemaphore(settings.AGENT_MAX_GROQ_CONCURRENT)
- 
+
 # Models occasionally answer in plain text instead of calling a tool, which the provider
 # rejects with a 400. Retry that one case once, after a pause so a per-minute token
 # limit has time to recover.
 _NO_TOOL_CALL_MARKER = "did not call a tool"
 _NO_TOOL_CALL_RETRY_DELAY_SECONDS = 20
- 
- 
+
+
 def agent_provider_available() -> bool:
     return any(
         api_key and api_key.strip()
         for api_key in (settings.OPENAI_API_KEY, settings.GROQ_API_KEY)
     )
- 
- 
+
+
 def _get_agent_provider() -> Tuple[str, str, str, Optional[str]]:
     if settings.OPENAI_API_KEY and settings.OPENAI_API_KEY.strip():
         return "OpenAI", settings.OPENAI_API_KEY.strip(), settings.OPENAI_MODEL, None
@@ -149,8 +149,8 @@ def _get_agent_provider() -> Tuple[str, str, str, Optional[str]]:
     raise AgentConfigurationError(
         "No recommendation-agent provider is configured. Set OPENAI_API_KEY or GROQ_API_KEY."
     )
- 
- 
+
+
 async def _request_agent_tools(
     *,
     messages: List[Dict[str, Any]],
@@ -160,7 +160,7 @@ async def _request_agent_tools(
     provider, api_key, model, base_url = _get_agent_provider()
     if not _AGENT_CAPACITY.acquire(blocking=False):
         raise AgentCapacityError("The agent request capacity is full; retry shortly.")
- 
+
     try:
         client_options = {"api_key": api_key, "timeout": 30.0, "max_retries": 2}
         if base_url:
@@ -201,12 +201,12 @@ async def _request_agent_tools(
         raise AgentPlanningError(f"{provider} could not {operation}.") from exc
     finally:
         _AGENT_CAPACITY.release()
- 
+
 def build_dataset_context(df: pd.DataFrame) -> Dict[str, Any]:
     """Return schema and aggregate profile only; never send data rows or category values."""
     return build_dataset_context_from_profile(DataProfiler.profile_dataframe(df))
- 
- 
+
+
 def build_dataset_context_from_profile(profile: Dict[str, Any]) -> Dict[str, Any]:
     """Keep only the safe schema fields needed for planning from a stored data profile."""
     columns = {}
@@ -223,18 +223,18 @@ def build_dataset_context_from_profile(profile: Dict[str, Any]) -> Dict[str, Any
             "null_percentage": metadata.get("null_percentage"),
             "unique_count": metadata.get("unique_count"),
         }
- 
+
     return {
         "row_count": profile.get("row_count", 0),
         "column_count": profile.get("column_count") or len(columns),
         "columns": columns,
     }
- 
- 
+
+
 def _recipe_tool_name(recipe_id: str) -> str:
     return f"select_recipe_{recipe_id}"
- 
- 
+
+
 def _recipe_task_types(recipe_id: str) -> List[str]:
     schema = recipe_registry.get(recipe_id).get_schema()
     task_schema = schema.get("properties", {}).get("task_type", {})
@@ -242,8 +242,8 @@ def _recipe_task_types(recipe_id: str) -> List[str]:
     if isinstance(supported, list):
         return [task for task in SUPPORTED_TASK_TYPES if task in supported]
     return []
- 
- 
+
+
 def _recipe_parameters(
     recipe_id: str,
     task_type: Optional[str] = None,
@@ -251,7 +251,7 @@ def _recipe_parameters(
     recipe = recipe_registry.get(recipe_id)
     schema = _normalize_ui_types(deepcopy(recipe.get_schema()))
     schema.setdefault("additionalProperties", False)
- 
+
     if recipe.category == "training":
         properties = schema.setdefault("properties", {})
         task_schema = properties.setdefault("task_type", {"type": "string"})
@@ -274,10 +274,10 @@ def _recipe_parameters(
         schema["properties"]["method"]["enum"] = [
             method for method in methods if method not in {"target", "woe"}
         ]
- 
+
     return schema
- 
- 
+
+
 def _available_task_types() -> List[str]:
     return sorted(
         {
@@ -287,8 +287,8 @@ def _available_task_types() -> List[str]:
             for task in _recipe_task_types(metadata.recipe_id)
         }
     )
- 
- 
+
+
 def build_agent_tools(
     column_names: List[str],
     task_type: Optional[str] = None,
@@ -297,7 +297,7 @@ def build_agent_tools(
     available_tasks = _available_task_types()
     if task_type is not None and task_type not in available_tasks:
         raise AgentPlanningError(f"Unsupported supervised task type '{task_type}'.")
- 
+
     choose_task_type_tool = {
         "type": "function",
         "function": {
@@ -353,7 +353,7 @@ def build_agent_tools(
             },
         },
     }
- 
+
     # Only expose choose_* tools when the answer is not already fixed by the user.
     # Otherwise the model can satisfy tool_choice="required" with a redundant call
     # and never select a trainer.
@@ -362,9 +362,9 @@ def build_agent_tools(
         tools.append(choose_task_type_tool)
     if not target_fixed:
         tools.append(choose_target_column_tool)
- 
+
     tool_recipes: Dict[str, str] = {}
- 
+
     for metadata in recipe_registry.list_all():
         is_transform = (
             metadata.category in TRANSFORM_CATEGORIES
@@ -386,7 +386,7 @@ def build_agent_tools(
             continue
         if metadata.recipe_id in AGENT_EXCLUDED_RECIPES:
             continue
- 
+
         # Groq validates every tool schema against JSON Schema draft 2020-12 and rejects
         # the whole request if one is invalid. Skip such recipes instead of failing.
         try:
@@ -400,7 +400,7 @@ def build_agent_tools(
                 exc.message,
             )
             continue
- 
+
         recipe = recipe_registry.get(metadata.recipe_id)
         name = _recipe_tool_name(metadata.recipe_id)
         tools.append(
@@ -419,7 +419,7 @@ def build_agent_tools(
             }
         )
         tool_recipes[name] = metadata.recipe_id
- 
+
     # Keep the request under the provider's tokens-per-minute limit.
     total_tokens = sum(_estimate_tokens(tool) for tool in tools)
     if total_tokens > AGENT_TOOL_TOKEN_BUDGET:
@@ -455,10 +455,10 @@ def build_agent_tools(
         total_tokens,
         AGENT_TOOL_TOKEN_BUDGET,
     )
- 
+
     return tools, tool_recipes
- 
- 
+
+
 def build_agent_workflow(
     dataset_id: str,
     target_column: str,
@@ -470,7 +470,7 @@ def build_agent_workflow(
         raise AgentPlanningError(f"Unsupported supervised task type '{task_type}'.")
     if recipe_registry.get("model_evaluator") is None:
         raise AgentPlanningError("The model evaluator recipe is not registered.")
- 
+
     trainer_selections = []
     preprocessing_selections = []
     for recipe_id, config in recipe_selections:
@@ -481,7 +481,7 @@ def build_agent_workflow(
             raise AgentPlanningError(
                 f"Invalid configuration for recipe '{recipe_id}': {exc.message}"
             ) from exc
- 
+
         if recipe.category == "training":
             if config.get("task_type") != task_type:
                 raise AgentPlanningError(
@@ -492,10 +492,10 @@ def build_agent_workflow(
             preprocessing_selections.append((recipe_id, config))
         else:
             raise AgentPlanningError(f"Recipe '{recipe_id}' is not supported by this planner.")
- 
+
     if len(trainer_selections) != 1:
         raise AgentPlanningError("The plan must select exactly one compatible trainer.")
- 
+
     nodes = [
         WorkflowNode(
             id="agent_data",
@@ -506,7 +506,7 @@ def build_agent_workflow(
     ]
     edges = []
     previous_node = "agent_data"
- 
+
     for index, (recipe_id, config) in enumerate(preprocessing_selections, start=1):
         recipe = recipe_registry.get(recipe_id)
         step_config = dict(config)
@@ -523,7 +523,7 @@ def build_agent_workflow(
         )
         edges.append(WorkflowEdge(source=previous_node, target=node_id))
         previous_node = node_id
- 
+
     nodes.extend(
         [
             WorkflowNode(
@@ -565,7 +565,7 @@ def build_agent_workflow(
             WorkflowEdge(source="agent_trainer", target="agent_evaluator"),
         ]
     )
- 
+
     workflow = WorkflowGraph(nodes=nodes, edges=edges)
     diagnostics = workflow.get_diagnostics()
     if not diagnostics["is_valid"]:
@@ -574,8 +574,8 @@ def build_agent_workflow(
             + " | ".join(diagnostics["errors"])
         )
     return workflow
- 
- 
+
+
 async def create_agent_plan(
     dataset_id: str,
     dataset_context: Dict[str, Any],
@@ -591,7 +591,7 @@ async def create_agent_plan(
     )
     logger.info("========== AGENT PLANNER DEBUG ==========")
     logger.info("Requested task type: %s", requested_task_type)
- 
+
     logger.info(
         "Registered training recipes: %s",
         [
@@ -606,7 +606,7 @@ async def create_agent_plan(
             for metadata in recipe_registry.list_all(category="training")
         ],
     )
- 
+
     logger.info(
         "Trainer tools exposed to recommendation agent: %s",
         [
@@ -624,7 +624,7 @@ async def create_agent_plan(
         for name, recipe_id in tool_recipes.items()
         if recipe_registry.get(recipe_id).category == "training"
     ]
- 
+
     logger.info("Mandatory trainer choices available: %s", trainer_tool_names)
     # choose_task_type may not be exposed when the task is fixed, so don't read it from tools[0].
     supported_tasks = (
@@ -656,7 +656,7 @@ async def create_agent_plan(
                 "Never claim that a model has been trained or saved during planning. Tool calls only "
                 "draft a plan; they do not execute recipes. Only choose recipe tools compatible with "
                 "the selected task; the recipe catalog is informational and does not authorize direct execution. "
- 
+
                 # Dataset-aware trainer selection
                 "IMPORTANT: You MUST select exactly one trainer based on the supplied dataset profile. "
                 "Analyze the available dataset information, including row count, column count, feature "
@@ -669,16 +669,16 @@ async def create_agent_plan(
                 "If the user's request names a specific trainer, select that trainer. "
                 "If the available dataset information is insufficient to make a reasonable choice, "
                 "call ask_user rather than inventing dataset characteristics. "
- 
+
                 "Avoid target encoding because it can leak labels. For classification, do not choose "
                 "a numeric target with many unique values without asking for confirmation. For "
                 "regression, require a numeric target. Do not request or infer raw data values. "
- 
+
                 + task_instruction
                 + " "
                 + target_instruction
             ),
- 
+
         },
         {
             "role": "user",
@@ -691,13 +691,13 @@ async def create_agent_plan(
             ),
         },
     ]
- 
+
     completion = await _request_agent_tools(
         messages=messages,
         tools=tools,
         operation="create a pipeline plan",
     )
- 
+
     # Log the raw tool calls before parsing so failures can be diagnosed.
     logger.info(
         "Agent finish reason: %s",
@@ -714,31 +714,33 @@ async def create_agent_plan(
                 for call in (completion.choices[0].message.tool_calls or [])
             ],
         )
- 
+
     if not completion.choices or not completion.choices[0].message.tool_calls:
         raise AgentPlanningError("The model returned no recipe selections for the pipeline plan.")
- 
+
     message = completion.choices[0].message
     tool_calls = list(message.tool_calls)
- 
+
     # parallel_tool_calls is not reliably honored: if the model skipped the trainer,
     # retry once with only recipe tools (plus ask_user).
     picked_trainer = any(tc.function.name in trainer_tool_names for tc in tool_calls)
     asked_user = any(tc.function.name == "ask_user" for tc in tool_calls)
     if not picked_trainer and not asked_user:
-        logger.info("No trainer selected on first pass; retrying with recipe tools only.")
+        logger.info("No trainer selected on first pass; retrying with trainer tools only.")
+        # Offer only trainers (plus ask_user) so the model cannot answer with another
+        # preprocessing step again; preprocessing from the first pass is kept.
         retry_tools = [
             t
             for t in tools
-            if t["function"]["name"] in tool_recipes
+            if t["function"]["name"] in trainer_tool_names
             or t["function"]["name"] == "ask_user"
         ]
         retry_messages = messages + [
             {
                 "role": "system",
                 "content": (
-                    "Task type and target are already settled. Now call exactly one "
-                    "trainer recipe tool, plus any needed preprocessing tools."
+                    "Task type, target and preprocessing are already settled. "
+                    "Now call exactly one trainer recipe tool."
                 ),
             }
         ]
@@ -756,13 +758,13 @@ async def create_agent_plan(
                 ],
             )
             tool_calls.extend(retry.choices[0].message.tool_calls)
- 
+
     questions = []
     selected_target = requested_target
     selected_task_type = requested_task_type
     recipe_selections = []
     used_recipe_ids = set()
- 
+
     for tool_call in tool_calls:
         function_name = tool_call.function.name
         try:
@@ -775,7 +777,7 @@ async def create_agent_plan(
             validate(arguments, tool_schemas[function_name])
         except (KeyError, JsonSchemaValidationError) as exc:
             raise AgentPlanningError("OpenAI returned invalid tool arguments.") from exc
- 
+
         if function_name == "ask_user":
             questions.append(
                 {
@@ -804,12 +806,18 @@ async def create_agent_plan(
         elif function_name in tool_recipes:
             recipe_id = tool_recipes[function_name]
             if recipe_id in used_recipe_ids:
-                raise AgentPlanningError(f"OpenAI selected recipe '{recipe_id}' more than once.")
+                # Models sometimes emit the same tool call twice in one response.
+                # Keep the first selection instead of failing the whole plan.
+                logger.warning(
+                    "Planner selected recipe '%s' more than once; ignoring the duplicate.",
+                    recipe_id,
+                )
+                continue
             used_recipe_ids.add(recipe_id)
             recipe_selections.append((recipe_id, arguments))
         else:
             raise AgentPlanningError("OpenAI returned a tool that is not available to the planner.")
- 
+
     if questions:
         return {"status": "needs_clarification", "questions": questions}
     if not selected_task_type:
@@ -857,7 +865,7 @@ async def create_agent_plan(
                 }
             ],
         }
- 
+
     # Log parsed selections BEFORE building the workflow. The workflow builder
     # can raise when zero or multiple compatible trainers were selected.
     logger.info("========== AGENT SELECTION DEBUG ==========")
@@ -873,7 +881,7 @@ async def create_agent_plan(
         ],
     )
     logger.info("========== END GROQ SELECTION DEBUG ==========")
- 
+
     workflow = build_agent_workflow(
         dataset_id=dataset_id,
         target_column=selected_target,
