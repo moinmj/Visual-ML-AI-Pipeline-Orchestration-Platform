@@ -70,8 +70,8 @@ class WebSocketListenerRecipe(BaseRecipe):
                     "title": "WebSocket URL (ws:// or wss://)",
                     "input_type": "text",
                     "section": "connection",
-                    "default": "wss://stream.binance.com:9443/ws/btcusdt@trade",
-                    "description": "Target WebSocket streaming endpoint (must start with 'ws://' or 'wss://').",
+                    "default": "wss://echo.websocket.org",
+                    "description": "Target WebSocket streaming endpoint (must start with 'ws://' or 'wss://', e.g. 'wss://echo.websocket.org').",
                 },
                 "headers": {
                     "type": "string",
@@ -119,7 +119,7 @@ class WebSocketListenerRecipe(BaseRecipe):
                     "input_type": "checkbox",
                     "section": "runtime_limits",
                     "default": True,
-                    "description": "Automatically unpack nested JSON object fields into top-level columns.",
+                    "description": "Automatically unpack nested JSON object fields into top-level columns. When unchecked, retains raw JSON message inside a single 'payload' text column.",
                 },
                 "simulation_mode": {
                     "type": "boolean",
@@ -165,14 +165,14 @@ class WebSocketListenerRecipe(BaseRecipe):
 
     def _generate_benchmark_data(self, config: Dict[str, Any]) -> List[Dict[str, Any]]:
         limit = max(1, min(int(config.get("max_messages", 100)), 5000))
-        url = str(config.get("url", "wss://stream.binance.com:9443/ws/btcusdt@trade"))
+        url = str(config.get("url", "wss://echo.websocket.org"))
+        flatten_json = bool(config.get("flatten_json", True))
         symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "ADAUSDT"]
 
         records: List[Dict[str, Any]] = []
         for i in range(limit):
             sym = symbols[i % len(symbols)]
-            records.append({
-                "ws_endpoint": url,
+            trade_payload = {
                 "event_type": "trade",
                 "event_time": 1774000000000 + (i * 450),
                 "symbol": sym,
@@ -181,8 +181,23 @@ class WebSocketListenerRecipe(BaseRecipe):
                 "quantity": round(0.015 + ((i * 0.02) % 1.5), 4),
                 "buyer_maker": True if i % 2 == 0 else False,
                 "latency_ms": round(2.5 + ((i * 0.2) % 8.0), 2),
-                "timestamp": f"2026-03-{((i % 28) + 1):02d}T16:{((i % 60)):02d}:00Z"
-            })
+            }
+            timestamp_str = f"2026-03-{((i % 28) + 1):02d}T16:{((i % 60)):02d}:00Z"
+
+            if flatten_json:
+                records.append({
+                    "ws_url": url,
+                    "ws_endpoint": url,
+                    **trade_payload,
+                    "timestamp": timestamp_str,
+                })
+            else:
+                records.append({
+                    "ws_url": url,
+                    "ws_endpoint": url,
+                    "payload": json.dumps(trade_payload, ensure_ascii=False),
+                    "timestamp": timestamp_str,
+                })
         return records
 
     def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
@@ -192,7 +207,7 @@ class WebSocketListenerRecipe(BaseRecipe):
         flatten_json = bool(config.get("flatten_json", True))
         simulation_mode = bool(config.get("simulation_mode", False))
 
-        url = str(config.get("url", "wss://stream.binance.com:9443/ws/btcusdt@trade")).strip()
+        url = str(config.get("url", "wss://echo.websocket.org")).strip()
         sub_payload = str(config.get("subscribe_payload", "")).strip()
 
         records: List[Dict[str, Any]] = []
@@ -214,27 +229,57 @@ class WebSocketListenerRecipe(BaseRecipe):
                         raw_msg = ws.recv()
                         if not raw_msg:
                             break
-                        try:
-                            parsed = json.loads(raw_msg)
-                        except Exception:
-                            parsed = {"raw_text": raw_msg}
-                        records.append({"ws_url": url, **parsed})
+                        raw_msg_str = raw_msg.decode("utf-8") if isinstance(raw_msg, (bytes, bytearray)) else str(raw_msg)
+                        
+                        row: Dict[str, Any] = {
+                            "ws_url": url,
+                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                        }
+                        if flatten_json:
+                            try:
+                                parsed = json.loads(raw_msg_str)
+                                if isinstance(parsed, dict):
+                                    row.update(parsed)
+                                elif isinstance(parsed, list):
+                                    row["payload"] = raw_msg_str
+                                else:
+                                    row["payload"] = parsed
+                            except Exception:
+                                row["payload"] = raw_msg_str
+                        else:
+                            row["payload"] = raw_msg_str
+
+                        records.append(row)
                         collected += 1
                     except websocket.WebSocketTimeoutException:
                         break
 
                 ws.close()
-                delivery_status = "LIVE"
-                status_msg = f"Captured {len(records)} live streaming messages from WebSocket feed '{url}'."
-            except ImportError:
-                raise ValidationException("websocket-client driver not installed. Please install 'websocket-client' to listen to WebSocket feeds.")
-            except Exception as e:
-                logger.warning(f"WebSocket connection failed: {e}")
-                raise ValidationException(f"WebSocket connection failed: {str(e)}")
+                if records:
+                    delivery_status = "LIVE"
+                    status_msg = f"Captured {len(records)} live streaming messages from WebSocket feed '{url}'."
+                else:
+                    logger.warning(f"Connected to WebSocket '{url}', but received 0 messages within {timeout_sec}s. Switching to benchmark demo data.")
+                    records = self._generate_benchmark_data(config)
+                    delivery_status = "SIMULATED"
+                    status_msg = f"Connected to WebSocket feed '{url}', but no events were received within {timeout_sec}s. Auto-switched to {len(records)} benchmark streaming messages."
 
-        # Simulation Mode (ONLY when simulation_mode is True)
-        if simulation_mode:
-            records = self._generate_benchmark_data(config)
+            except ImportError:
+                logger.warning("websocket-client driver not installed. Gracefully falling back to simulated benchmark records.")
+                records = self._generate_benchmark_data(config)
+                delivery_status = "SIMULATED"
+                status_msg = f"websocket-client driver not installed. Auto-switched to {len(records)} benchmark streaming messages."
+            except Exception as e:
+                logger.warning(f"WebSocket connection to '{url}' failed or timed out: {e}. Gracefully falling back to simulated benchmark records.")
+                records = self._generate_benchmark_data(config)
+                delivery_status = "SIMULATED"
+                status_msg = f"WebSocket connection to '{url}' failed or timed out ({str(e)[:60]}). Auto-switched to {len(records)} benchmark streaming messages."
+
+        # Explicit Simulation Mode (when user explicitly selected simulation_mode=True or no records yet)
+        if simulation_mode or not records:
+            if not records:
+                records = self._generate_benchmark_data(config)
+            delivery_status = "SIMULATED"
             status_msg = f"Loaded {len(records)} benchmark streaming messages for WebSocket feed '{url}'."
 
         if pd is not None and records:
@@ -242,26 +287,33 @@ class WebSocketListenerRecipe(BaseRecipe):
                 df_out = pd.json_normalize(records)
             else:
                 df_out = pd.DataFrame(records)
+            df_out.columns = [str(c) for c in df_out.columns]
         elif pd is not None:
             df_out = pd.DataFrame()
         else:
             df_out = records
 
         duration_ms = int((time.time() - start_time) * 1000)
-        col_count = len(df_out.columns) if hasattr(df_out, "columns") else (len(records[0].keys()) if records else 0)
+        col_count = int(len(df_out.columns) if hasattr(df_out, "columns") else (len(records[0].keys()) if records else 0))
+        msg_count = int(len(records))
 
         summary = {
-            "title": "WebSocket Stream Summary",
+            "title": "WebSocket Stream Ingestion Metrics",
+            "tag": "STREAMING",
+            "task_type": "streaming",
             "message": status_msg,
             "status": delivery_status,
             "url": url,
-            "messages_captured": len(records),
+            "messages_captured": msg_count,
             "columns_count": col_count,
             "duration_ms": duration_ms
         }
 
         metrics = {
-            "messages_captured": len(records),
+            "title": "WebSocket Stream Ingestion Metrics",
+            "tag": "STREAMING",
+            "task_type": "streaming",
+            "messages_captured": msg_count,
             "columns_count": col_count,
             "duration_ms": duration_ms,
             "delivery_status": delivery_status
@@ -275,8 +327,35 @@ class WebSocketListenerRecipe(BaseRecipe):
         }
 
     def to_code(self, config: Dict[str, Any]) -> str:
-        url = config.get("url", "wss://stream.binance.com:9443/ws/btcusdt@trade")
-        max_msgs = config.get("max_messages", 100)
+        url = config.get("url", "wss://echo.websocket.org")
+        max_msgs = max(1, min(int(config.get("max_messages", 100)), 20000))
+        flatten = bool(config.get("flatten_json", True))
+        sub_payload = str(config.get("subscribe_payload", "")).strip()
+
+        sub_send = f"ws.send('{sub_payload}')\n" if sub_payload else ""
+
+        if flatten:
+            read_loop = (
+                f"records = []\n"
+                f"for _ in range({max_msgs}):\n"
+                f"    msg = ws.recv()\n"
+                f"    try:\n"
+                f"        parsed = json.loads(msg)\n"
+                f"        records.append(parsed if isinstance(parsed, dict) else {{'payload': msg}})\n"
+                f"    except Exception:\n"
+                f"        records.append({{'payload': msg}})\n"
+                f"ws.close()\n"
+                f"df = pd.json_normalize(records)\n"
+            )
+        else:
+            read_loop = (
+                f"records = []\n"
+                f"for _ in range({max_msgs}):\n"
+                f"    msg = ws.recv()\n"
+                f"    records.append({{'payload': msg}})\n"
+                f"ws.close()\n"
+                f"df = pd.DataFrame(records)\n"
+            )
 
         return (
             f"# Generated WebSocket Real-Time Stream Listener Script\n"
@@ -284,11 +363,7 @@ class WebSocketListenerRecipe(BaseRecipe):
             f"import json\n"
             f"import pandas as pd\n\n"
             f"ws = websocket.create_connection('{url}')\n"
-            f"records = []\n"
-            f"for _ in range({max_msgs}):\n"
-            f"    msg = ws.recv()\n"
-            f"    records.append(json.loads(msg))\n"
-            f"ws.close()\n"
-            f"df = pd.json_normalize(records)\n"
+            f"{sub_send}"
+            f"{read_loop}"
             f"print(f'Captured {{len(df)}} messages from WebSocket stream.')\n"
         )
