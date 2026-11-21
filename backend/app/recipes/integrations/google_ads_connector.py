@@ -77,17 +77,48 @@ class GoogleAdsConnectorRecipe(BaseRecipe):
                     "default": "123-456-7890",
                     "description": "Your 10-digit Google Ads customer ID (e.g. 123-456-7890 or 1234567890)."
                 },
+                "manager_customer_id": {
+                    "type": "string",
+                    "title": "Manager Customer ID (MCC)",
+                    "input_type": "text",
+                    "description": "Optional 10-digit manager account ID used as the login-customer-id header when querying a client account."
+                },
+                "oauth_client_id": {
+                    "type": "string",
+                    "title": "Google OAuth Client ID",
+                    "input_type": "text",
+                    "description": "OAuth desktop/web client ID used with the refresh token."
+                },
+                "oauth_client_secret": {
+                    "type": "string",
+                    "title": "Google OAuth Client Secret",
+                    "input_type": "password",
+                    "description": "OAuth client secret. Store securely; do not expose it in logs."
+                },
+                "refresh_token": {
+                    "type": "string",
+                    "title": "Google OAuth Refresh Token",
+                    "input_type": "password",
+                    "description": "Long-lived OAuth refresh token used to obtain short-lived access tokens automatically."
+                },
+                "api_version": {
+                    "type": "string",
+                    "title": "Google Ads API Version",
+                    "input_type": "text",
+                    "default": "v24",
+                    "description": "Google Ads API version, for example v24."
+                },
                 "developer_token": {
                     "type": "string",
                     "title": "Google Ads Developer Token",
                     "input_type": "password",
-                    "description": "Developer Token granted from Google Ads MCC account (or uses GOOGLE_ADS_DEVELOPER_TOKEN from .env)."
+                    "description": "Optional in this connector configuration; if your Google Ads API access requires one, provide it here or through GOOGLE_ADS_DEVELOPER_TOKEN."
                 },
                 "access_token": {
                     "type": "string",
-                    "title": "OAuth Access Token / Refresh Token",
+                    "title": "OAuth Access Token (optional if refresh token is configured)",
                     "input_type": "password",
-                    "description": "OAuth 2.0 Access Token or Refresh Token (or uses GOOGLE_ADS_ACCESS_TOKEN from .env)."
+                    "description": "Short-lived OAuth access token. For automatic renewal, configure the refresh token, OAuth client ID, and client secret."
                 },
                 "credential_id": {
                     "type": "string",
@@ -259,89 +290,289 @@ class GoogleAdsConnectorRecipe(BaseRecipe):
 
         return records
 
+    @staticmethod
+    def _clean_customer_id(value: Any) -> str:
+        return str(value or "").replace("-", "").replace(" ", "").strip()
+
+    @staticmethod
+    def _refresh_access_token(client_id: str, client_secret: str, refresh_token: str) -> str:
+        """Exchange a Google OAuth refresh token for a short-lived access token."""
+        if not (client_id and client_secret and refresh_token):
+            return ""
+        form_data = urllib.parse.urlencode({
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "refresh_token": refresh_token,
+            "grant_type": "refresh_token",
+        }).encode("utf-8")
+        request = urllib.request.Request(
+            "https://oauth2.googleapis.com/token",
+            data=form_data,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=20) as response:
+            token_data = json.loads(response.read().decode("utf-8"))
+        return str(token_data.get("access_token") or "")
+
+    @staticmethod
+    def _date_clause(date_range: str) -> str:
+        date_map = {
+            "Last 30 Days": "LAST_30_DAYS",
+            "Last 7 Days": "LAST_7_DAYS",
+            "Last 90 Days": "LAST_90_DAYS",
+            "This Month": "THIS_MONTH",
+        }
+        period = date_map.get(date_range)
+        return f" AND segments.date DURING {period}" if period else ""
+
+    @staticmethod
+    def _build_gaql(resource: str, limit: int, status_filter: str, date_range: str) -> str:
+        where_clauses = []
+        date_clause = GoogleAdsConnectorRecipe._date_clause(date_range)
+        if date_clause:
+            where_clauses.append(date_clause.replace(" AND ", "", 1))
+        if status_filter in {"ENABLED", "PAUSED", "REMOVED"}:
+            if resource == "Campaign Performance":
+                where_clauses.append(f"campaign.status = {status_filter}")
+            elif resource == "Ad Group Performance":
+                where_clauses.append(f"ad_group.status = {status_filter}")
+            else:
+                where_clauses.append(f"ad_group_criterion.status = {status_filter}")
+        where_sql = f" WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+
+        if resource == "Campaign Performance":
+            fields = (
+                "campaign.id, campaign.name, campaign.status, "
+                "campaign.advertising_channel_type, metrics.impressions, "
+                "metrics.clicks, metrics.ctr, metrics.average_cpc, "
+                "metrics.cost_micros, metrics.conversions, "
+                "metrics.cost_per_conversion, metrics.conversions_from_interactions_rate"
+            )
+            from_clause = "campaign"
+        elif resource == "Ad Group Performance":
+            fields = (
+                "ad_group.id, ad_group.name, ad_group.status, "
+                "campaign.id, campaign.name, metrics.impressions, "
+                "metrics.clicks, metrics.ctr, metrics.average_cpc, "
+                "metrics.cost_micros, metrics.conversions, metrics.cost_per_conversion"
+            )
+            from_clause = "ad_group"
+        elif resource == "Keyword Performance":
+            fields = (
+                "ad_group_criterion.criterion_id, ad_group_criterion.keyword.text, "
+                "ad_group_criterion.keyword.match_type, ad_group_criterion.status, "
+                "campaign.id, campaign.name, ad_group.id, ad_group.name, "
+                "metrics.impressions, metrics.clicks, metrics.ctr, "
+                "metrics.average_cpc, metrics.cost_micros, metrics.conversions, "
+                "metrics.cost_per_conversion"
+            )
+            from_clause = "keyword_view"
+        else:
+            raise ValueError(f"Unsupported Google Ads resource: {resource}")
+
+        return (
+            f"SELECT {fields} FROM {from_clause}{where_sql} "
+            f"ORDER BY metrics.impressions DESC LIMIT {max(1, min(limit, 200))}"
+        )
+
+    @staticmethod
+    def _row_to_record(resource: str, row: Dict[str, Any]) -> Dict[str, Any]:
+        metrics = row.get("metrics", {}) or {}
+        campaign = row.get("campaign", {}) or {}
+        ad_group = row.get("adGroup", {}) or {}
+        criterion = row.get("adGroupCriterion", {}) or {}
+
+        cost_micros = int(metrics.get("costMicros", 0) or 0)
+        cost = round(cost_micros / 1_000_000, 2)
+        impressions = int(metrics.get("impressions", 0) or 0)
+        clicks = int(metrics.get("clicks", 0) or 0)
+        conversions = float(metrics.get("conversions", 0) or 0)
+
+        # In Google Ads API, average_cpc and cost_per_conversion are DOUBLE (currency units), not micros.
+        avg_cpc_val = metrics.get("averageCpc", 0.0) or 0.0
+        try:
+            average_cpc = round(float(avg_cpc_val), 2)
+        except (ValueError, TypeError):
+            average_cpc = 0.0
+
+        cpc_val = metrics.get("costPerConversion", 0.0) or 0.0
+        try:
+            cost_per_conversion = round(float(cpc_val), 2)
+        except (ValueError, TypeError):
+            cost_per_conversion = 0.0
+
+        common = {
+            "campaign_id": campaign.get("id"),
+            "campaign_name": campaign.get("name"),
+            "impressions": impressions,
+            "clicks": clicks,
+            "ctr": float(metrics.get("ctr", 0) or 0),
+            "average_cpc": average_cpc,
+            "cost": cost,
+            "cost_micros": cost_micros,
+            "conversions": conversions,
+            "cost_per_conversion": cost_per_conversion,
+        }
+
+        if resource == "Campaign Performance":
+            common.update({
+                "status": campaign.get("status"),
+                "campaign_status": campaign.get("status"),
+                "advertising_channel_type": campaign.get("advertisingChannelType"),
+                "conversion_rate": float(
+                    metrics.get("conversionsFromInteractionsRate", 0) or 0
+                ),
+            })
+        elif resource == "Ad Group Performance":
+            common.update({
+                "ad_group_id": ad_group.get("id"),
+                "ad_group_name": ad_group.get("name"),
+                "status": ad_group.get("status"),
+            })
+        else:
+            keyword = criterion.get("keyword", {}) or {}
+            common.update({
+                "keyword_id": criterion.get("criterionId"),
+                "keyword_text": keyword.get("text"),
+                "match_type": keyword.get("matchType"),
+                "status": criterion.get("status"),
+                "ad_group_id": ad_group.get("id"),
+                "ad_group_name": ad_group.get("name"),
+            })
+        return common
+
     def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
         resource = str(config.get("resource", "Campaign Performance")).strip()
-        cust_id = str(config.get("customer_id", "123-456-7890")).replace("-", "").strip()
-        dev_token = str(config.get("developer_token", "")).strip() or getattr(settings, "GOOGLE_ADS_DEVELOPER_TOKEN", None) or os.getenv("GOOGLE_ADS_DEVELOPER_TOKEN", "")
-        access_token = str(config.get("access_token", "")).strip() or getattr(settings, "GOOGLE_ADS_ACCESS_TOKEN", None) or os.getenv("GOOGLE_ADS_ACCESS_TOKEN", "")
+        cust_id = self._clean_customer_id(config.get("customer_id", ""))
+        manager_id = self._clean_customer_id(config.get("manager_customer_id", ""))
+
+        dev_token = (
+            str(config.get("developer_token", "")).strip()
+            or getattr(settings, "GOOGLE_ADS_DEVELOPER_TOKEN", None)
+            or os.getenv("GOOGLE_ADS_DEVELOPER_TOKEN", "")
+        )
+        access_token = (
+            str(config.get("access_token", "")).strip()
+            or getattr(settings, "GOOGLE_ADS_ACCESS_TOKEN", None)
+            or os.getenv("GOOGLE_ADS_ACCESS_TOKEN", "")
+        )
+        refresh_token = str(config.get("refresh_token", "")).strip() or os.getenv("GOOGLE_ADS_REFRESH_TOKEN", "")
+        oauth_client_id = str(config.get("oauth_client_id", "")).strip() or os.getenv("GOOGLE_ADS_CLIENT_ID", "")
+        oauth_client_secret = str(config.get("oauth_client_secret", "")).strip() or os.getenv("GOOGLE_ADS_CLIENT_SECRET", "")
+
         credential_id = str(config.get("credential_id", "")).strip()
         status_filter = str(config.get("status_filter", "All")).strip()
         date_range = str(config.get("date_range", "Last 30 Days")).strip()
-        limit = int(config.get("record_limit", config.get("limit", 50)))
+        limit = max(1, min(int(config.get("record_limit", config.get("limit", 50))), 200))
         simulation_mode = bool(config.get("simulation_mode", config.get("simulate_if_no_auth", False)))
-        output_format = str(config.get("output_format", "dataframe")).strip().lower()
+        output_format = str(config.get("output_format", "DataFrame")).strip().lower()
+        api_version = str(config.get("api_version", "v24")).strip()
+        api_version = api_version if api_version.startswith("v") else f"v{api_version}"
 
-        # Resolve credentials if stored in context
-        if credential_id and context and isinstance(context, dict):
-            creds_store = context.get("credentials", {})
-            if credential_id in creds_store:
-                cred_info = creds_store[credential_id]
-                c_data = cred_info.get("data", cred_info)
-                access_token = c_data.get("access_token") or c_data.get("token") or access_token
-                dev_token = c_data.get("developer_token") or dev_token
-                cust_id = str(c_data.get("customer_id") or cust_id).replace("-", "").strip()
+        # Resolve stored credentials, if the host supplied them in context.
+        if credential_id and isinstance(context, dict):
+            creds_store = context.get("credentials", {}) or {}
+            cred_info = creds_store.get(credential_id, {}) or {}
+            c_data = cred_info.get("data", cred_info) or {}
+            access_token = c_data.get("access_token") or c_data.get("token") or access_token
+            refresh_token = c_data.get("refresh_token") or refresh_token
+            oauth_client_id = c_data.get("client_id") or c_data.get("oauth_client_id") or oauth_client_id
+            oauth_client_secret = c_data.get("client_secret") or c_data.get("oauth_client_secret") or oauth_client_secret
+            dev_token = c_data.get("developer_token") or dev_token
+            cust_id = self._clean_customer_id(c_data.get("customer_id") or cust_id)
+            manager_id = self._clean_customer_id(
+                c_data.get("manager_customer_id") or c_data.get("login_customer_id") or manager_id
+            )
+
+        # Fall back to simulation if simulate_if_no_auth is requested and credentials are missing
+        has_auth = bool(
+            (access_token and not access_token.startswith("mock"))
+            or (refresh_token and oauth_client_id and oauth_client_secret)
+        )
+        if not simulation_mode and bool(config.get("simulate_if_no_auth", False)):
+            if not has_auth or not (cust_id and len(cust_id) == 10 and cust_id.isdigit()):
+                simulation_mode = True
 
         records: List[Dict[str, Any]] = []
-        delivery_status = "SIMULATED"
+        delivery_status = "NOT_CONNECTED"
         status_msg = ""
-        api_endpoint = f"https://googleads.googleapis.com/v16/customers/{cust_id}/googleAds:searchStream"
+        http_status = None
 
-        # Live API Call Attempt
-        if not simulation_mode and access_token and dev_token and len(cust_id) >= 8 and not access_token.startswith("mock"):
+        if simulation_mode:
+            records = self._generate_benchmark_data(resource, limit, status_filter)
+            delivery_status = "SIMULATED"
+            status_msg = (
+                f"Generated {len(records)} benchmark records for {resource}. "
+                "These are synthetic demonstration data, not Google Ads account data."
+            )
+        else:
             try:
-                gaql_query = (
-                    "SELECT campaign.id, campaign.name, campaign.advertising_channel_type, campaign.status, "
-                    "metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions "
-                    f"FROM campaign LIMIT {max(1, min(limit, 200))}"
+                if not cust_id or len(cust_id) != 10 or not cust_id.isdigit():
+                    raise ValueError("Enter a valid 10-digit Google Ads client Customer ID.")
+                if not access_token and refresh_token and oauth_client_id and oauth_client_secret:
+                    access_token = self._refresh_access_token(
+                        oauth_client_id, oauth_client_secret, refresh_token
+                    )
+                if not access_token or access_token.startswith("mock"):
+                    raise ValueError(
+                        "No usable OAuth access token. Supply an access token or an OAuth "
+                        "refresh token with its client ID and client secret."
+                    )
+
+                gaql_query = self._build_gaql(resource, limit, status_filter, date_range)
+                endpoint = (
+                    f"https://googleads.googleapis.com/{api_version}/"
+                    f"customers/{cust_id}/googleAds:search"
                 )
-                payload = json.dumps({"query": gaql_query}).encode("utf-8")
                 headers = {
                     "Content-Type": "application/json",
-                    "developer-token": dev_token,
                     "Authorization": f"Bearer {access_token}",
-                    "User-Agent": "Datarept-ML-Platform/1.0"
+                    "User-Agent": "Datarept-ML-Platform/1.0",
                 }
+                # Google Ads manager context is required when querying a client account
+                # through an MCC. Do not send this header when querying a standalone account.
+                if manager_id:
+                    headers["login-customer-id"] = manager_id
+                # Keep the developer token configurable. The connector does not silently
+                # invent one; include it when supplied by the account/credential setup.
+                if dev_token:
+                    headers["developer-token"] = dev_token
 
-                req = urllib.request.Request(api_endpoint, data=payload, headers=headers, method="POST")
-                with urllib.request.urlopen(req, timeout=12) as response:
-                    if response.status == 200:
-                        raw_json = json.loads(response.read().decode("utf-8"))
-                        for batch in raw_json:
-                            for row in batch.get("results", []):
-                                camp = row.get("campaign", {})
-                                mets = row.get("metrics", {})
-                                cost = round(float(mets.get("costMicros", 0)) / 1_000_000, 2)
-                                records.append({
-                                    "campaign_id": camp.get("id"),
-                                    "campaign_name": camp.get("name"),
-                                    "advertising_channel_type": camp.get("advertisingChannelType"),
-                                    "status": camp.get("status"),
-                                    "impressions": int(mets.get("impressions", 0)),
-                                    "clicks": int(mets.get("clicks", 0)),
-                                    "cost": cost,
-                                    "conversions": float(mets.get("conversions", 0))
-                                })
-                        delivery_status = "LIVE"
-                        status_msg = f"Retrieved {len(records)} live Google Ads performance rows for account {cust_id}."
-            except urllib.error.HTTPError as he:
-                err_body = ""
+                payload = json.dumps({"query": gaql_query}).encode("utf-8")
+                req = urllib.request.Request(endpoint, data=payload, headers=headers, method="POST")
+                with urllib.request.urlopen(req, timeout=30) as response:
+                    http_status = response.status
+                    api_data = json.loads(response.read().decode("utf-8") or "{}")
+
+                records = [
+                    self._row_to_record(resource, row)
+                    for row in (api_data.get("results", []) or [])
+                ]
+                delivery_status = "LIVE"
+                status_msg = (
+                    f"Google Ads API query succeeded for {resource} on account {cust_id}; "
+                    f"received {len(records)} live rows."
+                )
+                if not records:
+                    status_msg += (
+                        " The API returned zero matching records. No benchmark data was substituted."
+                    )
+
+            except urllib.error.HTTPError as exc:
+                http_status = exc.code
                 try:
-                    err_body = he.read().decode("utf-8")
+                    error_body = exc.read().decode("utf-8", errors="replace")
                 except Exception:
-                    pass
-                logger.warning(f"Google Ads API HTTP {he.code}: {err_body[:200]}")
-                status_msg = f"Google Ads API query failed (HTTP {he.code}). Using realistic benchmark fallback."
-            except Exception as ex:
-                logger.warning(f"Google Ads connection failed: {ex}")
-                status_msg = f"Google Ads live connection failed ({ex}). Using realistic benchmark fallback."
+                    error_body = ""
+                logger.warning(f"Google Ads API HTTP {exc.code}: {error_body[:1000]}")
+                delivery_status = "ERROR"
+                status_msg = f"Google Ads API request failed (HTTP {exc.code}). {error_body[:1500]}"
+            except Exception as exc:
+                logger.warning(f"Google Ads connector error: {exc}")
+                delivery_status = "ERROR"
+                status_msg = str(exc)
 
-        # Offline / Benchmark Fallback
-        if not records:
-            records = self._generate_benchmark_data(resource, limit, status_filter)
-            if not status_msg:
-                status_msg = f"Generated {len(records)} realistic Google Ads {resource} benchmark records (Simulation Mode)."
-
-        # Convert to Pandas DataFrame
         if pd is not None:
             df_out = pd.DataFrame(records)
         else:
@@ -353,19 +584,22 @@ class GoogleAdsConnectorRecipe(BaseRecipe):
             "status": delivery_status,
             "resource": resource,
             "customer_id": cust_id,
+            "manager_customer_id": manager_id or None,
             "date_range": date_range,
-            "records_retrieved": len(records)
+            "records_retrieved": len(records),
+            "http_status": http_status,
         }
-
         metrics = {
             "google_ads_resource": resource,
             "record_count": len(records),
             "delivery_status": delivery_status,
-            "customer_id": cust_id
+            "customer_id": cust_id,
+            "manager_customer_id": manager_id or None,
+            "http_status": http_status,
         }
 
-        if "json_dict" in output_format or output_format == "json dict":
-            output_val = df_out.to_dict() if hasattr(df_out, "to_dict") else records
+        if output_format in {"json dict", "json_dict"}:
+            output_val = df_out.to_dict(orient="records") if hasattr(df_out, "to_dict") else records
         elif "json" in output_format:
             output_val = records
         else:
@@ -375,28 +609,31 @@ class GoogleAdsConnectorRecipe(BaseRecipe):
             "dataframe": df_out,
             "output": output_val,
             "output_summary": summary,
-            "metrics": metrics
+            "metrics": metrics,
         }
 
     def to_code(self, config: Dict[str, Any]) -> str:
         resource = config.get("resource", "Campaign Performance")
-        cust_id = config.get("customer_id", "123-456-7890").replace("-", "")
-        limit = config.get("record_limit", 50)
+        cust_id = self._clean_customer_id(config.get("customer_id", ""))
+        manager_id = self._clean_customer_id(config.get("manager_customer_id", ""))
+        limit = max(1, min(int(config.get("record_limit", 50)), 200))
+        version = str(config.get("api_version", "v24"))
+        version = version if version.startswith("v") else f"v{version}"
         return (
-            f"# Recipe: Google Ads Connector\n"
-            f"# ID: {self.recipe_id}\n"
-            f"import os\n"
-            f"import requests\n"
-            f"import pandas as pd\n\n"
-            f"url = 'https://googleads.googleapis.com/v16/customers/{cust_id}/googleAds:searchStream'\n"
-            f"headers = {{\n"
-            f"    'developer-token': os.getenv('GOOGLE_ADS_DEVELOPER_TOKEN', ''),\n"
-            f"    'Authorization': f'Bearer {{os.getenv(\"GOOGLE_ADS_ACCESS_TOKEN\", \"\")}}',\n"
-            f"    'Content-Type': 'application/json'\n"
-            f"}}\n"
-            f"query = 'SELECT campaign.id, campaign.name, metrics.impressions, metrics.clicks FROM campaign LIMIT {limit}'\n"
-            f"response = requests.post(url, headers=headers, json={{'query': query}})\n"
-            f"data = response.json()\n"
-            f"df = pd.DataFrame([r.get('campaign', {{}}) for batch in data for r in batch.get('results', [])])\n"
+            "# Recipe: Google Ads Connector\n"
+            "# Credentials are read from environment variables; do not hardcode secrets.\n"
+            "import os, requests\n"
+            f"url = 'https://googleads.googleapis.com/{version}/customers/{cust_id}/googleAds:search'\n"
+            "headers = {\n"
+            "    'Authorization': f\"Bearer {os.environ['GOOGLE_ADS_ACCESS_TOKEN']}\",\n"
+            "    'Content-Type': 'application/json',\n"
+            "}\n"
+            + (f"headers['login-customer-id'] = '{manager_id}'\n" if manager_id else "")
+            + "if os.getenv('GOOGLE_ADS_DEVELOPER_TOKEN'):\n"
+            "    headers['developer-token'] = os.environ['GOOGLE_ADS_DEVELOPER_TOKEN']\n"
+            + f"query = {self._build_gaql(resource, limit, 'All', config.get('date_range', 'Last 30 Days'))!r}\n"
+            "response = requests.post(url, headers=headers, json={'query': query}, timeout=30)\n"
+            "response.raise_for_status()\n"
+            "data = response.json()\n"
+            "print(data.get('results', []))\n"
         )
-
