@@ -232,3 +232,189 @@ def test_web_scraper_headerless_numeric_table_column_names_are_strings():
     )
     assert test_step_resp.columns == [str(c) for c in df.columns]
 
+
+def test_web_scraper_auth_schema_and_credential_hoisting():
+    """Verify auth properties and automatic credential hoisting on WebScraperRecipe."""
+    recipe = WebScraperRecipe()
+    schema = recipe.get_schema()
+    props = schema["properties"]
+
+    assert "auth_mode" in props
+    assert props["auth_mode"]["enum"] == ["none", "session_cookie", "bearer_token", "basic_auth", "form_login"]
+
+    # Verify credential_id, save_credential, and credential_name exist and are hoisted to the top
+    assert "credential_id" in props
+    assert "save_credential" in props
+    assert "credential_name" in props
+
+    prop_keys = list(props.keys())
+    cred_id_idx = prop_keys.index("credential_id")
+    save_cred_idx = prop_keys.index("save_credential")
+    cred_name_idx = prop_keys.index("credential_name")
+
+    assert save_cred_idx == cred_id_idx + 1
+    assert cred_name_idx == save_cred_idx + 1
+    assert save_cred_idx < 5, f"save_credential must be near the top (index < 5), got {save_cred_idx}"
+
+    # save_credential should be conditionally visible when auth_mode != 'none'
+    save_prop = props["save_credential"]
+    assert "visible_when" in save_prop
+    assert save_prop["visible_when"] == {"field": "auth_mode", "not_equals": "none"}
+
+    # Form login fields
+    for field in ("login_url", "auth_username", "auth_password", "login_username_field", "login_password_field", "csrf_token_field", "logout_url"):
+        assert field in props, f"Field '{field}' missing from web scraper schema"
+
+
+def test_web_scraper_session_cookies_and_bearer_auth():
+    """Verify session cookie injection and Bearer token header handling."""
+    recipe = WebScraperRecipe()
+
+    with patch("requests.Session") as mock_session_cls:
+        mock_session = MagicMock()
+        mock_session.headers = {}
+        mock_session.cookies = MagicMock()
+        mock_session_cls.return_value = mock_session
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.text = "<table><tr><th>Metric</th><th>Val</th></tr><tr><td>Alpha</td><td>100</td></tr></table>"
+        mock_session.get.return_value = mock_resp
+
+        # 1. Session cookies
+        config_cookies = {
+            "url": "https://secure.corp.local/dashboard",
+            "auth_mode": "session_cookie",
+            "session_cookies": "session_id=sess12345; auth_token=secretjwt",
+            "simulation_fallback": False,
+        }
+        res_cookies = recipe.execute(inputs={}, config=config_cookies)
+        assert res_cookies["metrics"]["auth_mode"] == "session_cookie"
+        mock_session.cookies.set.assert_any_call("session_id", "sess12345")
+        mock_session.cookies.set.assert_any_call("auth_token", "secretjwt")
+        assert mock_session.headers["Cookie"] == "session_id=sess12345; auth_token=secretjwt"
+
+        # 2. Bearer token
+        mock_session.headers = {}
+        mock_session.get.return_value = mock_resp
+        config_bearer = {
+            "url": "https://api.corp.local/data-table",
+            "auth_mode": "bearer_token",
+            "bearer_token": "my_secret_jwt_token",
+            "simulation_fallback": False,
+        }
+        res_bearer = recipe.execute(inputs={}, config=config_bearer)
+        assert res_bearer["metrics"]["auth_mode"] == "bearer_token"
+        assert mock_session.headers["Authorization"] == "Bearer my_secret_jwt_token"
+
+
+def test_web_scraper_form_login_and_logout_lifecycle():
+    """Verify full form-based authentication lifecycle: initial GET -> CSRF extraction -> POST login -> scrape -> logout."""
+    recipe = WebScraperRecipe()
+
+    with patch("requests.Session") as mock_session_cls:
+        mock_session = MagicMock()
+        mock_session_cls.return_value = mock_session
+
+        # Response 1: Login page with CSRF token
+        login_page_resp = MagicMock()
+        login_page_resp.status_code = 200
+        login_page_resp.text = """
+        <form action="/login" method="post">
+            <input type="hidden" name="csrfmiddlewaretoken" value="csrf-token-abc-987" />
+            <input type="text" name="username" />
+            <input type="password" name="password" />
+        </form>
+        """
+
+        # Response 2: Login POST success
+        login_post_resp = MagicMock()
+        login_post_resp.status_code = 200
+        login_post_resp.reason = "OK"
+
+        # Response 3: Target data page
+        target_page_resp = MagicMock()
+        target_page_resp.status_code = 200
+        target_page_resp.text = """
+        <table>
+            <tr><th>Department</th><th>Budget</th></tr>
+            <tr><td>Research</td><td>500000</td></tr>
+        </table>
+        """
+
+        # Response 4: Logout GET
+        logout_resp = MagicMock()
+        logout_resp.status_code = 200
+
+        mock_session.get.side_effect = [login_page_resp, target_page_resp, logout_resp]
+        mock_session.post.return_value = login_post_resp
+        mock_session.cookies = {}
+
+        config = {
+            "url": "https://portal.company.com/reports/financials",
+            "auth_mode": "form_login",
+            "login_url": "https://portal.company.com/login",
+            "auth_username": "finance_analyst@company.com",
+            "auth_password": "SuperSecretPassword123!",
+            "login_username_field": "username",
+            "login_password_field": "password",
+            "csrf_token_field": "csrfmiddlewaretoken",
+            "logout_url": "https://portal.company.com/logout",
+            "simulation_fallback": False,
+        }
+
+        res = recipe.execute(inputs={}, config=config)
+        df = res["dataframe"]
+        assert len(df) == 1
+        assert "Department" in df.columns
+        assert list(df["Department"]) == ["Research"]
+
+        # Verify calls in order:
+        # 1. Initial GET to login_url
+        assert mock_session.get.call_args_list[0][0][0] == "https://portal.company.com/login"
+        # 2. POST login credentials with CSRF token
+        post_args, post_kwargs = mock_session.post.call_args
+        assert post_args[0] == "https://portal.company.com/login"
+        assert post_kwargs["data"]["username"] == "finance_analyst@company.com"
+        assert post_kwargs["data"]["password"] == "SuperSecretPassword123!"
+        assert post_kwargs["data"]["csrfmiddlewaretoken"] == "csrf-token-abc-987"
+        # 3. GET target url
+        assert mock_session.get.call_args_list[1][0][0] == "https://portal.company.com/reports/financials"
+        # 4. GET logout_url
+        assert mock_session.get.call_args_list[2][0][0] == "https://portal.company.com/logout"
+        # 5. Session closed
+        mock_session.close.assert_called_once()
+
+
+def test_web_scraper_form_login_failure_raises():
+    """Verify that failed login raises a descriptive ExecutionException when simulation_fallback is False."""
+    recipe = WebScraperRecipe()
+
+    with patch("requests.Session") as mock_session_cls:
+        mock_session = MagicMock()
+        mock_session_cls.return_value = mock_session
+
+        login_page_resp = MagicMock()
+        login_page_resp.status_code = 200
+        login_page_resp.text = "<form><input name='csrf' value='123'></form>"
+
+        login_post_resp = MagicMock()
+        login_post_resp.status_code = 401
+        login_post_resp.reason = "Unauthorized"
+
+        mock_session.get.return_value = login_page_resp
+        mock_session.post.return_value = login_post_resp
+
+        config = {
+            "url": "https://portal.company.com/reports",
+            "auth_mode": "form_login",
+            "login_url": "https://portal.company.com/login",
+            "auth_username": "invalid_user",
+            "auth_password": "wrong_password",
+            "simulation_fallback": False,
+        }
+
+        with pytest.raises(ExecutionException) as exc:
+            recipe.execute(inputs={}, config=config)
+        assert "Login rejected" in str(exc.value) or "401" in str(exc.value)
+
+

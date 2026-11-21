@@ -55,6 +55,11 @@ class WebScraperRecipe(BaseRecipe):
                     "description": "Configure target webpage URL, custom User-Agent, and network timeouts",
                 },
                 {
+                    "id": "auth",
+                    "title": "Authentication & Session",
+                    "description": "Configure session cookies, Bearer tokens, HTTP Basic Auth, or automated form login & logout",
+                },
+                {
                     "id": "extraction",
                     "title": "Extraction Mode & Selectors",
                     "description": "HTML table extraction, CSS selectors, links, or text block options",
@@ -73,6 +78,168 @@ class WebScraperRecipe(BaseRecipe):
                     "input_type": "text",
                     "section": "target",
                     "description": "Full HTTP or HTTPS web URL to scrape data from.",
+                },
+                "user_agent": {
+                    "type": "string",
+                    "title": "HTTP User-Agent",
+                    "default": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                    "input_type": "text",
+                    "section": "target",
+                    "description": "Custom User-Agent header string sent with HTTP request.",
+                },
+                "timeout_seconds": {
+                    "type": "integer",
+                    "title": "Timeout (Seconds)",
+                    "default": 10,
+                    "minimum": 1,
+                    "maximum": 60,
+                    "input_type": "number",
+                    "section": "target",
+                    "description": "Maximum seconds to wait for network HTTP response.",
+                },
+                "auth_mode": {
+                    "type": "string",
+                    "title": "Authentication Mode",
+                    "enum": ["none", "session_cookie", "bearer_token", "basic_auth", "form_login"],
+                    "default": "none",
+                    "input_type": "dropdown",
+                    "section": "auth",
+                    "description": "Authentication method to access protected pages: Public, Cookie Session, Bearer Token, Basic Auth, or Automated Form Login.",
+                    "enum_titles": {
+                        "none": "None (Public Webpage)",
+                        "session_cookie": "Session Cookie / Custom Headers",
+                        "bearer_token": "Bearer Token / API Secret",
+                        "basic_auth": "HTTP Basic Authentication",
+                        "form_login": "Automated Form Login & Session",
+                    },
+                },
+                "session_cookies": {
+                    "type": "string",
+                    "title": "Session Cookies",
+                    "default": "",
+                    "input_type": "textarea",
+                    "section": "auth",
+                    "placeholder": "session_id=s%3Axyz; auth_token=abc12345",
+                    "description": "Active session cookie string to attach to HTTP requests.",
+                    "visible_when": {
+                        "field": "auth_mode",
+                        "equals": "session_cookie",
+                    },
+                },
+                "custom_headers": {
+                    "type": "string",
+                    "title": "Custom HTTP Headers (JSON or Key: Value)",
+                    "default": "",
+                    "input_type": "textarea",
+                    "section": "auth",
+                    "placeholder": "{\n  \"Authorization\": \"Bearer <token>\"\n}",
+                    "description": "Custom HTTP headers as JSON dictionary or newline-delimited 'Header-Name: value'.",
+                    "visible_when": {
+                        "field": "auth_mode",
+                        "equals": "session_cookie",
+                    },
+                },
+                "bearer_token": {
+                    "type": "string",
+                    "title": "Bearer / Access Token",
+                    "default": "",
+                    "input_type": "password",
+                    "section": "auth",
+                    "placeholder": "ey...",
+                    "description": "Secret access token passed in 'Authorization: Bearer <token>' header.",
+                    "visible_when": {
+                        "field": "auth_mode",
+                        "equals": "bearer_token",
+                    },
+                },
+                "login_url": {
+                    "type": "string",
+                    "title": "Login URL",
+                    "default": "",
+                    "input_type": "text",
+                    "section": "auth",
+                    "placeholder": "https://example.com/login",
+                    "description": "URL of the login page or authentication form endpoint.",
+                    "visible_when": {
+                        "field": "auth_mode",
+                        "equals": "form_login",
+                    },
+                },
+                "auth_username": {
+                    "type": "string",
+                    "title": "Username / Email",
+                    "default": "",
+                    "input_type": "text",
+                    "section": "auth",
+                    "description": "Username or email for Basic Authentication or Form Login.",
+                    "visible_when": {
+                        "field": "auth_mode",
+                        "in": ["basic_auth", "form_login"],
+                    },
+                },
+                "auth_password": {
+                    "type": "string",
+                    "title": "Password",
+                    "default": "",
+                    "input_type": "password",
+                    "section": "auth",
+                    "description": "Password for Basic Authentication or Form Login.",
+                    "visible_when": {
+                        "field": "auth_mode",
+                        "in": ["basic_auth", "form_login"],
+                    },
+                },
+                "login_username_field": {
+                    "type": "string",
+                    "title": "Username Field Name",
+                    "default": "username",
+                    "input_type": "text",
+                    "section": "auth",
+                    "placeholder": "username, email, or user[email]",
+                    "description": "HTML form input name attribute for the username field.",
+                    "visible_when": {
+                        "field": "auth_mode",
+                        "equals": "form_login",
+                    },
+                },
+                "login_password_field": {
+                    "type": "string",
+                    "title": "Password Field Name",
+                    "default": "password",
+                    "input_type": "text",
+                    "section": "auth",
+                    "placeholder": "password or user[password]",
+                    "description": "HTML form input name attribute for the password field.",
+                    "visible_when": {
+                        "field": "auth_mode",
+                        "equals": "form_login",
+                    },
+                },
+                "csrf_token_field": {
+                    "type": "string",
+                    "title": "CSRF Token Field Name",
+                    "default": "csrfmiddlewaretoken",
+                    "input_type": "text",
+                    "section": "auth",
+                    "placeholder": "csrfmiddlewaretoken, _csrf, or authenticity_token",
+                    "description": "Optional CSRF field name to extract from the login form and include in submission.",
+                    "visible_when": {
+                        "field": "auth_mode",
+                        "equals": "form_login",
+                    },
+                },
+                "logout_url": {
+                    "type": "string",
+                    "title": "Logout URL (Optional)",
+                    "default": "",
+                    "input_type": "text",
+                    "section": "auth",
+                    "placeholder": "https://example.com/logout",
+                    "description": "Optional URL to call after scraping to cleanly terminate the session.",
+                    "visible_when": {
+                        "field": "auth_mode",
+                        "equals": "form_login",
+                    },
                 },
                 "extraction_mode": {
                     "type": "string",
@@ -109,24 +276,6 @@ class WebScraperRecipe(BaseRecipe):
                         "equals": "css_selector_list",
                     },
                 },
-                "user_agent": {
-                    "type": "string",
-                    "title": "HTTP User-Agent",
-                    "default": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "input_type": "text",
-                    "section": "target",
-                    "description": "Custom User-Agent header string sent with HTTP request.",
-                },
-                "timeout_seconds": {
-                    "type": "integer",
-                    "title": "Timeout (Seconds)",
-                    "default": 10,
-                    "minimum": 1,
-                    "maximum": 60,
-                    "input_type": "number",
-                    "section": "target",
-                    "description": "Maximum seconds to wait for network HTTP response.",
-                },
                 "include_metadata_columns": {
                     "type": "boolean",
                     "title": "Include Metadata Columns",
@@ -155,7 +304,23 @@ class WebScraperRecipe(BaseRecipe):
             "required": ["url"],
         }
 
-    def _fetch_html(self, url: str, user_agent: str, timeout: int) -> str:
+    def _fetch_html(
+        self,
+        url: str,
+        user_agent: str,
+        timeout: int,
+        auth_mode: str = "none",
+        session_cookies: str = "",
+        custom_headers: str = "",
+        bearer_token: str = "",
+        auth_username: str = "",
+        auth_password: str = "",
+        login_url: str = "",
+        login_username_field: str = "username",
+        login_password_field: str = "password",
+        csrf_token_field: str = "csrfmiddlewaretoken",
+        logout_url: str = "",
+    ) -> str:
         parsed = urllib.parse.urlparse(url)
         if not parsed.scheme or parsed.scheme not in ("http", "https"):
             raise ValidationException(f"Invalid URL '{url}'. Must start with 'http://' or 'https://'.")
@@ -163,22 +328,131 @@ class WebScraperRecipe(BaseRecipe):
         default_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         ua = user_agent.strip() if user_agent and user_agent.strip() else default_ua
 
-        # 1. Try requests library first for robust HTTP/TLS connection handling
+        # 1. Try requests.Session first for stateful session, cookie, and form login support
         try:
             import requests
-            headers = {
+            session = requests.Session()
+            session.headers.update({
                 "User-Agent": ua,
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.5",
-            }
-            resp = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True)
-            if resp.status_code == 403 and "wikipedia" in url.lower():
-                raise ExecutionException(
-                    f"HTTP 403 Forbidden accessing '{url}'. Wikimedia policy blocks automated scrapers without custom contact headers. "
-                    "Specify a descriptive User-Agent or enable Simulation Fallback."
-                )
-            resp.raise_for_status()
-            return resp.text
+                "Accept-Language": "en-US,en;q=0.9",
+            })
+
+            # Custom headers
+            if custom_headers and custom_headers.strip():
+                raw_h = custom_headers.strip()
+                if raw_h.startswith("{") and raw_h.endswith("}"):
+                    try:
+                        parsed_h = json.loads(raw_h)
+                        if isinstance(parsed_h, dict):
+                            session.headers.update({str(k): str(v) for k, v in parsed_h.items()})
+                    except Exception as je:
+                        logger.warning(f"Failed to parse custom_headers as JSON: {je}")
+                else:
+                    for line in raw_h.splitlines():
+                        if ":" in line:
+                            hk, hv = line.split(":", 1)
+                            session.headers[hk.strip()] = hv.strip()
+
+            # Authentication handling
+            if auth_mode == "session_cookie":
+                if session_cookies and session_cookies.strip():
+                    sc_str = session_cookies.strip()
+                    session.headers["Cookie"] = sc_str
+                    for part in sc_str.split(";"):
+                        if "=" in part:
+                            ck, cv = part.strip().split("=", 1)
+                            session.cookies.set(ck.strip(), cv.strip())
+
+            elif auth_mode == "bearer_token":
+                if bearer_token and bearer_token.strip():
+                    tok = bearer_token.strip()
+                    if not tok.lower().startswith("bearer "):
+                        session.headers["Authorization"] = f"Bearer {tok}"
+                    else:
+                        session.headers["Authorization"] = tok
+
+            elif auth_mode == "basic_auth":
+                if auth_username or auth_password:
+                    session.auth = (auth_username, auth_password)
+
+            elif auth_mode == "form_login":
+                clean_login_url = login_url.strip() if login_url else ""
+                if not clean_login_url:
+                    raise ValidationException("Parameter 'login_url' cannot be empty when Authentication Mode is 'form_login'.")
+                parsed_login = urllib.parse.urlparse(clean_login_url)
+                if not parsed_login.scheme or parsed_login.scheme not in ("http", "https"):
+                    raise ValidationException(f"Invalid login URL '{clean_login_url}'. Must start with 'http://' or 'https://'.")
+
+                # Step A: GET login page to prime cookies and discover CSRF token
+                try:
+                    init_login_resp = session.get(clean_login_url, timeout=timeout, allow_redirects=True)
+                except Exception as e:
+                    raise ExecutionException(f"Failed to connect to login page '{clean_login_url}': {e}")
+
+                csrf_val = None
+                # Check cookies first
+                for cand in (csrf_token_field, "csrftoken", "_csrf", "csrf_token", "authenticity_token"):
+                    if cand in session.cookies:
+                        csrf_val = session.cookies[cand]
+                        break
+
+                # Extract from login page HTML if needed
+                if not csrf_val and init_login_resp.text:
+                    patterns = [
+                        rf'<input[^>]+name=["\']{re.escape(csrf_token_field)}["\'][^>]+value=["\']([^"\']+)["\']',
+                        rf'<input[^>]+value=["\']([^"\']+)["\'][^>]+name=["\']{re.escape(csrf_token_field)}["\']',
+                        r'<input[^>]+name=["\'](?:csrf[-_]?token|authenticity[-_]?token|_token)["\'][^>]+value=["\']([^"\']+)["\']',
+                    ]
+                    for pat in patterns:
+                        m = re.search(pat, init_login_resp.text, re.IGNORECASE)
+                        if m:
+                            csrf_val = m.group(1)
+                            break
+
+                # Step B: POST credentials
+                post_data = {
+                    login_username_field or "username": auth_username,
+                    login_password_field or "password": auth_password,
+                }
+                if csrf_val:
+                    post_data[csrf_token_field or "csrfmiddlewaretoken"] = csrf_val
+
+                try:
+                    login_post_resp = session.post(clean_login_url, data=post_data, timeout=timeout, allow_redirects=True)
+                    if login_post_resp.status_code >= 400:
+                        raise ExecutionException(
+                            f"Login rejected at '{clean_login_url}' with HTTP {login_post_resp.status_code}: {login_post_resp.reason}"
+                        )
+                except Exception as e:
+                    raise ExecutionException(f"Failed to submit login credentials to '{clean_login_url}': {e}")
+
+            # Fetch Target URL
+            try:
+                target_resp = session.get(url, timeout=timeout, allow_redirects=True)
+                if target_resp.status_code in (401, 403):
+                    if "wikipedia" in url.lower():
+                        raise ExecutionException(
+                            f"HTTP 403 Forbidden accessing '{url}'. Wikimedia policy blocks automated scrapers without custom contact headers. "
+                            "Specify a descriptive User-Agent or enable Simulation Fallback."
+                        )
+                    raise ExecutionException(
+                        f"HTTP {target_resp.status_code} {target_resp.reason} accessing '{url}'. "
+                        "Target page rejected access. Verify authentication credentials, session cookies, or form login."
+                    )
+                target_resp.raise_for_status()
+                html_text = target_resp.text
+            finally:
+                # Optional Logout
+                if logout_url and logout_url.strip():
+                    try:
+                        session.get(logout_url.strip(), timeout=timeout, allow_redirects=True)
+                    except Exception as logout_err:
+                        logger.warning(f"Failed to trigger logout at '{logout_url}': {logout_err}")
+                session.close()
+
+            return html_text
+
         except ImportError:
             pass
         except requests.exceptions.RequestException as req_err:
@@ -280,12 +554,12 @@ class WebScraperRecipe(BaseRecipe):
             logger.warning(f"BeautifulSoup table parse failed: {bs_err}")
 
         # 3. Final regex fallback
-        return self._regex_parse_tables(html, table_index, original_error=Exception("No HTML tables found or parser missing."))
+        return self._regex_parse_tables(html, table_index)
 
-    def _regex_parse_tables(self, html: str, table_index: int, original_error: Exception) -> pd.DataFrame:
+    def _regex_parse_tables(self, html: str, table_index: int) -> pd.DataFrame:
         table_matches = re.findall(r"<table[^>]*>(.*?)</table>", html, re.DOTALL | re.IGNORECASE)
         if not table_matches:
-            raise ExecutionException(f"Failed to parse HTML tables: {original_error}")
+            raise ExecutionException("No <table> elements found in the HTML content.")
         idx = min(table_index, len(table_matches) - 1)
         raw_table = table_matches[idx]
 
@@ -300,9 +574,31 @@ class WebScraperRecipe(BaseRecipe):
         if not rows:
             raise ExecutionException("Found table tag but no rows could be parsed.")
 
+        if len(rows) == 1:
+            clean_headers = [f"col_{i+1}" for i in range(len(rows[0]))]
+            return pd.DataFrame([rows[0]], columns=clean_headers)
+
         header = rows[0]
-        data = rows[1:] if len(rows) > 1 else []
-        return pd.DataFrame(data, columns=header)
+        data = rows[1:]
+        seen: Dict[str, int] = {}
+        clean_headers = []
+        for i, h in enumerate(header):
+            name = str(h).strip() if str(h).strip() and str(h).lower() != "nan" else f"col_{i+1}"
+            if name in seen:
+                seen[name] += 1
+                name = f"{name}_{seen[name]}"
+            else:
+                seen[name] = 0
+            clean_headers.append(name)
+
+        padded_data = []
+        for r in data:
+            if len(r) < len(clean_headers):
+                r = r + [""] * (len(clean_headers) - len(r))
+            elif len(r) > len(clean_headers):
+                r = r[:len(clean_headers)]
+            padded_data.append(r)
+        return pd.DataFrame(padded_data, columns=clean_headers)
 
     def _extract_css_selector_list(self, html: str, selector: str) -> pd.DataFrame:
         try:
@@ -400,6 +696,19 @@ class WebScraperRecipe(BaseRecipe):
         simulation_fallback = bool(config.get("simulation_fallback", True))
         mock_html = str(config.get("mock_html", "")).strip()
 
+        # Authentication and Session parameters
+        auth_mode = str(config.get("auth_mode", "none")).strip().lower()
+        session_cookies = str(config.get("session_cookies", "")).strip()
+        custom_headers = str(config.get("custom_headers", "")).strip()
+        bearer_token = str(config.get("bearer_token", "")).strip()
+        auth_username = str(config.get("auth_username", "")).strip()
+        auth_password = str(config.get("auth_password", "")).strip()
+        login_url = str(config.get("login_url", "")).strip()
+        login_username_field = str(config.get("login_username_field", "username")).strip()
+        login_password_field = str(config.get("login_password_field", "password")).strip()
+        csrf_token_field = str(config.get("csrf_token_field", "csrfmiddlewaretoken")).strip()
+        logout_url = str(config.get("logout_url", "")).strip()
+
         html_content = ""
         is_simulation = False
 
@@ -409,7 +718,22 @@ class WebScraperRecipe(BaseRecipe):
         else:
             # 2. Try fetching from network URL
             try:
-                html_content = self._fetch_html(url=url, user_agent=user_agent, timeout=timeout)
+                html_content = self._fetch_html(
+                    url=url,
+                    user_agent=user_agent,
+                    timeout=timeout,
+                    auth_mode=auth_mode,
+                    session_cookies=session_cookies,
+                    custom_headers=custom_headers,
+                    bearer_token=bearer_token,
+                    auth_username=auth_username,
+                    auth_password=auth_password,
+                    login_url=login_url,
+                    login_username_field=login_username_field,
+                    login_password_field=login_password_field,
+                    csrf_token_field=csrf_token_field,
+                    logout_url=logout_url,
+                )
             except Exception as e:
                 logger.warning(f"Failed to scrape webpage '{url}': {e}")
                 if not simulation_fallback:
@@ -455,6 +779,7 @@ class WebScraperRecipe(BaseRecipe):
             "execution_time_ms": elapsed,
             "url": url,
             "extraction_mode": extraction_mode,
+            "auth_mode": auth_mode,
             "rows_extracted": len(df),
             "columns_count": len(df.columns),
             "is_simulation": is_simulation,
