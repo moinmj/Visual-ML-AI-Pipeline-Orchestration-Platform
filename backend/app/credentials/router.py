@@ -150,6 +150,40 @@ async def get_credential(
     return cred.to_dict()
 
 
+class UpdateCredentialRequest(BaseModel):
+    name: Optional[str] = Field(None, description="Updated friendly name")
+    data: Optional[Dict[str, Any]] = Field(None, description="Updated credential payload to encrypt")
+    metadata_info: Optional[Dict[str, Any]] = Field(None, description="Updated display metadata safe for frontend dropdowns")
+
+
+@router.put("/credentials/{credential_id}")
+async def update_credential(
+    credential_id: str,
+    body: UpdateCredentialRequest,
+    user: TokenData = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Updates an existing credential and re-encrypts any updated secrets."""
+    safe_metadata = dict(body.metadata_info) if body.metadata_info is not None else None
+    if safe_metadata is None and body.data:
+        safe_metadata = {}
+        for k in ("host", "port", "database", "username", "account", "warehouse", "ssl_mode"):
+            if k in body.data and body.data[k]:
+                safe_metadata[k] = body.data[k]
+
+    cred = await CredentialService.update_credential(
+        db=db,
+        credential_id=credential_id,
+        data=body.data,
+        name=body.name,
+        metadata_info=safe_metadata,
+        tenant_id=user.tenant_id,
+    )
+    if not cred:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credential not found or access denied")
+    return cred.to_dict()
+
+
 @router.delete("/credentials/{credential_id}")
 async def delete_credential(
     credential_id: str,

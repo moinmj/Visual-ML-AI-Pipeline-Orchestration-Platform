@@ -172,6 +172,63 @@ SENSITIVE_KEY_SUBSTRINGS = (
     "bearer_token", "service_account_key"
 )
 
+VAULTED_SENSITIVE_KEYS = (
+    "password", "secret", "api_key", "apikey", "access_token",
+    "refresh_token", "private_key", "auth_token", "bearer_token",
+    "sasl_password", "secret_key", "service_account_key"
+)
+
+
+def sanitize_vaulted_node_configs(
+    nodes: Optional[List[Dict[str, Any]]],
+    node_configs: Optional[Dict[str, Any]]
+) -> Tuple[Optional[List[Dict[str, Any]]], Optional[Dict[str, Any]]]:
+    """
+    Strips raw plaintext secrets from node configs and nodes whenever a node
+    is linked to a vaulted credential (has credential_id). This guarantees that
+    database passwords and API secrets are never saved in the workflows table in plaintext.
+    """
+    clean_configs = dict(node_configs) if isinstance(node_configs, dict) else None
+    clean_nodes = list(nodes) if isinstance(nodes, list) else None
+
+    # Check each node_config
+    if clean_configs:
+        for nid, cfg in list(clean_configs.items()):
+            if isinstance(cfg, dict) and cfg.get("credential_id"):
+                scrubbed = {}
+                for k, v in cfg.items():
+                    k_lower = str(k).lower().strip()
+                    if any(s in k_lower for s in VAULTED_SENSITIVE_KEYS):
+                        continue
+                    scrubbed[k] = v
+                clean_configs[nid] = scrubbed
+
+    # Check each node in nodes list
+    if clean_nodes:
+        sanitized_nodes = []
+        for n in clean_nodes:
+            if isinstance(n, dict):
+                n_copy = dict(n)
+                data = n_copy.get("data")
+                if isinstance(data, dict):
+                    data_copy = dict(data)
+                    cfg = data_copy.get("config")
+                    if isinstance(cfg, dict) and cfg.get("credential_id"):
+                        scrubbed_cfg = {}
+                        for k, v in cfg.items():
+                            k_lower = str(k).lower().strip()
+                            if any(s in k_lower for s in VAULTED_SENSITIVE_KEYS):
+                                continue
+                            scrubbed_cfg[k] = v
+                        data_copy["config"] = scrubbed_cfg
+                        n_copy["data"] = data_copy
+                sanitized_nodes.append(n_copy)
+            else:
+                sanitized_nodes.append(n)
+        clean_nodes = sanitized_nodes
+
+    return clean_nodes, clean_configs
+
 
 def sanitize_node_configs_credentials(obj: Any) -> Any:
     """
@@ -845,6 +902,7 @@ async def save_workflow(
     )
 
     clean_incoming_name = strip_run_label_from_name(payload.name) if payload.name else None
+    clean_nodes, clean_node_configs = sanitize_vaulted_node_configs(payload.nodes, payload.node_configs)
 
     if wf:
         # Update existing - protect custom name from being overwritten by generic recommender placeholders
@@ -858,12 +916,12 @@ async def save_workflow(
             wf.dataset_id = ds_id
         if ds_name is not None:
             wf.dataset_name = ds_name
-        if payload.nodes is not None:
-            wf.nodes = payload.nodes
+        if clean_nodes is not None:
+            wf.nodes = clean_nodes
         if payload.edges is not None:
             wf.edges = payload.edges
-        if payload.node_configs is not None:
-            wf.node_configs = payload.node_configs
+        if clean_node_configs is not None:
+            wf.node_configs = clean_node_configs
         if resolved_last_exec is not None:
             wf.last_execution = resolved_last_exec
         wf.is_active = True
@@ -878,9 +936,9 @@ async def save_workflow(
             description=payload.description,
             dataset_id=ds_id,
             dataset_name=ds_name,
-            nodes=payload.nodes,
+            nodes=clean_nodes,
             edges=payload.edges,
-            node_configs=payload.node_configs,
+            node_configs=clean_node_configs,
             last_execution=resolved_last_exec,
             is_active=True
         )
@@ -1736,6 +1794,7 @@ async def upsert_workflow(
     )
 
     clean_incoming_name = strip_run_label_from_name(payload.name) if payload.name else None
+    clean_nodes, clean_node_configs = sanitize_vaulted_node_configs(payload.nodes, payload.node_configs)
 
     if wf:
         # Update existing - protect custom name from being overwritten by generic recommender placeholders
@@ -1749,12 +1808,12 @@ async def upsert_workflow(
             wf.dataset_id = ds_id
         if ds_name is not None:
             wf.dataset_name = ds_name
-        if payload.nodes is not None:
-            wf.nodes = payload.nodes
+        if clean_nodes is not None:
+            wf.nodes = clean_nodes
         if payload.edges is not None:
             wf.edges = payload.edges
-        if payload.node_configs is not None:
-            wf.node_configs = payload.node_configs
+        if clean_node_configs is not None:
+            wf.node_configs = clean_node_configs
         if resolved_last_exec is not None:
             wf.last_execution = resolved_last_exec
         wf.is_active = True
@@ -1769,9 +1828,9 @@ async def upsert_workflow(
             description=payload.description,
             dataset_id=ds_id,
             dataset_name=ds_name,
-            nodes=payload.nodes or [],
+            nodes=clean_nodes or [],
             edges=payload.edges or [],
-            node_configs=payload.node_configs or {},
+            node_configs=clean_node_configs or {},
             last_execution=resolved_last_exec,
             is_active=True
         )
@@ -2183,6 +2242,8 @@ async def _autosave_workflow(
         node_configs=node_configs
     )
 
+    clean_nodes, clean_node_configs = sanitize_vaulted_node_configs(nodes_payload, node_configs)
+
     result = await db.execute(select(Workflow).where(Workflow.id == target_id))
     wf = result.scalar_one_or_none()
     if wf:
@@ -2196,9 +2257,9 @@ async def _autosave_workflow(
             wf.dataset_id = ds_id
         if ds_name is not None:
             wf.dataset_name = ds_name
-        wf.nodes = nodes_payload
+        wf.nodes = clean_nodes
         wf.edges = edges_payload
-        wf.node_configs = node_configs
+        wf.node_configs = clean_node_configs
         wf.is_active = True
         wf.deleted_at = None
         wf.updated_at = datetime.now(timezone.utc)
@@ -2213,9 +2274,9 @@ async def _autosave_workflow(
             description="Auto-saved during execution run",
             dataset_id=ds_id,
             dataset_name=ds_name,
-            nodes=nodes_payload,
+            nodes=clean_nodes,
             edges=edges_payload,
-            node_configs=node_configs,
+            node_configs=clean_node_configs,
             is_active=True
         )
         db.add(wf)

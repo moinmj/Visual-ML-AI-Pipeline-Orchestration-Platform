@@ -87,6 +87,7 @@ class Settings(BaseSettings):
     # How long per-node downloadable artifacts (train/test sets, metrics, model file) are kept.
     NODE_ARTIFACT_TTL_HOURS: int = 168
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    APP_ENCRYPTION_KEYS: Optional[str] = None
     FERNET_KEY: Optional[str] = "Rc4YoP_92ZxBPiwTRsprsTUA__aqFDBqZPCz7sLFR_g="
     RESET_TOKEN_EXPIRE_HOURS: int = 24
 
