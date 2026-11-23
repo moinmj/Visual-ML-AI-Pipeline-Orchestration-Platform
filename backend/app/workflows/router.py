@@ -1079,6 +1079,8 @@ async def save_workflow(
     )
     wf.workflow_id = wf.id
     wf.name = clean_workbook_name(wf.name) or wf.name
+    db.expunge(wf)   # detach so the masked values below can never be flushed back to the DB
+    wf.nodes, wf.node_configs = mask_workflow_configs_for_frontend(wf.nodes, wf.node_configs)
     return wf
 
 
@@ -1975,6 +1977,8 @@ async def upsert_workflow(
     )
     wf.workflow_id = wf.id
     wf.name = clean_workbook_name(wf.name) or wf.name
+    db.expunge(wf)   # detach so the masked values below can never be flushed back to the DB
+    wf.nodes, wf.node_configs = mask_workflow_configs_for_frontend(wf.nodes, wf.node_configs)
     return wf
 
 
