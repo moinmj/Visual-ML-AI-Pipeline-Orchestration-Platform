@@ -2247,6 +2247,33 @@ async def preload_workflow_datasets(
                     logger.warning(f"Could not preload dataset '{dataset_id}' for node '{node.id}': {ex}")
 
 
+async def preload_workflow_credentials(
+    workflow: WorkflowGraph,
+    db: AsyncSession,
+    tenant_id: Optional[int] = None
+) -> None:
+    """
+    Preloads and resolves any vaulted credentials (credential_id) for nodes in the workflow graph,
+    injecting the decrypted secrets in-memory into node.config so DAGExecutor can authenticate
+    connectors (Gmail, MySQL, PostgreSQL, Snowflake, RabbitMQ, etc.) at runtime without the
+    frontend having to send plaintext passwords in requests.
+    """
+    from backend.app.credentials.service import CredentialService
+    for node in workflow.nodes:
+        cfg = dict(node.config or {})
+        cred_id = str(cfg.get("credential_id", "")).strip()
+        if cred_id:
+            try:
+                stored = await CredentialService.get_credential_data(db=db, credential_id=cred_id, tenant_id=tenant_id)
+                if stored and isinstance(stored, dict):
+                    for k, v in stored.items():
+                        if k not in cfg or not cfg[k]:
+                            cfg[k] = v
+                    node.config = cfg
+            except Exception as e:
+                logger.warning(f"Failed to preload credential '{cred_id}' for node '{node.id}': {e}")
+
+
 @router.post(
     "/validate",
     response_model=Dict[str, Any],
@@ -2532,6 +2559,7 @@ async def execute_workflow(
     set_current_execution_id(str(execution_id))
     tid = get_current_tenant_id()
     await preload_workflow_datasets(workflow=workflow, db=db, tenant_id=tid)
+    await preload_workflow_credentials(workflow=workflow, db=db, tenant_id=tid)
 
     result = DAGExecutor.execute_workflow(
         execution_id=execution_id,
@@ -2613,6 +2641,7 @@ async def execute_workflow_by_id(
     execution_id = str(uuid.uuid4())
     tid = get_current_tenant_id()
     await preload_workflow_datasets(workflow=graph_to_execute, db=db, tenant_id=tid)
+    await preload_workflow_credentials(workflow=graph_to_execute, db=db, tenant_id=tid)
 
     exec_result = DAGExecutor.execute_workflow(
         execution_id=execution_id,
@@ -2778,6 +2807,7 @@ async def submit_async_workflow(
 
         _require_resumable(resume_from)
         await preload_workflow_datasets(workflow=workflow, db=db, tenant_id=get_current_tenant_id())
+        await preload_workflow_credentials(workflow=workflow, db=db, tenant_id=get_current_tenant_id())
         try:
             job_id = job_manager.submit_job(
                 workflow=workflow,
