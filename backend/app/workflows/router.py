@@ -10,6 +10,7 @@ from backend.app.core.crypto import (
     encrypt_node_config_secrets,
     decrypt_node_config_secrets,
     is_encrypted_token,
+    is_masked_value,
 )
 import math
 import uuid
@@ -200,6 +201,23 @@ def sanitize_vaulted_node_configs(
     clean_nodes = list(nodes) if isinstance(nodes, list) else None
 
     existing_configs = (getattr(existing_wf, "node_configs", None) or {}) if existing_wf else {}
+    if not isinstance(existing_configs, dict):
+        existing_configs = {}
+    existing_node_cfgs: Dict[str, Any] = {}
+    for en in ((getattr(existing_wf, "nodes", None) or []) if existing_wf else []):
+        if isinstance(en, dict) and isinstance(en.get("data"), dict) and isinstance(en["data"].get("config"), dict):
+            existing_node_cfgs[en.get("id")] = en["data"]["config"]
+
+    def _restore_masked(nid: Any, cfg: Dict[str, Any]) -> Dict[str, Any]:
+        """Swap masked placeholders ('********' / '••••••••') for the stored ciphertext."""
+        old_cfg = existing_configs.get(nid) or existing_node_cfgs.get(nid) or {}
+        merged = dict(cfg)
+        for k, v in list(merged.items()):
+            k_lower = str(k).lower().strip()
+            if any(s in k_lower for s in VAULTED_SENSITIVE_KEYS) and isinstance(old_cfg, dict) and k in old_cfg:
+                if is_masked_value(v) or (isinstance(v, str) and not v.strip()):
+                    merged[k] = old_cfg[k]
+        return merged
 
     # Check each node_config
     if clean_configs:
@@ -214,14 +232,7 @@ def sanitize_vaulted_node_configs(
                         scrubbed[k] = v
                     clean_configs[nid] = scrubbed
                 else:
-                    merged = dict(cfg)
-                    old_cfg = existing_configs.get(nid, {}) if isinstance(existing_configs, dict) else {}
-                    for k, v in list(merged.items()):
-                        k_lower = str(k).lower().strip()
-                        if any(s in k_lower for s in VAULTED_SENSITIVE_KEYS):
-                            if str(v).strip() in ("********", "••••••••", "") and k in old_cfg:
-                                merged[k] = old_cfg[k]
-                    clean_configs[nid] = encrypt_node_config_secrets(merged)
+                    clean_configs[nid] = encrypt_node_config_secrets(_restore_masked(nid, cfg))
 
     # Check each node in nodes list
     if clean_nodes:
@@ -247,7 +258,7 @@ def sanitize_vaulted_node_configs(
                             if clean_configs and nid in clean_configs:
                                 data_copy["config"] = dict(clean_configs[nid])
                             else:
-                                data_copy["config"] = encrypt_node_config_secrets(cfg)
+                                data_copy["config"] = encrypt_node_config_secrets(_restore_masked(nid, cfg))
                         n_copy["data"] = data_copy
                 sanitized_nodes.append(n_copy)
             else:
@@ -977,7 +988,7 @@ async def save_workflow(
     )
 
     clean_incoming_name = strip_run_label_from_name(payload.name) if payload.name else None
-    clean_nodes, clean_node_configs = sanitize_vaulted_node_configs(payload.nodes, payload.node_configs)
+    clean_nodes, clean_node_configs = sanitize_vaulted_node_configs(payload.nodes, payload.node_configs, existing_wf=wf)
 
     if wf:
         # Update existing - protect custom name from being overwritten by generic recommender placeholders
@@ -1873,7 +1884,7 @@ async def upsert_workflow(
     )
 
     clean_incoming_name = strip_run_label_from_name(payload.name) if payload.name else None
-    clean_nodes, clean_node_configs = sanitize_vaulted_node_configs(payload.nodes, payload.node_configs)
+    clean_nodes, clean_node_configs = sanitize_vaulted_node_configs(payload.nodes, payload.node_configs, existing_wf=wf)
 
     if wf:
         # Update existing - protect custom name from being overwritten by generic recommender placeholders
@@ -2348,10 +2359,10 @@ async def _autosave_workflow(
         node_configs=node_configs
     )
 
-    clean_nodes, clean_node_configs = sanitize_vaulted_node_configs(nodes_payload, node_configs)
-
     result = await db.execute(select(Workflow).where(Workflow.id == target_id))
     wf = result.scalar_one_or_none()
+
+    clean_nodes, clean_node_configs = sanitize_vaulted_node_configs(nodes_payload, node_configs, existing_wf=wf)
     if wf:
         incoming_name = workflow_name or workflow.name
         clean_incoming_name = strip_run_label_from_name(incoming_name) if incoming_name else None

@@ -13,6 +13,7 @@ from backend.app.core.crypto import (
     encrypt_credential,
     decrypt_credential,
     mask_credential_payload,
+    merge_masked_secrets,
     rotate_credential_token,
 )
 
@@ -139,7 +140,9 @@ class CredentialService:
             merged_meta.update(metadata_info)
             cred.metadata_info = merged_meta
         if data is not None:
-            cred.encrypted_data = encrypt_payload(data)
+            # The UI gets secrets back as '********'; keep the stored value for any field still masked.
+            existing = decrypt_payload(cred.encrypted_data)
+            cred.encrypted_data = encrypt_payload(merge_masked_secrets(data, existing))
 
         cred.updated_at = datetime.now(timezone.utc)
         await db.commit()
