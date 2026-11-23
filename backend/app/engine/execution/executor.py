@@ -734,7 +734,9 @@ class DAGExecutor:
             try:
                 # tenant_id comes from the request's token, never from the client's node config
                 from backend.app.core.tenant_context import with_tenant_config
-                outputs = recipe.execute(inputs=node_inputs, config=with_tenant_config(node.config), context=pipeline_context)
+                from backend.app.core.crypto import decrypt_node_config_secrets
+                node_exec_cfg = decrypt_node_config_secrets(with_tenant_config(node.config))
+                outputs = recipe.execute(inputs=node_inputs, config=node_exec_cfg, context=pipeline_context)
                 node_outputs[node.id] = outputs
 
                 # Propagate standard artifacts to shared context (never overwrite existing valid object with None)

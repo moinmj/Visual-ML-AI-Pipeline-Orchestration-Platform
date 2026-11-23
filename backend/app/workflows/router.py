@@ -6,6 +6,11 @@ import asyncio
 import time
 import json as _json
 from typing import Dict, Any, List, Optional, Union, Tuple
+from backend.app.core.crypto import (
+    encrypt_node_config_secrets,
+    decrypt_node_config_secrets,
+    is_encrypted_token,
+)
 import math
 import uuid
 import re
@@ -173,35 +178,50 @@ SENSITIVE_KEY_SUBSTRINGS = (
 )
 
 VAULTED_SENSITIVE_KEYS = (
-    "password", "secret", "api_key", "apikey", "access_token",
-    "refresh_token", "private_key", "auth_token", "bearer_token",
-    "sasl_password", "secret_key", "service_account_key"
+    "password", "smtp_password", "sasl_password", "secret", "client_secret",
+    "secret_key", "api_key", "apikey", "access_token", "refresh_token",
+    "private_key", "auth_token", "bearer_token", "service_account_key"
 )
 
 
 def sanitize_vaulted_node_configs(
     nodes: Optional[List[Dict[str, Any]]],
-    node_configs: Optional[Dict[str, Any]]
+    node_configs: Optional[Dict[str, Any]],
+    existing_wf: Optional[Any] = None
 ) -> Tuple[Optional[List[Dict[str, Any]]], Optional[Dict[str, Any]]]:
     """
-    Strips raw plaintext secrets from node configs and nodes whenever a node
-    is linked to a vaulted credential (has credential_id). This guarantees that
-    database passwords and API secrets are never saved in the workflows table in plaintext.
+    Secures node configurations for database storage:
+    1. If a node is linked to a vaulted credential (has credential_id): strips raw secrets so they aren't duplicated.
+    2. If a node has inline credentials (e.g. smtp_password, password): automatically encrypts them with MultiFernet so
+       no plaintext credentials are ever stored in the workflows or executions database tables.
+    3. If incoming value is masked ('********' or '••••••••'), preserves the existing encrypted secret from existing_wf.
     """
     clean_configs = dict(node_configs) if isinstance(node_configs, dict) else None
     clean_nodes = list(nodes) if isinstance(nodes, list) else None
 
+    existing_configs = (getattr(existing_wf, "node_configs", None) or {}) if existing_wf else {}
+
     # Check each node_config
     if clean_configs:
         for nid, cfg in list(clean_configs.items()):
-            if isinstance(cfg, dict) and cfg.get("credential_id"):
-                scrubbed = {}
-                for k, v in cfg.items():
-                    k_lower = str(k).lower().strip()
-                    if any(s in k_lower for s in VAULTED_SENSITIVE_KEYS):
-                        continue
-                    scrubbed[k] = v
-                clean_configs[nid] = scrubbed
+            if isinstance(cfg, dict):
+                if cfg.get("credential_id"):
+                    scrubbed = {}
+                    for k, v in cfg.items():
+                        k_lower = str(k).lower().strip()
+                        if any(s in k_lower for s in VAULTED_SENSITIVE_KEYS):
+                            continue
+                        scrubbed[k] = v
+                    clean_configs[nid] = scrubbed
+                else:
+                    merged = dict(cfg)
+                    old_cfg = existing_configs.get(nid, {}) if isinstance(existing_configs, dict) else {}
+                    for k, v in list(merged.items()):
+                        k_lower = str(k).lower().strip()
+                        if any(s in k_lower for s in VAULTED_SENSITIVE_KEYS):
+                            if str(v).strip() in ("********", "••••••••", "") and k in old_cfg:
+                                merged[k] = old_cfg[k]
+                    clean_configs[nid] = encrypt_node_config_secrets(merged)
 
     # Check each node in nodes list
     if clean_nodes:
@@ -209,18 +229,25 @@ def sanitize_vaulted_node_configs(
         for n in clean_nodes:
             if isinstance(n, dict):
                 n_copy = dict(n)
+                nid = n_copy.get("id")
                 data = n_copy.get("data")
                 if isinstance(data, dict):
                     data_copy = dict(data)
                     cfg = data_copy.get("config")
-                    if isinstance(cfg, dict) and cfg.get("credential_id"):
-                        scrubbed_cfg = {}
-                        for k, v in cfg.items():
-                            k_lower = str(k).lower().strip()
-                            if any(s in k_lower for s in VAULTED_SENSITIVE_KEYS):
-                                continue
-                            scrubbed_cfg[k] = v
-                        data_copy["config"] = scrubbed_cfg
+                    if isinstance(cfg, dict):
+                        if cfg.get("credential_id"):
+                            scrubbed_cfg = {}
+                            for k, v in cfg.items():
+                                k_lower = str(k).lower().strip()
+                                if any(s in k_lower for s in VAULTED_SENSITIVE_KEYS):
+                                    continue
+                                scrubbed_cfg[k] = v
+                            data_copy["config"] = scrubbed_cfg
+                        else:
+                            if clean_configs and nid in clean_configs:
+                                data_copy["config"] = dict(clean_configs[nid])
+                            else:
+                                data_copy["config"] = encrypt_node_config_secrets(cfg)
                         n_copy["data"] = data_copy
                 sanitized_nodes.append(n_copy)
             else:
@@ -228,6 +255,54 @@ def sanitize_vaulted_node_configs(
         clean_nodes = sanitized_nodes
 
     return clean_nodes, clean_configs
+
+
+def mask_workflow_configs_for_frontend(
+    nodes: Optional[List[Dict[str, Any]]],
+    node_configs: Optional[Dict[str, Any]]
+) -> Tuple[Optional[List[Dict[str, Any]]], Optional[Dict[str, Any]]]:
+    """
+    Masks MultiFernet-encrypted ciphertext tokens in node configurations before
+    returning to the frontend (e.g. converting 'gAAAAA...' to '••••••••').
+    """
+    masked_configs = dict(node_configs) if isinstance(node_configs, dict) else None
+    masked_nodes = list(nodes) if isinstance(nodes, list) else None
+
+    if masked_configs:
+        for nid, cfg in list(masked_configs.items()):
+            if isinstance(cfg, dict):
+                m_cfg = {}
+                for k, v in cfg.items():
+                    if is_encrypted_token(v):
+                        m_cfg[k] = "••••••••"
+                    else:
+                        m_cfg[k] = v
+                masked_configs[nid] = m_cfg
+
+    if masked_nodes:
+        m_nodes = []
+        for n in masked_nodes:
+            if isinstance(n, dict):
+                n_copy = dict(n)
+                data = n_copy.get("data")
+                if isinstance(data, dict):
+                    data_copy = dict(data)
+                    cfg = data_copy.get("config")
+                    if isinstance(cfg, dict):
+                        m_cfg = {}
+                        for k, v in cfg.items():
+                            if is_encrypted_token(v):
+                                m_cfg[k] = "••••••••"
+                            else:
+                                m_cfg[k] = v
+                        data_copy["config"] = m_cfg
+                        n_copy["data"] = data_copy
+                m_nodes.append(n_copy)
+            else:
+                m_nodes.append(n)
+        masked_nodes = m_nodes
+
+    return masked_nodes, masked_configs
 
 
 def sanitize_node_configs_credentials(obj: Any) -> Any:
@@ -1638,6 +1713,9 @@ async def get_workflow(
         )
 
         clean_base_name = strip_run_label_from_name(wf.name) or wf.name
+        safe_snapshot_nodes, safe_snapshot_configs = mask_workflow_configs_for_frontend(
+            exec_rec.snapshot_nodes or [], exec_rec.snapshot_node_configs or {}
+        )
         return WorkflowResponse(
             id=wf.id,
             workflow_id=wf.id,
@@ -1646,9 +1724,9 @@ async def get_workflow(
             dataset_id=wf.dataset_id,
             dataset_name=wf.dataset_name,
             datasets=wf_datasets,
-            nodes=exec_rec.snapshot_nodes or [],
+            nodes=safe_snapshot_nodes,
             edges=exec_rec.snapshot_edges or [],
-            node_configs=exec_rec.snapshot_node_configs or {},
+            node_configs=safe_snapshot_configs,
             last_execution=hist_exec_dict,
             created_at=exec_rec.created_at or wf.created_at,
             updated_at=exec_rec.created_at or wf.updated_at,
@@ -1665,6 +1743,7 @@ async def get_workflow(
     )
     wf.workflow_id = wf.id
     wf.name = clean_workbook_name(wf.name) or wf.name
+    wf.nodes, wf.node_configs = mask_workflow_configs_for_frontend(wf.nodes, wf.node_configs)
     return wf
 
 
@@ -2320,6 +2399,9 @@ async def _persist_execution(
         if wf_rec:
             exec_nodes_payload, exec_edges_payload, exec_node_configs = (
                 workflow_graph_to_db_payload(workflow)
+            )
+            exec_nodes_payload, exec_node_configs = sanitize_vaulted_node_configs(
+                exec_nodes_payload, exec_node_configs, existing_wf=wf_rec
             )
             safe_node_results = [
                 nr.model_dump() if hasattr(nr, "model_dump") else (nr.dict() if hasattr(nr, "dict") else nr)
