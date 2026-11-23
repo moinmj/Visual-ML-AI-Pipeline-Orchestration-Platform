@@ -605,6 +605,25 @@ class NodeStepExecutor:
                     except Exception as cred_res_err:
                         logger.warning(f"Failed to resolve credential '{cred_id}' for node '{nid}': {cred_res_err}")
 
+                # Add Workflow: load the child through the tenant-guarded ORM session, with its
+                # datasets and saved credentials, instead of letting the recipe query the DB itself
+                from backend.app.workflows.sub_workflows import (
+                    ADD_WORKFLOW_RECIPE_IDS, SUB_WORKFLOW_DEFINITION_KEY, SUB_WORKFLOW_ERROR_KEY,
+                    load_sub_workflow_graph,
+                )
+                child_wf_id = str(merged_config.get("workflow_id") or "").strip()
+                if r_id in ADD_WORKFLOW_RECIPE_IDS and child_wf_id:
+                    try:
+                        if db is not None:
+                            child_graph = await load_sub_workflow_graph(child_wf_id, db, tenant_id)
+                        else:
+                            from backend.app.infrastructure.database.session import AsyncSessionLocal
+                            async with AsyncSessionLocal() as session:
+                                child_graph = await load_sub_workflow_graph(child_wf_id, session, tenant_id)
+                        merged_config[SUB_WORKFLOW_DEFINITION_KEY] = child_graph
+                    except ValueError as sub_err:
+                        merged_config[SUB_WORKFLOW_ERROR_KEY] = str(sub_err)
+
                 from backend.app.core.crypto import decrypt_node_config_secrets
                 node_exec_cfg = decrypt_node_config_secrets(with_tenant_config(merged_config))
                 outputs = await asyncio.to_thread(

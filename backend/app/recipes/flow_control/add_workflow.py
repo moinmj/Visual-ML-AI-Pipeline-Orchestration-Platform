@@ -95,33 +95,75 @@ class AddWorkflowRecipe(BaseRecipe):
             "required": ["workflow_id"],
         }
 
-    @staticmethod
-    def _load_child_workflow_sync(workflow_id: str) -> Optional[Dict[str, Any]]:
-        """Synchronously loads workflow definition from DB using SQLAlchemy sync engine or fallback."""
-        try:
+    _sync_engine = None
+
+    @classmethod
+    def _get_sync_engine(cls):
+        """One shared sync engine for the fallback loader (was: a new engine per call, never disposed)."""
+        if cls._sync_engine is None:
+            from sqlalchemy import create_engine
             from backend.app.core.config import settings
-            from sqlalchemy import create_engine, text
-            raw_url = str(settings.DATABASE_URL)
-            sync_url = raw_url.replace("+aiosqlite", "").replace("+asyncpg", "")
-            engine = create_engine(sync_url)
-            with engine.connect() as conn:
-                stmt = text("SELECT id, name, nodes, edges, node_configs, last_execution FROM workflows WHERE id = :wid AND is_active = 1")
-                res = conn.execute(stmt, {"wid": workflow_id})
-                row = res.fetchone()
-                if row:
-                    nodes_data = json.loads(row[2]) if isinstance(row[2], str) else (row[2] or [])
-                    edges_data = json.loads(row[3]) if isinstance(row[3], str) else (row[3] or [])
-                    configs_data = json.loads(row[4]) if isinstance(row[4], str) else (row[4] or {})
-                    return {
-                        "id": str(row[0]),
-                        "name": str(row[1]),
-                        "nodes": nodes_data,
-                        "edges": edges_data,
-                        "node_configs": configs_data,
-                    }
+            sync_url = str(settings.DATABASE_URL).replace("+aiosqlite", "").replace("+asyncpg", "")
+            cls._sync_engine = create_engine(sync_url, pool_pre_ping=True)
+        return cls._sync_engine
+
+    @classmethod
+    def _load_child_workflow_sync(cls, workflow_id: str) -> Optional[Any]:
+        """
+        Fallback for callers that didn't prepare the child in the API request (normally
+        preload_sub_workflows does). Uses an ORM Session, so the tenant guard filters the row
+        to the caller's tenant, and portable boolean/NULL checks that work on Postgres and SQLite.
+        Saved credentials and datasets of the child are NOT preloaded on this path.
+        """
+        try:
+            from sqlalchemy import select
+            from sqlalchemy.orm import Session
+            from backend.app.workflows.models import Workflow
+            from backend.app.workflows.router import db_workflow_to_graph
+            with Session(cls._get_sync_engine()) as session:
+                wf = session.execute(
+                    select(Workflow).where(
+                        Workflow.id == workflow_id,
+                        Workflow.is_active.is_(True),
+                        Workflow.deleted_at.is_(None),
+                    )
+                ).scalar_one_or_none()
+                if wf is None:
+                    return None
+                graph = db_workflow_to_graph(wf)
+                graph.id = graph.workflow_id = str(wf.id)
+                graph.name = wf.name
+                logger.warning(
+                    f"Sub-workflow '{workflow_id}' was loaded without preparation; "
+                    "its saved credentials and datasets were not preloaded."
+                )
+                return graph
         except Exception as e:
-            logger.warning(f"Failed to load child workflow '{workflow_id}' synchronously from DB: {e}")
+            logger.warning(f"Failed to load child workflow '{workflow_id}' from DB: {e}")
         return None
+
+    @staticmethod
+    def _graph_from_dict(child: Dict[str, Any]) -> Any:
+        """Builds a runnable graph from a {id, name, nodes, edges, node_configs} dict."""
+        from types import SimpleNamespace
+        from backend.app.workflows.router import db_workflow_to_graph
+
+        def _parse(value, default):
+            if isinstance(value, str):
+                try:
+                    return json.loads(value)
+                except Exception:
+                    return default
+            return value or default
+
+        graph = db_workflow_to_graph(SimpleNamespace(
+            nodes=_parse(child.get("nodes"), []),
+            edges=_parse(child.get("edges"), []),
+            node_configs=_parse(child.get("node_configs"), {}),
+        ))
+        graph.id = graph.workflow_id = str(child.get("id") or "")
+        graph.name = child.get("name")
+        return graph
 
     def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
         t0 = time.time()
@@ -168,21 +210,26 @@ class AddWorkflowRecipe(BaseRecipe):
             raise ExecutionException(err_msg)
 
         # 3. Load Child Workflow
-        child_dict = None
-        # Check context cache first
-        if context and isinstance(context, dict):
-            cached_wfs = context.get("_cached_sub_workflows", {})
-            if workflow_id in cached_wfs:
-                child_dict = cached_wfs[workflow_id]
+        # Normally prepared in the API request by preload_sub_workflows (tenant-checked,
+        # credentials and datasets preloaded); see backend/app/workflows/sub_workflows.py.
+        from backend.app.workflows.sub_workflows import SUB_WORKFLOW_DEFINITION_KEY, SUB_WORKFLOW_ERROR_KEY
+        child_graph = None
+        prepare_error = config.get(SUB_WORKFLOW_ERROR_KEY)
+        if not prepare_error:
+            child_graph = config.get(SUB_WORKFLOW_DEFINITION_KEY)
+            if child_graph is None and context and isinstance(context, dict):
+                cached = (context.get("_cached_sub_workflows") or {}).get(workflow_id)
+                if isinstance(cached, dict):
+                    child_graph = self._graph_from_dict(cached)
+                elif cached is not None:
+                    child_graph = cached
+            if child_graph is None:
+                child_graph = self._load_child_workflow_sync(workflow_id)
 
-        if not child_dict:
-            child_dict = self._load_child_workflow_sync(workflow_id)
-
-        # If workflow was not found in DB, fallback gracefully with clear error
-        if not child_dict:
-            err_msg = (
-                f"Sub-workflow '{workflow_name}' (ID: {workflow_id}) could not be loaded from database. "
-                "Ensure the workflow exists and has not been deleted."
+        if child_graph is None:
+            err_msg = prepare_error or (
+                f"Sub-workflow '{workflow_name}' (ID: {workflow_id}) could not be found. "
+                "It may have been deleted, or it belongs to another workspace."
             )
             logger.error(err_msg)
             if propagate_errors:
@@ -197,14 +244,14 @@ class AddWorkflowRecipe(BaseRecipe):
                 "metrics": {"status": "NOT_FOUND", "duration_ms": round((time.time() - t0) * 1000, 2)}
             }
 
-        actual_name = child_dict.get("name") or workflow_name
-        child_nodes = child_dict.get("nodes", [])
-        child_edges = child_dict.get("edges", [])
-        child_configs = child_dict.get("node_configs", {})
+        actual_name = getattr(child_graph, "name", None) or workflow_name
+        child_nodes = list(getattr(child_graph, "nodes", None) or [])
 
         # 4. Verify Start and End Anchors exist
-        start_nodes = [n for n in child_nodes if (n.get("recipe_id") or n.get("type")) in ("workflow_start", "start_anchor")]
-        end_nodes = [n for n in child_nodes if (n.get("recipe_id") or n.get("type")) in ("workflow_end", "end_anchor")]
+        start_aliases = {"workflow_start", "start_anchor", "sub_process_start", "workflow_input"}
+        end_aliases = {"workflow_end", "end_anchor", "sub_process_end", "workflow_output"}
+        start_nodes = [n for n in child_nodes if str(n.recipe_id).strip().lower() in start_aliases]
+        end_nodes = [n for n in child_nodes if str(n.recipe_id).strip().lower() in end_aliases]
 
         if not start_nodes or not end_nodes:
             missing_parts = []
@@ -229,37 +276,8 @@ class AddWorkflowRecipe(BaseRecipe):
                 "metrics": {"status": "INVALID_ANCHORS", "duration_ms": round((time.time() - t0) * 1000, 2)}
             }
 
-        # 5. Build Child Graph and Context
-        from backend.app.engine.dag.graph import WorkflowGraph, WorkflowNode, WorkflowEdge
+        # 5. Build Child Context
         from backend.app.engine.execution.executor import DAGExecutor
-
-        normalized_nodes = [
-            WorkflowNode(
-                id=n.get("id"),
-                recipe_id=n.get("recipe_id") or n.get("type", ""),
-                config=child_configs.get(n.get("id"), n.get("config", {})),
-                label=n.get("label") or n.get("data", {}).get("label")
-            )
-            for n in child_nodes
-        ]
-        normalized_edges = [
-            WorkflowEdge(
-                source=e.get("source"),
-                target=e.get("target"),
-                source_handle=e.get("source_handle") or e.get("sourceHandle"),
-                target_handle=e.get("target_handle") or e.get("targetHandle")
-            )
-            for e in child_edges
-        ]
-
-        child_graph = WorkflowGraph(
-            id=workflow_id,
-            workflow_id=workflow_id,
-            name=actual_name,
-            nodes=normalized_nodes,
-            edges=normalized_edges,
-            node_configs=child_configs
-        )
 
         child_context = dict(context or {})
         child_context["sub_workflow_input"] = in_df.copy()
@@ -338,7 +356,7 @@ class AddWorkflowRecipe(BaseRecipe):
 
         # 8. Extract Final DataFrame from End Anchor
         out_df = None
-        end_node_id = end_nodes[0].get("id")
+        end_node_id = end_nodes[0].id
 
         # Priority 1: Check NodeStepExecutor disk cache for uncompressed parquet output
         try:

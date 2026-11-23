@@ -6,17 +6,25 @@ from httpx import AsyncClient, ASGITransport
 
 from backend.app.main import app
 from backend.app.core.security import get_current_user, TokenData
-from backend.app.infrastructure.database.session import init_db
+from backend.app.core.tenant_context import set_current_tenant_id
+from backend.app.infrastructure.database.session import engine, init_db
 
 ROLES = ["Tenant Admin", "Data Scientist", "ML Engineer"]
 PLAIN = "rsue weop wtvo expq "
 MASK = "••••••••"
 
 
+async def _tenant_1_user():
+    # The real get_current_user also sets the request's tenant; the tenant guard needs it
+    # (without it every query matches nothing). Async so it runs in the request's own context.
+    set_current_tenant_id(1)
+    return TokenData("user-t1", 1, ROLES, ["*"])
+
+
 @pytest.fixture(autouse=True)
 def _as_tenant():
     saved = app.dependency_overrides.get(get_current_user)
-    app.dependency_overrides[get_current_user] = lambda: TokenData("user-t1", 1, ROLES, ["*"])
+    app.dependency_overrides[get_current_user] = _tenant_1_user
     yield
     if saved is not None:
         app.dependency_overrides[get_current_user] = saved
@@ -41,6 +49,7 @@ def _assert_masked(resp):
 
 @pytest.mark.asyncio
 async def test_create_and_update_responses_mask_secrets():
+    await engine.dispose()  # pooled connections from earlier tests belong to a closed event loop
     await init_db()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.post("/api/v1/workflows/", json=_body(str(uuid.uuid4()), PLAIN))
