@@ -237,3 +237,87 @@ async def test_inspect_recipe_auto_saves_from_node_config():
         assert res.saved_credential_id == "cred-inspect-uuid-5678"
         assert res.saved_credential_name == "Inspect Saved Postgres"
         mock_create_cred.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_execute_node_step_does_not_duplicate_when_using_credential_mode():
+    """Verify that execute_node_step never creates duplicate credentials when connection_mode is 'credential'."""
+    stored_cred_data = {
+        "host": "prod-mysql.internal",
+        "port": 3306,
+        "database": "sales_db",
+        "username": "sales_reader",
+        "password": "Password123"
+    }
+
+    nodes = [
+        {
+            "id": "node_mysql_stored",
+            "recipe_id": "mysql_connector",
+            "data": {
+                "config": {
+                    "connection_mode": "credential",
+                    "credential_id": "vault-cred-already-saved",
+                    "save_credential": True,  # Hidden toggle remnant from previous host_port configuration
+                    "credential_name": "MySQL Production"
+                }
+            }
+        }
+    ]
+
+    with patch("backend.app.recipes.ingestion.mysql_connector.MySQLConnectorRecipe.execute") as mock_exec, \
+         patch("backend.app.credentials.service.CredentialService.get_credential_data", new_callable=AsyncMock) as mock_get_cred, \
+         patch("backend.app.credentials.service.CredentialService.create_credential", new_callable=AsyncMock) as mock_create_cred:
+
+        mock_exec.return_value = {
+            "dataframe": MagicMock(columns=["id"]),
+            "output_summary": {"status": "SUCCESS"}
+        }
+        mock_get_cred.return_value = stored_cred_data
+
+        resp = await NodeStepExecutor.execute_node_step(
+            target_node_id="node_mysql_stored",
+            nodes=nodes,
+            edges=[],
+            tenant_id=1,
+            session_id="test_sess_no_duplicate"
+        )
+
+        assert resp.success is True
+        mock_get_cred.assert_called_once()
+        # Ensure create_credential was NEVER called (no duplicate copy formed)
+        mock_create_cred.assert_not_called()
+        assert resp.saved_credential_id is None
+
+
+@pytest.mark.asyncio
+async def test_inspect_recipe_does_not_duplicate_when_using_credential_mode():
+    """Verify that inspect_recipe does not auto-save when testing an already stored credential."""
+    from backend.app.recipes.router import inspect_recipe, RecipeInspectRequest
+    from backend.app.core.security import TokenData
+
+    user = TokenData(sub="user-1", tenant_id=10, roles=["admin"], permissions=["*"], email="user@aiiotgeeks.com")
+    db_mock = AsyncMock()
+
+    body = RecipeInspectRequest(
+        action="test_connection",
+        config={
+            "connection_mode": "credential",
+            "credential_id": "vault-cred-already-saved",
+            "save_credential": True  # Hidden toggle remnant
+        }
+    )
+
+    with patch("backend.app.recipes.ingestion.mysql_connector.MySQLConnectorRecipe.inspect") as mock_inspect, \
+         patch("backend.app.credentials.service.CredentialService.get_credential_data", new_callable=AsyncMock) as mock_get_cred, \
+         patch("backend.app.credentials.service.CredentialService.create_credential", new_callable=AsyncMock) as mock_create_cred:
+
+        mock_inspect.return_value = {"success": True, "message": "Connection verified"}
+        mock_get_cred.return_value = {"host": "mysql.internal", "username": "root", "password": "abc"}
+
+        res = await inspect_recipe(recipe_id="mysql_connector", body=body, user=user, db=db_mock)
+
+        assert res.success is True
+        mock_get_cred.assert_called_once()
+        mock_create_cred.assert_not_called()
+        assert res.saved_credential_id is None

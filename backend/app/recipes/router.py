@@ -196,6 +196,21 @@ async def run_recipe(
     # It is added AFTER the body config, so a caller cannot override it.
     config = {**body.config, "tenant_id": user.tenant_id}
 
+    # Resolve stored credential if credential_id is supplied
+    run_cred_id = str(config.get("credential_id", "")).strip()
+    if run_cred_id:
+        try:
+            stored_data = await CredentialService.get_credential_data(db=db, credential_id=run_cred_id, tenant_id=user.tenant_id)
+            if stored_data and isinstance(stored_data, dict):
+                for ck, cv in stored_data.items():
+                    if ck in ("save_credential", "credential_name", "credential_id"):
+                        continue
+                    if ck not in config or not config[ck]:
+                        config[ck] = cv
+                config["save_credential"] = False
+        except Exception as cred_err:
+            logger.warning(f"Failed to resolve credential '{run_cred_id}' in run_recipe: {cred_err}")
+
     # Validate config before executing
     errors = recipe.validate_config(config)
     if errors:
@@ -241,7 +256,12 @@ async def run_recipe(
 
     saved_cred_id = None
     saved_cred_name = None
-    if bool(config.get("save_credential", False)):
+    is_using_existing_cred = (
+        str(config.get("connection_mode", "")).strip().lower() == "credential"
+        or bool(run_cred_id)
+        or bool(str(config.get("credential_id", "")).strip())
+    )
+    if bool(config.get("save_credential", False)) and not is_using_existing_cred:
         try:
             provider = recipe_id.replace("_connector", "").lower()
             default_name = str(config.get("credential_name") or f"{recipe.name} ({config.get('host', config.get('database', 'Connection'))})").strip()
@@ -252,7 +272,7 @@ async def run_recipe(
             }
             cred_payload = {
                 k: v for k, v in config.items()
-                if k not in ("save_credential", "credential_name", "tenant_id", "dry_run", "sample_size") and v is not None and v != ""
+                if k not in ("save_credential", "credential_name", "credential_id", "tenant_id", "dry_run", "sample_size") and v is not None and v != ""
             }
             cred = await CredentialService.create_credential(
                 db=db,
@@ -354,12 +374,17 @@ async def inspect_recipe(
     config["tenant_id"] = user.tenant_id
 
     # Resolve stored credential if credential_id is supplied
-    cred_id = str(config.get("credential_id", "")).strip()
+    cred_id = str(config.get("credential_id", "")).strip() or str(getattr(body, "credential_id", "") or "").strip()
     if cred_id:
         try:
             stored_data = await CredentialService.get_credential_data(db=db, credential_id=cred_id, tenant_id=user.tenant_id)
             if stored_data and isinstance(stored_data, dict):
-                config = {**stored_data, **config}
+                for ck, cv in stored_data.items():
+                    if ck in ("save_credential", "credential_name", "credential_id"):
+                        continue
+                    if ck not in config or not config[ck]:
+                        config[ck] = cv
+                config["save_credential"] = False
         except Exception as cred_err:
             logger.warning(f"Failed to resolve credential '{cred_id}': {cred_err}")
 
@@ -378,7 +403,12 @@ async def inspect_recipe(
 
     saved_cred_id = None
     saved_cred_name = None
-    if (body.save_credential or config.get("save_credential")) and res.get("success", False):
+    is_using_existing_cred = (
+        str(config.get("connection_mode", "")).strip().lower() == "credential"
+        or bool(cred_id)
+        or bool(getattr(body, "credential_id", None))
+    )
+    if (body.save_credential or config.get("save_credential")) and res.get("success", False) and not is_using_existing_cred:
         try:
             provider = recipe_id.replace("_connector", "").lower()
             default_name = (
@@ -391,11 +421,15 @@ async def inspect_recipe(
                 for k in ("host", "port", "database", "username", "account", "warehouse", "ssl_mode")
                 if k in config and config[k]
             }
+            cred_payload = {
+                k: v for k, v in config.items()
+                if k not in ("save_credential", "credential_name", "credential_id", "tenant_id", "dry_run", "sample_size") and v is not None and v != ""
+            }
             cred = await CredentialService.create_credential(
                 db=db,
                 provider=provider,
                 name=default_name,
-                data=config,
+                data=cred_payload,
                 tenant_id=user.tenant_id,
                 user_id=getattr(user, 'user_id', getattr(user, 'sub', None)),
                 metadata_info=safe_meta,
