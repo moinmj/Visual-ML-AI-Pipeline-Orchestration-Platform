@@ -38,6 +38,7 @@ class Credential(Base):
             "name": self.name,
             "auth_type": self.auth_type,
             "metadata_info": self.metadata_info or {},
+            "has_secret": bool(self.encrypted_data),
             "is_active": self.is_active,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
