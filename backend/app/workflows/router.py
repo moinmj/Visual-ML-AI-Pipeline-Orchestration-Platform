@@ -3,7 +3,6 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 from fastapi.concurrency import run_in_threadpool
 import asyncio
-import copy
 import time
 import json as _json
 from typing import Dict, Any, List, Optional, Union
@@ -167,34 +166,32 @@ async def resolve_workflow_dataset(
 
 
 
-from backend.app.workflows.security import (
-    encrypt_node_configs,
-    decrypt_node_configs,
-    encrypt_workflow_nodes,
-    decrypt_workflow_nodes,
-    sanitize_node_configs_credentials,
+SENSITIVE_KEY_SUBSTRINGS = (
+    "password", "secret", "api_key", "apikey", "access_token",
+    "refresh_token", "private_key", "credential_id", "auth_token",
+    "bearer_token", "service_account_key"
 )
 
 
-def to_workflow_response(wf: Workflow, datasets: Optional[List[Dict[str, Any]]] = None) -> WorkflowResponse:
-    """Constructs a WorkflowResponse with transparently decrypted nodes and node_configs for canvas UI interaction."""
-    clean_name = clean_workbook_name(wf.name) or wf.name
-    return WorkflowResponse(
-        id=wf.id,
-        workflow_id=wf.id,
-        name=clean_name,
-        description=wf.description,
-        dataset_id=wf.dataset_id,
-        dataset_name=wf.dataset_name,
-        datasets=datasets or getattr(wf, "datasets", []),
-        nodes=decrypt_workflow_nodes(wf.nodes or []),
-        edges=wf.edges or [],
-        node_configs=decrypt_node_configs(wf.node_configs or {}),
-        last_execution=decrypt_node_configs(wf.last_execution) if isinstance(wf.last_execution, dict) else wf.last_execution,
-        created_at=wf.created_at,
-        updated_at=wf.updated_at,
-        is_active=wf.is_active
-    )
+def sanitize_node_configs_credentials(obj: Any) -> Any:
+    """
+    Recursively redacts passwords, tokens, API keys and credentials in node configurations
+    so exported workflows can be safely shared across environments without secret leakage.
+    """
+    if isinstance(obj, dict):
+        sanitized = {}
+        for k, v in obj.items():
+            k_lower = str(k).lower().strip()
+            if k_lower == "token" or any(s in k_lower for s in SENSITIVE_KEY_SUBSTRINGS):
+                sanitized[k] = ""
+            elif isinstance(v, (dict, list)):
+                sanitized[k] = sanitize_node_configs_credentials(v)
+            else:
+                sanitized[k] = v
+        return sanitized
+    elif isinstance(obj, list):
+        return [sanitize_node_configs_credentials(item) for item in obj]
+    return obj
 
 
 async def resolve_all_workflow_datasets(
@@ -709,9 +706,9 @@ async def record_workflow_execution_history(
                 run_label="Run #1",
                 status=normalize_history_status(prior_ex.get("status") or "SUCCESS"),
                 total_duration_ms=round(float(prior_ex.get("total_duration_ms") or 0.0), 2),
-                snapshot_nodes=jsonable_encoder(encrypt_workflow_nodes(prior_nodes)),
+                snapshot_nodes=jsonable_encoder(prior_nodes),
                 snapshot_edges=jsonable_encoder(prior_edges),
-                snapshot_node_configs=jsonable_encoder(encrypt_node_configs(prior_configs)),
+                snapshot_node_configs=jsonable_encoder(prior_configs),
                 metrics=jsonable_encoder(prior_ex.get("final_metrics") or prior_ex.get("metrics") or {}),
                 reports=jsonable_encoder({
                     "anomaly_summary": prior_ex.get("anomaly_summary"),
@@ -737,9 +734,9 @@ async def record_workflow_execution_history(
         run_label=run_label or default_label,
         status=normalize_history_status(status_str or "SUCCESS"),
         total_duration_ms=round(float(total_duration_ms or 0.0), 2),
-        snapshot_nodes=jsonable_encoder(encrypt_workflow_nodes(nodes or [])),
+        snapshot_nodes=jsonable_encoder(nodes or []),
         snapshot_edges=jsonable_encoder(edges or []),
-        snapshot_node_configs=jsonable_encoder(encrypt_node_configs(node_configs or {})),
+        snapshot_node_configs=jsonable_encoder(node_configs or {}),
         metrics=jsonable_encoder(metrics or {}),
         reports=jsonable_encoder(reports or {}),
         step_snapshots=jsonable_encoder(step_snapshots or {}),
@@ -827,15 +824,6 @@ async def save_workflow(
             if ctx_wf:
                 target_id = ctx_wf_id
                 wf = ctx_wf
-        elif not wf and target_id:
-            cross_chk = await db.execute(
-                select(Workflow.id).where(Workflow.id == target_id).execution_options(skip_tenant_filter=True)
-            )
-            if cross_chk.first() is not None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Workflow workbook '{target_id}' not found."
-                )
     else:
         target_id = str(uuid.uuid4())
 
@@ -871,52 +859,29 @@ async def save_workflow(
         if ds_name is not None:
             wf.dataset_name = ds_name
         if payload.nodes is not None:
-            wf.nodes = encrypt_workflow_nodes(payload.nodes)
+            wf.nodes = payload.nodes
         if payload.edges is not None:
             wf.edges = payload.edges
         if payload.node_configs is not None:
-            wf.node_configs = encrypt_node_configs(payload.node_configs)
+            wf.node_configs = payload.node_configs
         if resolved_last_exec is not None:
-            if isinstance(resolved_last_exec, dict):
-                enc_last = copy.deepcopy(resolved_last_exec)
-                if "snapshot_node_configs" in enc_last:
-                    enc_last["snapshot_node_configs"] = encrypt_node_configs(enc_last["snapshot_node_configs"])
-                if "node_configs" in enc_last:
-                    enc_last["node_configs"] = encrypt_node_configs(enc_last["node_configs"])
-                if "snapshot_nodes" in enc_last:
-                    enc_last["snapshot_nodes"] = encrypt_workflow_nodes(enc_last["snapshot_nodes"])
-                if "nodes" in enc_last:
-                    enc_last["nodes"] = encrypt_workflow_nodes(enc_last["nodes"])
-                wf.last_execution = enc_last
-            else:
-                wf.last_execution = resolved_last_exec
+            wf.last_execution = resolved_last_exec
         wf.is_active = True
         wf.deleted_at = None
         wf.updated_at = datetime.now(timezone.utc)
     else:
         # Create new (never reuse an ID that exists in another tenant)
         target_id = await _unused_id(db, Workflow, target_id)
-        enc_last = copy.deepcopy(resolved_last_exec) if isinstance(resolved_last_exec, dict) else resolved_last_exec
-        if isinstance(enc_last, dict):
-            if "snapshot_node_configs" in enc_last:
-                enc_last["snapshot_node_configs"] = encrypt_node_configs(enc_last["snapshot_node_configs"])
-            if "node_configs" in enc_last:
-                enc_last["node_configs"] = encrypt_node_configs(enc_last["node_configs"])
-            if "snapshot_nodes" in enc_last:
-                enc_last["snapshot_nodes"] = encrypt_workflow_nodes(enc_last["snapshot_nodes"])
-            if "nodes" in enc_last:
-                enc_last["nodes"] = encrypt_workflow_nodes(enc_last["nodes"])
-
         wf = Workflow(
             id=target_id,
             name=clean_incoming_name or payload.name,
             description=payload.description,
             dataset_id=ds_id,
             dataset_name=ds_name,
-            nodes=encrypt_workflow_nodes(payload.nodes),
+            nodes=payload.nodes,
             edges=payload.edges,
-            node_configs=encrypt_node_configs(payload.node_configs),
-            last_execution=enc_last,
+            node_configs=payload.node_configs,
+            last_execution=resolved_last_exec,
             is_active=True
         )
         db.add(wf)
@@ -960,7 +925,7 @@ async def save_workflow(
             logger.exception(f"Failed to record workflow execution history on save: {e}")
 
     await db.refresh(wf)
-    wf_datasets = await resolve_all_workflow_datasets(
+    wf.datasets = await resolve_all_workflow_datasets(
         db=db,
         primary_dataset_id=wf.dataset_id,
         primary_dataset_name=wf.dataset_name,
@@ -968,7 +933,9 @@ async def save_workflow(
         node_configs=wf.node_configs or {},
         edges=wf.edges or []
     )
-    return to_workflow_response(wf, wf_datasets)
+    wf.workflow_id = wf.id
+    wf.name = clean_workbook_name(wf.name) or wf.name
+    return wf
 
 
 
@@ -1112,9 +1079,9 @@ async def _execute_workflow_import(
         description=final_desc,
         dataset_id=mapped_ds_id,
         dataset_name=mapped_ds_name,
-        nodes=encrypt_workflow_nodes(nodes),
+        nodes=nodes,
         edges=edges,
-        node_configs=encrypt_node_configs(node_configs),
+        node_configs=node_configs,
         last_execution=None,
         is_active=True
     )
@@ -1122,7 +1089,7 @@ async def _execute_workflow_import(
     await db.commit()
     await db.refresh(wf)
 
-    wf_datasets = await resolve_all_workflow_datasets(
+    wf.datasets = await resolve_all_workflow_datasets(
         db=db,
         primary_dataset_id=wf.dataset_id,
         primary_dataset_name=wf.dataset_name,
@@ -1130,7 +1097,9 @@ async def _execute_workflow_import(
         node_configs=wf.node_configs or {},
         edges=wf.edges or []
     )
-    return to_workflow_response(wf, wf_datasets)
+    wf.workflow_id = wf.id
+    wf.name = clean_workbook_name(wf.name) or wf.name
+    return wf
 
 
 @router.post(
@@ -1619,16 +1588,16 @@ async def get_workflow(
             dataset_id=wf.dataset_id,
             dataset_name=wf.dataset_name,
             datasets=wf_datasets,
-            nodes=decrypt_workflow_nodes(exec_rec.snapshot_nodes or []),
+            nodes=exec_rec.snapshot_nodes or [],
             edges=exec_rec.snapshot_edges or [],
-            node_configs=decrypt_node_configs(exec_rec.snapshot_node_configs or {}),
+            node_configs=exec_rec.snapshot_node_configs or {},
             last_execution=hist_exec_dict,
             created_at=exec_rec.created_at or wf.created_at,
             updated_at=exec_rec.created_at or wf.updated_at,
             is_active=wf.is_active
         )
 
-    wf_datasets = await resolve_all_workflow_datasets(
+    wf.datasets = await resolve_all_workflow_datasets(
         db=db,
         primary_dataset_id=wf.dataset_id,
         primary_dataset_name=wf.dataset_name,
@@ -1636,7 +1605,9 @@ async def get_workflow(
         node_configs=wf.node_configs or {},
         edges=wf.edges or []
     )
-    return to_workflow_response(wf, wf_datasets)
+    wf.workflow_id = wf.id
+    wf.name = clean_workbook_name(wf.name) or wf.name
+    return wf
 
 
 
@@ -1666,7 +1637,6 @@ async def export_workflow(
 
     # 1. Sanitize sensitive credentials
     sanitized_configs = sanitize_node_configs_credentials(wf.node_configs or {})
-    sanitized_nodes = sanitize_node_configs_credentials(wf.nodes or [])
 
     # 2. Extract discovered dataset requirements
     all_ds = await resolve_all_workflow_datasets(
@@ -1707,7 +1677,7 @@ async def export_workflow(
         },
         "dataset_requirements": dataset_reqs,
         "pipeline": {
-            "nodes": sanitized_nodes,
+            "nodes": wf.nodes or [],
             "edges": wf.edges or [],
             "node_configs": sanitized_configs
         },
@@ -1747,11 +1717,6 @@ async def upsert_workflow(
 
     result = await db.execute(select(Workflow).where(Workflow.id == target_id))
     wf = result.scalar_one_or_none()
-    if not wf and target_id.lower() not in ["new", "create", "0", "undefined", "null"]:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Workflow workbook '{workflow_id}' not found."
-        )
 
     ds_id, ds_name = await resolve_workflow_dataset(
         db=db,
@@ -1785,52 +1750,29 @@ async def upsert_workflow(
         if ds_name is not None:
             wf.dataset_name = ds_name
         if payload.nodes is not None:
-            wf.nodes = encrypt_workflow_nodes(payload.nodes)
+            wf.nodes = payload.nodes
         if payload.edges is not None:
             wf.edges = payload.edges
         if payload.node_configs is not None:
-            wf.node_configs = encrypt_node_configs(payload.node_configs)
+            wf.node_configs = payload.node_configs
         if resolved_last_exec is not None:
-            if isinstance(resolved_last_exec, dict):
-                enc_last = copy.deepcopy(resolved_last_exec)
-                if "snapshot_node_configs" in enc_last:
-                    enc_last["snapshot_node_configs"] = encrypt_node_configs(enc_last["snapshot_node_configs"])
-                if "node_configs" in enc_last:
-                    enc_last["node_configs"] = encrypt_node_configs(enc_last["node_configs"])
-                if "snapshot_nodes" in enc_last:
-                    enc_last["snapshot_nodes"] = encrypt_workflow_nodes(enc_last["snapshot_nodes"])
-                if "nodes" in enc_last:
-                    enc_last["nodes"] = encrypt_workflow_nodes(enc_last["nodes"])
-                wf.last_execution = enc_last
-            else:
-                wf.last_execution = resolved_last_exec
+            wf.last_execution = resolved_last_exec
         wf.is_active = True
         wf.deleted_at = None
         wf.updated_at = datetime.now(timezone.utc)
     else:
         # Create new (never reuse an ID that exists in another tenant)
         target_id = await _unused_id(db, Workflow, target_id)
-        enc_last = copy.deepcopy(resolved_last_exec) if isinstance(resolved_last_exec, dict) else resolved_last_exec
-        if isinstance(enc_last, dict):
-            if "snapshot_node_configs" in enc_last:
-                enc_last["snapshot_node_configs"] = encrypt_node_configs(enc_last["snapshot_node_configs"])
-            if "node_configs" in enc_last:
-                enc_last["node_configs"] = encrypt_node_configs(enc_last["node_configs"])
-            if "snapshot_nodes" in enc_last:
-                enc_last["snapshot_nodes"] = encrypt_workflow_nodes(enc_last["snapshot_nodes"])
-            if "nodes" in enc_last:
-                enc_last["nodes"] = encrypt_workflow_nodes(enc_last["nodes"])
-
         wf = Workflow(
             id=target_id,
             name=clean_incoming_name or payload.name or "Untitled Pipeline",
             description=payload.description,
             dataset_id=ds_id,
             dataset_name=ds_name,
-            nodes=encrypt_workflow_nodes(payload.nodes or []),
+            nodes=payload.nodes or [],
             edges=payload.edges or [],
-            node_configs=encrypt_node_configs(payload.node_configs or {}),
-            last_execution=enc_last,
+            node_configs=payload.node_configs or {},
+            last_execution=resolved_last_exec,
             is_active=True
         )
         db.add(wf)
@@ -1882,7 +1824,9 @@ async def upsert_workflow(
         node_configs=wf.node_configs or {},
         edges=wf.edges or []
     )
-    return to_workflow_response(wf, wf.datasets)
+    wf.workflow_id = wf.id
+    wf.name = clean_workbook_name(wf.name) or wf.name
+    return wf
 
 
 @router.post(
@@ -1955,7 +1899,9 @@ async def save_workflow_execution_report(
         node_configs=wf.node_configs or {},
         edges=wf.edges or []
     )
-    return to_workflow_response(wf, wf.datasets)
+    wf.workflow_id = wf.id
+    wf.name = clean_workbook_name(wf.name) or wf.name
+    return wf
 
 
 @router.delete(
@@ -2021,7 +1967,9 @@ async def restore_workflow(
         node_configs=wf.node_configs or {},
         edges=wf.edges or []
     )
-    return to_workflow_response(wf, wf.datasets)
+    wf.workflow_id = wf.id
+    wf.name = clean_workbook_name(wf.name) or wf.name
+    return wf
 
 
 # -------------------------------------------------------------
@@ -2071,7 +2019,7 @@ def workflow_graph_to_db_payload(workflow: WorkflowGraph) -> tuple:
         }
         for e in workflow.edges
     ]
-    return encrypt_workflow_nodes(nodes_payload), edges_payload, encrypt_node_configs(node_configs)
+    return nodes_payload, edges_payload, node_configs
 
 
 def db_workflow_to_graph(wf: Workflow) -> WorkflowGraph:
@@ -2085,7 +2033,6 @@ def db_workflow_to_graph(wf: Workflow) -> WorkflowGraph:
             saved_configs = json.loads(saved_configs)
         except Exception:
             saved_configs = {}
-    saved_configs = decrypt_node_configs(saved_configs)
 
     raw_nodes = wf.nodes or []
     if isinstance(raw_nodes, str):
@@ -2093,7 +2040,6 @@ def db_workflow_to_graph(wf: Workflow) -> WorkflowGraph:
             raw_nodes = json.loads(raw_nodes)
         except Exception:
             raw_nodes = []
-    raw_nodes = decrypt_workflow_nodes(raw_nodes)
 
     for nd in raw_nodes:
         if not isinstance(nd, dict):
@@ -2239,11 +2185,6 @@ async def _autosave_workflow(
 
     result = await db.execute(select(Workflow).where(Workflow.id == target_id))
     wf = result.scalar_one_or_none()
-    if not wf and target_id.lower() not in ["new", "create", "0", "undefined", "null"]:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Workflow workbook '{workflow_id}' not found."
-        )
     if wf:
         incoming_name = workflow_name or workflow.name
         clean_incoming_name = strip_run_label_from_name(incoming_name) if incoming_name else None
@@ -2438,17 +2379,6 @@ async def execute_workflow(
             target_id = wf_match.scalars().first()
         except Exception:
             pass
-    if target_id:
-        cross_chk = await db.execute(
-            select(Workflow.id).where(Workflow.id == target_id).execution_options(skip_tenant_filter=True)
-        )
-        if cross_chk.first() is not None:
-            own_chk = await db.execute(select(Workflow.id).where(Workflow.id == target_id))
-            if own_chk.scalar_one_or_none() is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Workflow workbook '{target_id}' not found."
-                )
     if auto_save:
         target_id = await _autosave_workflow(db, workflow, target_id, workflow_name)
 
@@ -4181,9 +4111,9 @@ async def get_workflow_execution_detail(
                     run_label="Run #1",
                     status="UNRUN",
                     total_duration_ms=0.0,
-                    snapshot_nodes=decrypt_workflow_nodes(unrun_nodes),
+                    snapshot_nodes=unrun_nodes,
                     snapshot_edges=unrun_edges,
-                    snapshot_node_configs=decrypt_node_configs(unrun_configs),
+                    snapshot_node_configs=unrun_configs,
                     metrics={},
                     reports={},
                     step_snapshots={},
@@ -4202,9 +4132,9 @@ async def get_workflow_execution_detail(
         run_label=ex.run_label,
         status=ex.status,
         total_duration_ms=ex.total_duration_ms,
-        snapshot_nodes=decrypt_workflow_nodes(ex.snapshot_nodes or []),
+        snapshot_nodes=ex.snapshot_nodes or [],
         snapshot_edges=ex.snapshot_edges or [],
-        snapshot_node_configs=decrypt_node_configs(ex.snapshot_node_configs or {}),
+        snapshot_node_configs=ex.snapshot_node_configs or {},
         metrics=ex.metrics,
         reports=ex.reports,
         step_snapshots=ex.step_snapshots,

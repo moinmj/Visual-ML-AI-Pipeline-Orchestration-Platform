@@ -3,7 +3,7 @@ import uuid
 from httpx import AsyncClient, ASGITransport
 from backend.app.main import app
 from backend.app.infrastructure.database.session import init_db
-from backend.app.core.security import get_current_user, TokenData
+from backend.app.core.security import get_current_user, TokenData, create_access_token
 from backend.app.core.tenant_context import set_current_tenant_id, set_current_user_id
 
 
@@ -17,7 +17,8 @@ app.dependency_overrides[get_current_user] = _override_user
 
 
 def auth_headers():
-    return {"X-Tenant-Id": "1", "X-User-Role": "Tenant Admin"}
+    token = create_access_token(sub="test-user", tenant_id=1, roles=["Tenant Admin"])
+    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.mark.asyncio

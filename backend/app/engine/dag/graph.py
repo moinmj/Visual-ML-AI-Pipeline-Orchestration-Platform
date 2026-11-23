@@ -227,13 +227,11 @@ class WorkflowGraph(BaseModel):
         has_pipeline = len(connected_node_ids) > 0
 
         # Precompute which nodes on the canvas are valid vs invalid
-        from backend.app.workflows.security import decrypt_node_configs
-
         valid_nodes = set()
         for node in ordered_nodes:
             try:
                 rec = recipe_registry.get(node.recipe_id)
-                cfg = decrypt_node_configs(node.config or {})
+                cfg = node.config or {}
                 if not rec.validate_config(cfg):
                     valid_nodes.add(node.id)
             except Exception:
@@ -245,7 +243,7 @@ class WorkflowGraph(BaseModel):
             except Exception:
                 continue
 
-            cfg = decrypt_node_configs(node.config or {})
+            cfg = node.config or {}
             cfg_errors = recipe.validate_config(cfg)
             if not cfg_errors:
                 continue
