@@ -12,7 +12,6 @@ from backend.app.core import crypto
 from backend.app.core.crypto import (
     encrypt_credential,
     decrypt_credential,
-    decrypt_with_ttl,
     rotate_credential_token,
     encrypt_payload,
     decrypt_payload,
@@ -20,6 +19,19 @@ from backend.app.core.crypto import (
     reset_cipher_cache,
 )
 from backend.app.workflows.router import sanitize_vaulted_node_configs
+
+
+def _account_manager_aes_encrypt(plain: str, secret: str) -> str:
+    """Verbatim copy of Account Manager's aes_encrypt (app/services/connection_adapters.py)."""
+    import base64
+    import hashlib
+    from cryptography.hazmat.primitives import padding
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    key = hashlib.sha256(secret.encode()).digest()
+    padder = padding.PKCS7(128).padder()
+    data = padder.update(plain.encode()) + padder.finalize()
+    enc = Cipher(algorithms.AES(key), modes.CBC(key[:16])).encryptor()
+    return base64.b64encode(enc.update(data) + enc.finalize()).decode()
 
 
 def test_single_key_encryption_decryption():
@@ -31,11 +43,33 @@ def test_single_key_encryption_decryption():
     # Ciphertext must be non-empty and not contain the plaintext
     assert cipher != plain
     assert plain not in cipher
-    assert cipher.startswith("gAAAAA")
+    assert not cipher.startswith("gAAAAA")
 
     # Decrypt must recover the original plaintext exactly
     decrypted = decrypt_credential(cipher)
     assert decrypted == plain
+
+
+def test_matches_account_manager_format():
+    """Ciphertext must be byte-identical to Account Manager's, and theirs must decrypt here."""
+    with patch.dict(os.environ, {"SECRET_KEY": "shared-secret-key"}):
+        plain = "P@ssw0rd-for-postgres"
+        theirs = _account_manager_aes_encrypt(plain, "shared-secret-key")
+        assert encrypt_credential(plain) == theirs
+        assert decrypt_credential(theirs) == plain
+
+
+def test_legacy_fernet_tokens_still_decrypt_and_migrate():
+    """Values saved by the old Fernet version still read, and rotation moves them to AES."""
+    fernet_key = Fernet.generate_key().decode()
+    with patch.dict(os.environ, {"FERNET_KEY": fernet_key, "APP_ENCRYPTION_KEYS": ""}):
+        reset_cipher_cache()
+        old_token = Fernet(fernet_key.encode()).encrypt(b"OldFernetSecret").decode()
+        assert decrypt_credential(old_token) == "OldFernetSecret"
+        migrated = rotate_credential_token(old_token)
+        assert not migrated.startswith("gAAAAA")
+        assert decrypt_credential(migrated) == "OldFernetSecret"
+    reset_cipher_cache()
 
 
 def test_payload_dictionary_encryption_decryption():
@@ -61,68 +95,44 @@ def test_payload_dictionary_encryption_decryption():
     assert decrypted_dict["port"] == 3306
 
 
-def test_multifernet_key_rotation():
+def test_secret_key_rotation_with_legacy_keys():
     """
-    Verify key rotation:
-    1. Encrypt with Key A.
-    2. Add Key B as primary (Key A becomes fallback).
-    3. Ciphertext from Key A can still be decrypted.
-    4. New encryptions use Key B.
-    5. Existing tokens can be rotated in-place to Key B.
+    Same rotation model as Account Manager:
+    SECRET_KEY = new key, DBS_LEGACY_SECRET_KEYS = old keys still accepted for decryption.
     """
-    key_a = Fernet.generate_key().decode()
-    key_b = Fernet.generate_key().decode()
-
-    # Step 1: Encrypt with Key A only
-    with patch.dict(os.environ, {"APP_ENCRYPTION_KEYS": key_a}):
-        reset_cipher_cache()
-        plain_text = "DatabaseSecretForRotation"
+    plain_text = "DatabaseSecretForRotation"
+    with patch.dict(os.environ, {"SECRET_KEY": "key-a", "DBS_LEGACY_SECRET_KEYS": ""}):
         cipher_under_a = encrypt_credential(plain_text)
 
-        # Sanity: decrypt under key A works
+    with patch.dict(os.environ, {"SECRET_KEY": "key-b", "DBS_LEGACY_SECRET_KEYS": "key-a"}):
         assert decrypt_credential(cipher_under_a) == plain_text
+        rotated = rotate_credential_token(cipher_under_a)
+        assert rotated != cipher_under_a
+        assert rotate_credential_token(rotated) == rotated       # already current → unchanged
 
-    # Step 2: Rotate key: Key B is primary (active), Key A is fallback
-    with patch.dict(os.environ, {"APP_ENCRYPTION_KEYS": f"{key_b},{key_a}"}):
-        reset_cipher_cache()
-
-        # Step 3: Old ciphertext under Key A must still decrypt successfully!
-        assert decrypt_credential(cipher_under_a) == plain_text
-
-        # Step 4: New encryption uses Key B
-        cipher_under_b = encrypt_credential(plain_text)
-        assert cipher_under_b != cipher_under_a
-        assert decrypt_credential(cipher_under_b) == plain_text
-
-        # Step 5: Rotate token in-place to Key B
-        rotated_token = rotate_credential_token(cipher_under_a)
-        assert rotated_token != cipher_under_a
-        assert decrypt_credential(rotated_token) == plain_text
-
-    # Verify that rotated token decrypts with Key B alone (Key A removed)
-    with patch.dict(os.environ, {"APP_ENCRYPTION_KEYS": key_b}):
-        reset_cipher_cache()
-        assert decrypt_credential(rotated_token) == plain_text
-
-        # Old unrotated cipher_under_a fails if Key A is completely removed
+    with patch.dict(os.environ, {"SECRET_KEY": "key-b", "DBS_LEGACY_SECRET_KEYS": "", "FERNET_KEY": "",
+                                 "APP_ENCRYPTION_KEYS": ""}):
+        assert decrypt_credential(rotated) == plain_text
         with pytest.raises(ValueError, match="Decryption failed"):
             decrypt_credential(cipher_under_a)
 
 
-def test_decrypt_with_ttl():
-    """Verify that decrypt_with_ttl honors expiration limits."""
-    reset_cipher_cache()
-    token = encrypt_credential("TemporarySecret")
+def test_masked_values_never_saved():
+    """Masked placeholders sent back by the UI keep the stored secret, or are dropped — never stored."""
+    from backend.app.core.crypto import encrypt_node_config_secrets, merge_masked_secrets
 
-    # Within valid TTL -> succeeds
-    valid_decrypted = decrypt_with_ttl(token, max_age_seconds=60)
-    assert valid_decrypted == "TemporarySecret"
+    assert merge_masked_secrets({"password": "********", "host": "h"}, {"password": "real"}) == {
+        "password": "real", "host": "h"}
+    assert merge_masked_secrets({"password": "••••••••"}, {}) == {}
+    assert "password" not in encrypt_node_config_secrets({"password": "*****"})
 
-    # Expired TTL (advance time beyond max_age_seconds) -> returns None
-    import time
-    with patch("time.time", return_value=time.time() + 100):
-        expired = decrypt_with_ttl(token, max_age_seconds=10)
-        assert expired is None
+    class _Wf:
+        node_configs = {}
+        nodes = [{"id": "n1", "data": {"config": {"smtp_password": encrypt_credential("realpwd")}}}]
+
+    nodes = [{"id": "n1", "data": {"config": {"smtp_password": "••••••••"}}}]
+    clean_nodes, _ = sanitize_vaulted_node_configs(nodes, None, existing_wf=_Wf())
+    assert decrypt_credential(clean_nodes[0]["data"]["config"]["smtp_password"]) == "realpwd"
 
 
 def test_legacy_base64_backward_compatibility():
@@ -261,10 +271,9 @@ def test_inline_node_secret_automatic_encryption_and_decryption():
     encrypted_pwd = clean_configs["processor_gmail_2"]["smtp_password"]
     assert encrypted_pwd != "pdaa cezs achk xtin "
     assert is_encrypted_token(encrypted_pwd)
-    assert encrypted_pwd.startswith("gAAAAA")
 
     # In clean_nodes data.config, smtp_password is also encrypted
-    assert clean_nodes[0]["data"]["config"]["smtp_password"].startswith("gAAAAA")
+    assert is_encrypted_token(clean_nodes[0]["data"]["config"]["smtp_password"])
 
     # 2. At runtime execution: decrypt_node_config_secrets recovers the plaintext in memory
     runtime_cfg = decrypt_node_config_secrets(clean_configs["processor_gmail_2"])
@@ -311,7 +320,7 @@ async def test_credential_service_create_and_decrypt():
         assert cred.id is not None
         # Plaintext password MUST NOT appear in the database column
         assert "MySuperSecretPassword#123" not in cred.encrypted_data
-        assert cred.encrypted_data.startswith("gAAAAA")
+        assert decrypt_credential(cred.encrypted_data).startswith("{")
 
         # to_dict must indicate has_secret is True and never expose encrypted_data
         cred_dict = cred.to_dict()
