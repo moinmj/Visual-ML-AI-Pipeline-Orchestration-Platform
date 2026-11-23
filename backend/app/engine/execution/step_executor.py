@@ -605,10 +605,12 @@ class NodeStepExecutor:
                     except Exception as cred_res_err:
                         logger.warning(f"Failed to resolve credential '{cred_id}' for node '{nid}': {cred_res_err}")
 
+                from backend.app.workflows.security import decrypt_node_configs
+                exec_config = decrypt_node_configs(merged_config)
                 outputs = await asyncio.to_thread(
                     recipe.execute,
                     inputs=node_inputs,
-                    config=with_tenant_config(merged_config),
+                    config=with_tenant_config(exec_config),
                     context=session_context
                 )
                 duration_ms = round((time.time() - n_start) * 1000.0, 2)

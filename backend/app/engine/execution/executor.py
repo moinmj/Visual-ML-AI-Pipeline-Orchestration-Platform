@@ -535,6 +535,9 @@ class DAGExecutor:
             parents = parent_map[node.id]
             _emit(on_event, {"type": "node_started", "node_id": node.id, "recipe_id": node.recipe_id})
 
+            from backend.app.workflows.security import decrypt_node_configs
+            node_cfg = decrypt_node_configs(node.config or {})
+
             try:
                 recipe = recipe_registry.get(node.recipe_id)
             except Exception as e:
@@ -553,7 +556,7 @@ class DAGExecutor:
             # 3a. Gracefully Skip Unconnected Draft Nodes with Missing Configuration
             is_unconnected = (has_pipeline and node.id not in connected_node_ids) or (not has_pipeline and len(workflow.nodes) > 1 and node.id not in connected_node_ids)
             if is_unconnected:
-                cfg_errors = recipe.validate_config(node.config or {})
+                cfg_errors = recipe.validate_config(node_cfg)
                 if cfg_errors:
                     logs.append(f"⏭️ Node '{node.id}' [{recipe.name}] ➔ Skipped (unconnected draft node with pending configuration)")
                     _add_result(NodeExecutionResult(
@@ -734,7 +737,7 @@ class DAGExecutor:
             try:
                 # tenant_id comes from the request's token, never from the client's node config
                 from backend.app.core.tenant_context import with_tenant_config
-                outputs = recipe.execute(inputs=node_inputs, config=with_tenant_config(node.config), context=pipeline_context)
+                outputs = recipe.execute(inputs=node_inputs, config=with_tenant_config(node_cfg), context=pipeline_context)
                 node_outputs[node.id] = outputs
 
                 # Propagate standard artifacts to shared context (never overwrite existing valid object with None)
@@ -823,7 +826,7 @@ class DAGExecutor:
 
             except Exception as e:
                 duration_ms = round((time.time() - node_start) * 1000.0, 2)
-                diag = diagnose_execution_error(recipe, e, node_inputs, node.config, pipeline_context)
+                diag = diagnose_execution_error(recipe, e, node_inputs, node_cfg, pipeline_context)
                 err_title = diag["title"]
                 err_msg = diag["message"]
                 err_sugg = diag["suggestion"]

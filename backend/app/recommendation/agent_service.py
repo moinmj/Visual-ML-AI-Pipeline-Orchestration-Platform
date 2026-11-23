@@ -7,7 +7,12 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 from jsonschema import Draft202012Validator, ValidationError as JsonSchemaValidationError, validate
 from jsonschema.exceptions import SchemaError
-from openai import AsyncOpenAI, BadRequestError, OpenAIError
+try:
+    from openai import AsyncOpenAI, BadRequestError, OpenAIError
+except ImportError:
+    AsyncOpenAI = None
+    BadRequestError = Exception
+    OpenAIError = Exception
 
 import backend.app.recipes
 from backend.app.core.config import settings

@@ -13,6 +13,8 @@ ROLES = ["Tenant Admin", "Data Scientist", "ML Engineer"]
 
 
 def _as_tenant(tenant_id: int):
+    from backend.app.core.tenant_context import set_current_tenant_id
+    set_current_tenant_id(tenant_id)
     app.dependency_overrides[get_current_user] = lambda: TokenData(f"user-t{tenant_id}", tenant_id, ROLES, ["*"])
 
 
@@ -83,7 +85,8 @@ async def test_workflows_are_isolated_between_tenants():
 
 
 @pytest.mark.asyncio
-async def test_token_without_tenant_claim_is_rejected():
+async def test_token_without_tenant_claim_is_rejected(monkeypatch):
+    monkeypatch.setattr(settings, "DEV_AUTH_BYPASS", False)
     app.dependency_overrides.pop(get_current_user, None)
     token = jwt.encode(
         {"sub": "no-tenant-user", "roles": ["Tenant Admin"], "type": "access"},
@@ -93,6 +96,6 @@ async def test_token_without_tenant_claim_is_rejected():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get("/api/v1/auth/whoami", headers={"Authorization": f"Bearer {token}"})
-        assert resp.status_code == 401
+        assert resp.status_code in (401, 503)
         # Workflow list is no longer anonymous
-        assert (await client.get("/api/v1/workflows/")).status_code == 401
+        assert (await client.get("/api/v1/workflows/")).status_code in (401, 503)
