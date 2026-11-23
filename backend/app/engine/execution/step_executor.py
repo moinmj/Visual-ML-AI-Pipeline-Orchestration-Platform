@@ -600,8 +600,11 @@ class NodeStepExecutor:
                                 session_context["credentials"] = {}
                             session_context["credentials"][cred_id] = stored_cred
                             for ck, cv in stored_cred.items():
+                                if ck in ("save_credential", "credential_name", "credential_id"):
+                                    continue
                                 if ck not in merged_config or not merged_config[ck]:
                                     merged_config[ck] = cv
+                            merged_config["save_credential"] = False
                     except Exception as cred_res_err:
                         logger.warning(f"Failed to resolve credential '{cred_id}' for node '{nid}': {cred_res_err}")
 
@@ -614,9 +617,15 @@ class NodeStepExecutor:
                 duration_ms = round((time.time() - n_start) * 1000.0, 2)
 
                 # Auto-save credential if save_credential toggle was enabled and execution succeeded
+                # Do NOT auto-save if already using an existing stored credential from vault
                 saved_cred_id = None
                 saved_cred_name = None
-                if bool(merged_config.get("save_credential", False)):
+                is_using_existing_credential = (
+                    str(merged_config.get("connection_mode", "")).strip().lower() == "credential"
+                    or bool(cred_id)
+                    or bool(str(merged_config.get("credential_id", "")).strip())
+                )
+                if bool(merged_config.get("save_credential", False)) and not is_using_existing_credential:
                     try:
                         from backend.app.credentials.service import CredentialService
                         provider = r_id.replace("_connector", "").lower()
@@ -627,7 +636,7 @@ class NodeStepExecutor:
                         cred_payload = {
                             k: v for k, v in merged_config.items()
                             if k not in (
-                                "save_credential", "credential_name", "tenant_id", "dry_run",
+                                "save_credential", "credential_name", "credential_id", "tenant_id", "dry_run",
                                 "sample_size", "auto_run_ancestors", "simulation_mode"
                             ) and v is not None and v != ""
                         }

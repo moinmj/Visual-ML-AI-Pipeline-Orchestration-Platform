@@ -2078,35 +2078,52 @@ async def preload_workflow_datasets(
     tenant_id: Optional[int] = None
 ) -> None:
     """
-    Preloads datasets for root loader nodes (e.g. csv_loader) in a workflow graph,
-    injecting the loaded DataFrame directly into the node's config so DAGExecutor
-    does not need to create external sync DB connections or fail on drivers.
+    Preloads datasets for root loader nodes (e.g. csv_loader) and stored credentials for
+    credential nodes in a workflow graph, injecting them directly into the node's config
+    so DAGExecutor has the necessary runtime parameters without mutating or duplicating vault credentials.
     """
     from backend.app.infrastructure.storage.storage_manager import storage_manager
     for node in workflow.nodes:
+        cfg = dict(node.config or {})
+        # Preload dataset if loader node
         if node.recipe_id in ("csv_loader", "dataset_loader", "file_ingestion"):
-            cfg = dict(node.config or {})
-            if "dataframe" in cfg and cfg["dataframe"] is not None:
-                continue
-            dataset_id = cfg.get("dataset_id") or getattr(node, "dataset_id", None)
-            if not dataset_id and "dataset" in cfg:
-                dataset_id = cfg["dataset"]
-            if dataset_id and db:
-                try:
-                    ds_query = select(Dataset).where(Dataset.id == str(dataset_id))
-                    if tenant_id is not None:
-                        ds_query = ds_query.where(Dataset.tenant_id == tenant_id)
-                    res = await db.execute(ds_query)
-                    ds_obj = res.scalar_one_or_none()
-                    if ds_obj and ds_obj.storage_path:
-                        df_loaded = storage_manager.read_dataframe(
-                            ds_obj.storage_path,
-                            tenant_id if tenant_id is not None else ds_obj.tenant_id
-                        )
-                        cfg["dataframe"] = df_loaded
-                        node.config = cfg
-                except Exception as ex:
-                    logger.warning(f"Could not preload dataset '{dataset_id}' for node '{node.id}': {ex}")
+            if "dataframe" not in cfg or cfg["dataframe"] is None:
+                dataset_id = cfg.get("dataset_id") or getattr(node, "dataset_id", None)
+                if not dataset_id and "dataset" in cfg:
+                    dataset_id = cfg["dataset"]
+                if dataset_id and db:
+                    try:
+                        ds_query = select(Dataset).where(Dataset.id == str(dataset_id))
+                        if tenant_id is not None:
+                            ds_query = ds_query.where(Dataset.tenant_id == tenant_id)
+                        res = await db.execute(ds_query)
+                        ds_obj = res.scalar_one_or_none()
+                        if ds_obj and ds_obj.storage_path:
+                            df_loaded = storage_manager.read_dataframe(
+                                ds_obj.storage_path,
+                                tenant_id if tenant_id is not None else ds_obj.tenant_id
+                            )
+                            cfg["dataframe"] = df_loaded
+                            node.config = cfg
+                    except Exception as ex:
+                        logger.warning(f"Could not preload dataset '{dataset_id}' for node '{node.id}': {ex}")
+
+        # Preload stored credential if credential_id is supplied
+        cred_id = str(cfg.get("credential_id", "")).strip()
+        if cred_id and db:
+            from backend.app.credentials.service import CredentialService
+            try:
+                stored_cred = await CredentialService.get_credential_data(db=db, credential_id=cred_id, tenant_id=tenant_id)
+                if stored_cred and isinstance(stored_cred, dict):
+                    for ck, cv in stored_cred.items():
+                        if ck in ("save_credential", "credential_name", "credential_id"):
+                            continue
+                        if ck not in cfg or not cfg[ck]:
+                            cfg[ck] = cv
+                    cfg["save_credential"] = False
+                    node.config = cfg
+            except Exception as cred_err:
+                logger.warning(f"Could not preload credential '{cred_id}' for node '{node.id}': {cred_err}")
 
 
 @router.post(
