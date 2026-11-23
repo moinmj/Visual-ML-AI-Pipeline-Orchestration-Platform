@@ -37,6 +37,7 @@ SENSITIVE_FIELD_NAMES = {
     "auth_token",
     "bearer_token",
     "sasl_password",
+    "smtp_password",
     "secret_key",
     "service_account_key",
     "webhook_url",
@@ -264,3 +265,45 @@ def mask_credential_payload(payload: Dict[str, Any], mask_str: str = "********")
         else:
             masked[k] = v
     return masked
+
+
+def is_encrypted_token(val: Any) -> bool:
+    """Checks if a string looks like a Fernet token (starts with gAAAAA and valid base64)."""
+    if isinstance(val, str) and val.startswith("gAAAAA") and len(val) >= 60:
+        return True
+    return False
+
+
+def encrypt_node_config_secrets(config: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Scans a node configuration dictionary and symmetrically encrypts any plaintext
+    passwords, tokens, or secrets using MultiFernet before saving to the database.
+    """
+    if not isinstance(config, dict):
+        return config
+    cleaned = dict(config)
+    for k, v in list(cleaned.items()):
+        k_lower = str(k).lower().strip()
+        is_secret = k_lower in SENSITIVE_FIELD_NAMES or any(s in k_lower for s in ("password", "secret", "token", "api_key", "apikey"))
+        if is_secret and isinstance(v, str) and v.strip() and not is_encrypted_token(v):
+            if v != "********" and v != "••••••••":
+                cleaned[k] = encrypt_credential(v)
+    return cleaned
+
+
+def decrypt_node_config_secrets(config: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Scans a node configuration dictionary in memory and decrypts any MultiFernet-encrypted
+    fields so recipes can authenticate at runtime.
+    """
+    if not isinstance(config, dict):
+        return config
+    decrypted = dict(config)
+    for k, v in list(decrypted.items()):
+        if isinstance(v, str) and is_encrypted_token(v):
+            try:
+                decrypted[k] = decrypt_credential(v)
+            except Exception as e:
+                logger.warning(f"Failed to decrypt node config field '{k}': {e}")
+    return decrypted
+

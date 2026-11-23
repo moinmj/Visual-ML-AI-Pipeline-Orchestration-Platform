@@ -350,7 +350,8 @@ async def inspect_recipe(
             detail=f"Recipe '{recipe_id}' does not support dynamic inspection.",
         )
 
-    config = dict(body.config or {})
+    from backend.app.core.crypto import decrypt_node_config_secrets
+    config = decrypt_node_config_secrets(dict(body.config or {}))
     config["tenant_id"] = user.tenant_id
 
     # Resolve stored credential if credential_id is supplied

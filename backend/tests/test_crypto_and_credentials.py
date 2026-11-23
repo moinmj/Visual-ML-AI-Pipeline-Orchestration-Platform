@@ -227,6 +227,55 @@ def test_sanitize_vaulted_node_configs():
     assert clean_configs["node_2"]["host"] == "open.corp.internal"
 
 
+def test_inline_node_secret_automatic_encryption_and_decryption():
+    """Verify that inline node secrets (like smtp_password) are automatically encrypted on save and decrypted at runtime."""
+    from backend.app.core.crypto import encrypt_node_config_secrets, decrypt_node_config_secrets, is_encrypted_token
+    from backend.app.workflows.router import mask_workflow_configs_for_frontend
+
+    node_configs = {
+        "processor_gmail_2": {
+            "smtp_host": "smtp.gmail.com",
+            "smtp_port": 587,
+            "smtp_user": "khanalisak1113@gmail.com",
+            "smtp_password": "pdaa cezs achk xtin ",
+            "subject": "Pipeline Report",
+            "save_credential": False
+        }
+    }
+
+    nodes = [
+        {
+            "id": "processor_gmail_2",
+            "data": {
+                "config": {
+                    "smtp_password": "pdaa cezs achk xtin ",
+                    "smtp_user": "khanalisak1113@gmail.com"
+                }
+            }
+        }
+    ]
+
+    # 1. On saving to DB: inline smtp_password is encrypted
+    clean_nodes, clean_configs = sanitize_vaulted_node_configs(nodes, node_configs)
+
+    encrypted_pwd = clean_configs["processor_gmail_2"]["smtp_password"]
+    assert encrypted_pwd != "pdaa cezs achk xtin "
+    assert is_encrypted_token(encrypted_pwd)
+    assert encrypted_pwd.startswith("gAAAAA")
+
+    # In clean_nodes data.config, smtp_password is also encrypted
+    assert clean_nodes[0]["data"]["config"]["smtp_password"].startswith("gAAAAA")
+
+    # 2. At runtime execution: decrypt_node_config_secrets recovers the plaintext in memory
+    runtime_cfg = decrypt_node_config_secrets(clean_configs["processor_gmail_2"])
+    assert runtime_cfg["smtp_password"] == "pdaa cezs achk xtin "
+
+    # 3. Masking before sending to frontend: ciphertext is converted to '••••••••'
+    masked_nodes, masked_configs = mask_workflow_configs_for_frontend(clean_nodes, clean_configs)
+    assert masked_configs["processor_gmail_2"]["smtp_password"] == "••••••••"
+    assert masked_nodes[0]["data"]["config"]["smtp_password"] == "••••••••"
+
+
 @pytest.mark.asyncio
 async def test_credential_service_create_and_decrypt():
     """Verify CredentialService end-to-end: stores encrypted payload, prevents plaintext leakage, and decrypts."""
