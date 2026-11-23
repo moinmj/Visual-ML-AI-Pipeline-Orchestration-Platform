@@ -6,6 +6,7 @@ import asyncio
 import time
 import json as _json
 from typing import Dict, Any, List, Optional, Union, Tuple
+from backend.app.workflows.sub_workflows import preload_sub_workflows
 from backend.app.core.crypto import (
     encrypt_node_config_secrets,
     decrypt_node_config_secrets,
@@ -1355,32 +1356,25 @@ async def list_workflows(
         ))
 
     # 2. Execution status filter ('success', 'failed', 'unrun')
+    # last_execution->>'status' on PostgreSQL, JSON_EXTRACT(...) on SQLite (json_extract() alone is SQLite-only)
+    last_status = Workflow.last_execution["status"].as_string()
     if sub_workflow_eligible:
         # Eligible sub-workflows must have a successful execution record
-        conditions.append(
-            func.lower(func.json_extract(Workflow.last_execution, '$.status')) == 'success'
-        )
+        conditions.append(func.lower(last_status) == 'success')
     else:
         status_raw = filters.value if isinstance(filters, WorkflowStatusFilter) else (filters or status or filter)
         if status_raw and str(status_raw).strip():
             s = str(status_raw).strip().lower()
             if s == "success":
-                conditions.append(
-                    func.lower(func.json_extract(Workflow.last_execution, '$.status')) == 'success'
-                )
+                conditions.append(func.lower(last_status) == 'success')
             elif s == "failed":
-                conditions.append(
-                    or_(
-                        func.lower(func.json_extract(Workflow.last_execution, '$.status')) == 'failed',
-                        func.lower(func.json_extract(Workflow.last_execution, '$.status')) == 'error'
-                    )
-                )
+                conditions.append(func.lower(last_status).in_(('failed', 'error')))
             elif s in ("unrun", "never_run", "draft", "not_run"):
                 conditions.append(
                     or_(
-                        Workflow.last_execution == None,
-                        func.json_extract(Workflow.last_execution, '$.status') == None,
-                        func.json_extract(Workflow.last_execution, '$.status') == ""
+                        Workflow.last_execution.is_(None),
+                        last_status.is_(None),
+                        last_status == ""
                     )
                 )
 
@@ -2135,9 +2129,10 @@ def _storable_config(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     DataFrame injected by preload_workflow_datasets are left out (they are not
     JSON and would make saving the workflow / execution history fail).
     """
+    from backend.app.workflows.sub_workflows import is_runtime_config_key
     out = {}
     for k, v in (config or {}).items():
-        if isinstance(v, (pd.DataFrame, pd.Series)):
+        if isinstance(v, (pd.DataFrame, pd.Series)) or is_runtime_config_key(k):
             continue
         out[k] = v
     return out
@@ -2592,6 +2587,7 @@ async def execute_workflow(
     tid = get_current_tenant_id()
     await preload_workflow_datasets(workflow=workflow, db=db, tenant_id=tid)
     await preload_workflow_credentials(workflow=workflow, db=db, tenant_id=tid)
+    await preload_sub_workflows(workflow, db=db, tenant_id=tid, call_stack=[str(target_id)] if target_id else ())
 
     result = DAGExecutor.execute_workflow(
         execution_id=execution_id,
@@ -2674,6 +2670,7 @@ async def execute_workflow_by_id(
     tid = get_current_tenant_id()
     await preload_workflow_datasets(workflow=graph_to_execute, db=db, tenant_id=tid)
     await preload_workflow_credentials(workflow=graph_to_execute, db=db, tenant_id=tid)
+    await preload_sub_workflows(graph_to_execute, db=db, tenant_id=tid, call_stack=[str(workflow_id)])
 
     exec_result = DAGExecutor.execute_workflow(
         execution_id=execution_id,
@@ -2840,6 +2837,10 @@ async def submit_async_workflow(
         _require_resumable(resume_from)
         await preload_workflow_datasets(workflow=workflow, db=db, tenant_id=get_current_tenant_id())
         await preload_workflow_credentials(workflow=workflow, db=db, tenant_id=get_current_tenant_id())
+        await preload_sub_workflows(
+            workflow, db=db, tenant_id=get_current_tenant_id(),
+            call_stack=[str(target_id)] if target_id else (),
+        )
         try:
             job_id = job_manager.submit_job(
                 workflow=workflow,

@@ -306,6 +306,8 @@ class WorkflowCronScheduler:
 
                 graph = db_workflow_to_graph(wf)
                 await preload_workflow_datasets(workflow=graph, db=db, tenant_id=tenant_id)
+                from backend.app.workflows.sub_workflows import preload_sub_workflows
+                await preload_sub_workflows(graph, db=db, tenant_id=tenant_id, call_stack=[str(workflow_id)])
 
                 exec_id = f"cron_{uuid.uuid4().hex[:12]}"
                 from backend.app.engine.execution.job_manager import job_manager

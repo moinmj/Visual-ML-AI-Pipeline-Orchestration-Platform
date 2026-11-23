@@ -61,6 +61,12 @@ def _fingerprint_value(value: Any) -> Any:
         return {str(k): _fingerprint_value(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         return [_fingerprint_value(v) for v in value]
+    if hasattr(value, "model_dump"):
+        # e.g. a prepared sub-workflow graph: fingerprint its nodes/configs, not its repr
+        try:
+            return _fingerprint_value(value.model_dump())
+        except Exception:
+            pass
     return value
 
 
