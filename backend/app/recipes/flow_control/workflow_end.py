@@ -88,10 +88,14 @@ class WorkflowEndRecipe(BaseRecipe):
 
         out_df = in_df.copy()
 
-        # Register final output in context so parent runner can easily grab it
-        if context is not None and isinstance(context, dict):
-            context["sub_workflow_final_output"] = out_df.copy()
-            context["sub_workflow_completed"] = True
+        # Hand the final table to the Add Workflow node that started this run. It puts a fresh
+        # dict in the context for every call; the executor only shallow-copies the context,
+        # so writing into that dict reaches the caller (and only that call).
+        if isinstance(context, dict):
+            holder = context.get("_sub_workflow_result")
+            if isinstance(holder, dict):
+                holder["dataframe"] = out_df.copy()
+                holder["end_node_completed"] = True
 
         return {
             "dataframe": out_df,

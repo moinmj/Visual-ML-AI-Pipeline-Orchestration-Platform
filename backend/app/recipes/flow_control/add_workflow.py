@@ -8,14 +8,34 @@ runs the internal steps, and emits the child End Anchor's dataset to Point B.
 """
 
 from typing import Dict, Any, List, Optional
-import time
+import concurrent.futures
+import contextvars
 import json
-from datetime import datetime, timezone
+import re
+import threading
+import time
+import uuid
+from collections import deque
 import pandas as pd
 
 from backend.app.recipes.base.recipe import BaseRecipe, RecipePort
 from backend.app.core.exceptions import ExecutionException, ValidationException
 from backend.app.core.logging import logger
+
+
+class _LinkedCancel:
+    """Stop signal for one sub-process run; also counts as set when the caller's own run was stopped,
+    so a timeout of an outer sub-process stops the ones nested inside it."""
+
+    def __init__(self, parent: Optional[Any] = None):
+        self._own = threading.Event()
+        self._parent = parent
+
+    def set(self) -> None:
+        self._own.set()
+
+    def is_set(self) -> bool:
+        return self._own.is_set() or bool(self._parent is not None and self._parent.is_set())
 
 
 class AddWorkflowRecipe(BaseRecipe):
@@ -165,6 +185,34 @@ class AddWorkflowRecipe(BaseRecipe):
         graph.name = child.get("name")
         return graph
 
+    @staticmethod
+    def _anchor_structure_error(child_graph: Any, start_nodes: List[Any], end_nodes: List[Any]) -> Optional[str]:
+        """Why the child can't be used as a sub-process, or None when its anchors are valid."""
+        if not start_nodes and not end_nodes:
+            return "has no Start Anchor and no End Anchor."
+        if not start_nodes:
+            return "has no Start Anchor."
+        if not end_nodes:
+            return "has no End Anchor."
+        if len(start_nodes) > 1:
+            return f"has {len(start_nodes)} Start Anchors ({', '.join(n.id for n in start_nodes)}); keep one."
+        if len(end_nodes) > 1:
+            return f"has {len(end_nodes)} End Anchors ({', '.join(n.id for n in end_nodes)}); keep one."
+
+        downstream: Dict[str, List[str]] = {}
+        for e in getattr(child_graph, "edges", None) or []:
+            downstream.setdefault(e.source, []).append(e.target)
+        start_id, end_id = start_nodes[0].id, end_nodes[0].id
+        seen, queue = {start_id}, deque([start_id])
+        while queue:
+            for nxt in downstream.get(queue.popleft(), []):
+                if nxt not in seen:
+                    seen.add(nxt)
+                    queue.append(nxt)
+        if end_id not in seen:
+            return f"has its End Anchor ('{end_id}') not connected to its Start Anchor ('{start_id}')."
+        return None
+
     def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
         t0 = time.time()
         workflow_id = str(config.get("workflow_id", "")).strip()
@@ -253,15 +301,12 @@ class AddWorkflowRecipe(BaseRecipe):
         start_nodes = [n for n in child_nodes if str(n.recipe_id).strip().lower() in start_aliases]
         end_nodes = [n for n in child_nodes if str(n.recipe_id).strip().lower() in end_aliases]
 
-        if not start_nodes or not end_nodes:
-            missing_parts = []
-            if not start_nodes:
-                missing_parts.append("Start Anchor ('workflow_start')")
-            if not end_nodes:
-                missing_parts.append("End Anchor ('workflow_end')")
+        anchor_error = self._anchor_structure_error(child_graph, start_nodes, end_nodes)
+        if anchor_error:
             err_msg = (
-                f"Sub-Workflow '{actual_name}' (ID: {workflow_id}) is missing required anchors: "
-                f"{', '.join(missing_parts)}. Workflows integrated via 'Add Workflow' must have both Start and End anchors."
+                f"Sub-Workflow '{actual_name}' (ID: {workflow_id}) {anchor_error} "
+                "Workflows used through 'Add Workflow' need exactly one Start Anchor and one End Anchor, "
+                "with the End Anchor connected (directly or through other steps) to the Start Anchor."
             )
             logger.error(err_msg)
             if propagate_errors:
@@ -277,21 +322,53 @@ class AddWorkflowRecipe(BaseRecipe):
             }
 
         # 5. Build Child Context
-        from backend.app.engine.execution.executor import DAGExecutor
+        parent_exec_id = re.sub(r"[^A-Za-z0-9_-]", "", str((context or {}).get("execution_id") or "run"))[:40] or "run"
+        sub_exec_id = f"{parent_exec_id}_sub_{uuid.uuid4().hex[:12]}"   # unique per call, even within one second
+        result_holder: Dict[str, Any] = {}                              # filled by this run's End Anchor only
+        cancel = _LinkedCancel((context or {}).get("_cancel_event"))
 
         child_context = dict(context or {})
-        child_context["sub_workflow_input"] = in_df.copy()
+        child_context["sub_workflow_input"] = in_df.copy()             # only the Start Anchor reads this
         child_context["_sub_workflow_stack"] = call_stack + [workflow_id]
+        child_context["_sub_workflow_result"] = result_holder
+        child_context["_cancel_event"] = cancel
+        child_context["_cancel_reason"] = f"sub-process '{actual_name}' timed out after {timeout_seconds}s"
+        child_context["execution_id"] = sub_exec_id
+        child_context["workflow_id"] = workflow_id
 
-        # 6. Execute Sub-Workflow DAG
-        sub_exec_id = f"sub_{workflow_id[:8]}_{int(time.time())}"
-        child_result = DAGExecutor.execute_workflow(
-            execution_id=sub_exec_id,
-            workflow=child_graph,
-            initial_df=in_df.copy(),
-            context=child_context,
-            include_node_outputs=True
-        )
+        # 6. Execute Sub-Workflow DAG in a worker thread so timeout_seconds can be enforced.
+        # The tenant/user context variables are copied into the thread.
+        from backend.app.engine.execution.executor import DAGExecutor
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="sub-workflow")
+        try:
+            future = pool.submit(
+                contextvars.copy_context().run,
+                DAGExecutor.execute_workflow,
+                execution_id=sub_exec_id,
+                workflow=child_graph,
+                initial_df=None,            # the parent's table goes to the Start Anchor only
+                context=child_context,
+                include_node_outputs=False,
+            )
+            try:
+                child_result = future.result(timeout=timeout_seconds)
+            except concurrent.futures.TimeoutError:
+                cancel.set()   # the child stops before its next step
+                err_msg = (
+                    f"Sub-Workflow '{actual_name}' (ID: {workflow_id}) timed out after {timeout_seconds} seconds "
+                    "and was stopped. Increase 'Execution Timeout' or make the sub-process faster."
+                )
+                logger.error(err_msg)
+                if propagate_errors:
+                    raise ExecutionException(err_msg)
+                return {
+                    "dataframe": in_df,
+                    "output_summary": {"title": f"Sub-Workflow: {actual_name}", "status": "TIMEOUT", "error": err_msg},
+                    "metrics": {"status": "TIMEOUT", "sub_workflow_id": workflow_id,
+                                "duration_ms": round((time.time() - t0) * 1000, 2)},
+                }
+        finally:
+            pool.shutdown(wait=False)
 
         # 7. Check for Sub-Workflow Failure & Format Structured Warning
         if child_result.status != "SUCCESS":
@@ -309,7 +386,6 @@ class AddWorkflowRecipe(BaseRecipe):
                     break
 
             if failed_node_id == "unknown" and child_result.logs:
-                import re
                 for log_line in child_result.logs:
                     log_str = str(log_line)
                     if any(kw in log_str for kw in ("❌", "DAG Resolution Error", "Configuration Error", "failed")):
@@ -354,40 +430,22 @@ class AddWorkflowRecipe(BaseRecipe):
                 }
             }
 
-        # 8. Extract Final DataFrame from End Anchor
-        out_df = None
-        end_node_id = end_nodes[0].id
-
-        # Priority 1: Check NodeStepExecutor disk cache for uncompressed parquet output
-        try:
-            from backend.app.engine.execution.step_executor import NodeStepExecutor
-            cached_out = NodeStepExecutor.load_node_output(sub_exec_id, end_node_id)
-            if cached_out and isinstance(cached_out.get("dataframe"), pd.DataFrame):
-                out_df = cached_out["dataframe"]
-        except Exception as e:
-            logger.debug(f"Could not load cached parquet for sub-workflow end node {end_node_id}: {e}")
-
-        # Priority 2: Extract from child_result.node_outputs (handles serialized JSON DataFrame dict)
-        if out_df is None and child_result.node_outputs and end_node_id in child_result.node_outputs:
-            end_out = child_result.node_outputs[end_node_id]
-            if isinstance(end_out, dict):
-                df_val = end_out.get("dataframe")
-                if isinstance(df_val, pd.DataFrame):
-                    out_df = df_val
-                elif isinstance(df_val, dict) and "records" in df_val:
-                    out_df = pd.DataFrame(df_val["records"])
-            elif isinstance(end_out, pd.DataFrame):
-                out_df = end_out
-
-        # Priority 3: Registered in child_context by workflow_end recipe
-        if out_df is None and "sub_workflow_final_output" in child_context:
-            val = child_context["sub_workflow_final_output"]
-            if isinstance(val, pd.DataFrame):
-                out_df = val
-
-        # Priority 4: Fallback to empty or input DataFrame if sub-process emitted nothing
-        if out_df is None:
-            out_df = in_df.copy()
+        # 8. Final table, handed over by this run's End Anchor (same DataFrame, dtypes intact)
+        out_df = result_holder.get("dataframe")
+        if not isinstance(out_df, pd.DataFrame):
+            err_msg = (
+                f"Sub-Workflow '{actual_name}' (ID: {workflow_id}) finished but its End Anchor produced no output. "
+                "Check that the End Anchor is connected to the steps before it."
+            )
+            logger.error(err_msg)
+            if propagate_errors:
+                raise ExecutionException(err_msg)
+            return {
+                "dataframe": in_df,
+                "output_summary": {"title": f"Sub-Workflow: {actual_name}", "status": "NO_OUTPUT", "error": err_msg},
+                "metrics": {"status": "NO_OUTPUT", "sub_workflow_id": workflow_id,
+                            "duration_ms": round((time.time() - t0) * 1000, 2)},
+            }
 
         elapsed_ms = round((time.time() - t0) * 1000, 2)
         total_sub_nodes = len(child_nodes)

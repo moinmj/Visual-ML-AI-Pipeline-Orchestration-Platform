@@ -531,6 +531,14 @@ class DAGExecutor:
         has_pipeline = len(connected_node_ids) > 0
 
         for node in ordered_nodes:
+            # Cooperative stop (e.g. a sub-process that hit its timeout): checked between steps,
+            # a step that is already running is not interrupted.
+            cancel_event = pipeline_context.get("_cancel_event")
+            if cancel_event is not None and cancel_event.is_set():
+                logs.append(f"⏹️ Execution stopped before node `{node.id}`: {pipeline_context.get('_cancel_reason') or 'cancelled'}")
+                overall_status = "FAILED"
+                break
+
             node_start = time.time()
             parents = parent_map[node.id]
             _emit(on_event, {"type": "node_started", "node_id": node.id, "recipe_id": node.recipe_id})

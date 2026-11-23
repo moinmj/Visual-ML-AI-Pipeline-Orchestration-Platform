@@ -71,7 +71,9 @@ async def test_sub_process_listed_and_runs_inside_parent():
             assert node["status"] == "SUCCESS", node
             summary = node["output_summary"]["output_summary"]
             assert summary["sub_workflow_id"] == child_id
-            assert summary["output_records_emitted"] == 3
+            # Nothing upstream of the Add Workflow node: the child gets an empty table,
+            # never the Start Anchor's standalone sample rows
+            assert summary["output_records_emitted"] == 0
 
             # Another tenant can neither list nor run it
             app.dependency_overrides[get_current_user] = _as(2)

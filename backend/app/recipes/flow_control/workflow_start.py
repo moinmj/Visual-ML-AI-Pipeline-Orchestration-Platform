@@ -66,25 +66,34 @@ class WorkflowStartRecipe(BaseRecipe):
     def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
         mock_count = int(config.get("mock_record_count", 5))
 
-        # Check for data passed in by caller / parent context
+        # Called by a parent through Add Workflow: always use the parent's table as-is,
+        # even when it has 0 rows (an empty result upstream must stay empty, never become
+        # sample data). Sample rows are only for running this sub-process on its own.
+        called_by_parent = isinstance(context, dict) and "sub_workflow_input" in context
         in_df = None
-        if inputs:
-            for k in ("dataframe", "input"):
-                if isinstance(inputs.get(k), pd.DataFrame) and not inputs[k].empty:
-                    in_df = inputs[k]
-                    break
-
-        if in_df is None and context and isinstance(context, dict):
-            for k in ("sub_workflow_input", "parent_dataframe", "dataframe"):
-                val = context.get(k)
-                if isinstance(val, pd.DataFrame) and not val.empty:
-                    in_df = val
-                    break
+        if called_by_parent:
+            val = context.get("sub_workflow_input")
+            in_df = val if isinstance(val, pd.DataFrame) else pd.DataFrame()
+        else:
+            if inputs:
+                for k in ("dataframe", "input"):
+                    if isinstance(inputs.get(k), pd.DataFrame) and not inputs[k].empty:
+                        in_df = inputs[k]
+                        break
+            if in_df is None and isinstance(context, dict):
+                for k in ("parent_dataframe", "dataframe"):
+                    val = context.get(k)
+                    if isinstance(val, pd.DataFrame) and not val.empty:
+                        in_df = val
+                        break
 
         mode = "INJECTED"
         if in_df is not None:
             out_df = in_df.copy()
-            status_msg = f"Injected {len(out_df)} rows from parent pipeline (Point A)."
+            status_msg = (
+                f"Injected {len(out_df)} rows from parent pipeline (Point A)."
+                if len(out_df) else "Parent pipeline passed an empty table (0 rows); passing it on unchanged."
+            )
         else:
             # Standalone test fallback
             mode = "STANDALONE_MOCK"
