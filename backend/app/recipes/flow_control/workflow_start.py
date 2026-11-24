@@ -59,7 +59,49 @@ class WorkflowStartRecipe(BaseRecipe):
                     "maximum": 500,
                     "description": "Number of sample rows to generate when testing this sub-process standalone.",
                     "input_type": "number"
-                }
+                },
+                "input_columns": {
+                    "type": "array",
+                    "title": "Expected Input Columns",
+                    "default": [],
+                    "input_type": "table",
+                    "description": (
+                        "Columns the calling pipeline must provide. Checked before the sub-process runs; "
+                        "a missing required column or a wrong type stops it with a clear message. Leave empty to accept any table."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string", "title": "Column"},
+                            "type": {"type": "string", "title": "Type", "default": "any",
+                                     "enum": ["any", "string", "integer", "number", "boolean", "datetime"]},
+                            "required": {"type": "boolean", "title": "Required", "default": True},
+                        },
+                        "required": ["name"],
+                    },
+                },
+                "parameters": {
+                    "type": "array",
+                    "title": "Parameters",
+                    "default": [],
+                    "input_type": "table",
+                    "description": (
+                        "Values the calling 'Add Workflow' node passes in. Steps of this sub-process use them "
+                        "in any text setting as {{params.<name>}}."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string", "title": "Name", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+                            "type": {"type": "string", "title": "Type", "default": "string",
+                                     "enum": ["string", "integer", "number", "boolean"]},
+                            "required": {"type": "boolean", "title": "Required", "default": False},
+                            "default": {"title": "Default value"},
+                            "description": {"type": "string", "title": "Description"},
+                        },
+                        "required": ["name"],
+                    },
+                },
             }
         }
 

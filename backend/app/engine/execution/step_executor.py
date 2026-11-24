@@ -609,18 +609,22 @@ class NodeStepExecutor:
                 # datasets and saved credentials, instead of letting the recipe query the DB itself
                 from backend.app.workflows.sub_workflows import (
                     ADD_WORKFLOW_RECIPE_IDS, SUB_WORKFLOW_DEFINITION_KEY, SUB_WORKFLOW_ERROR_KEY,
-                    load_sub_workflow_graph,
+                    SUB_WORKFLOW_VERSION_INFO_KEY, load_sub_workflow_graph,
                 )
                 child_wf_id = str(merged_config.get("workflow_id") or "").strip()
                 if r_id in ADD_WORKFLOW_RECIPE_IDS and child_wf_id:
                     try:
+                        child_version = merged_config.get("workflow_version")
                         if db is not None:
-                            child_graph = await load_sub_workflow_graph(child_wf_id, db, tenant_id)
+                            child_graph, child_info = await load_sub_workflow_graph(
+                                child_wf_id, db, tenant_id, version=child_version)
                         else:
                             from backend.app.infrastructure.database.session import AsyncSessionLocal
                             async with AsyncSessionLocal() as session:
-                                child_graph = await load_sub_workflow_graph(child_wf_id, session, tenant_id)
+                                child_graph, child_info = await load_sub_workflow_graph(
+                                    child_wf_id, session, tenant_id, version=child_version)
                         merged_config[SUB_WORKFLOW_DEFINITION_KEY] = child_graph
+                        merged_config[SUB_WORKFLOW_VERSION_INFO_KEY] = child_info
                     except ValueError as sub_err:
                         merged_config[SUB_WORKFLOW_ERROR_KEY] = str(sub_err)
 
