@@ -149,6 +149,8 @@ class WorkflowListItemResponse(BaseModel):
     last_execution_id: Optional[str] = Field(None, description="Execution ID of the latest run")
     nodes_count: int = Field(0, description="Total number of nodes in this pipeline")
     edges_count: int = Field(0, description="Total number of edge connections in this pipeline")
+    is_sub_workflow: bool = Field(False, description="Has a Start and an End Anchor, so it can be used through 'Add Workflow'")
+    latest_version: Optional[int] = Field(None, description="Latest saved sub-workflow version (sub-workflows only)")
 
     model_config = {"from_attributes": True}
 
@@ -269,7 +271,7 @@ class NodeTestStepResponse(BaseModel):
     node_id: str
     recipe_id: str
     recipe_name: str = "Component"
-    status: str = "SUCCESS"  # SUCCESS, FAILED
+    status: str = "SUCCESS"  # SUCCESS, FAILED, WARNING (ended without a result, see error_message)
     duration_ms: float = 0.0
     row_count: Optional[int] = None
     columns: List[str] = Field(default_factory=list)

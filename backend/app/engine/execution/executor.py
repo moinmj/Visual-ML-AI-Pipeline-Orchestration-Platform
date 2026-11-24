@@ -18,7 +18,7 @@ from backend.app.core.logging import logger
 class NodeExecutionResult(BaseModel):
     node_id: str
     recipe_id: str
-    status: str  # "SUCCESS", "FAILED", "SKIPPED"
+    status: str  # "SUCCESS", "FAILED", "SKIPPED", "WARNING" (ended without a result; steps after it are skipped)
     duration_ms: float
     error_message: Optional[str] = None
     error_title: Optional[str] = None
@@ -529,8 +529,35 @@ class DAGExecutor:
         # 3. Step-by-Step Node Execution
         connected_node_ids = {e.source for e in workflow.edges} | {e.target for e in workflow.edges}
         has_pipeline = len(connected_node_ids) > 0
+        blocked_by: Dict[str, str] = {}   # node id -> the WARNING step that caused it to be skipped
 
         for node in ordered_nodes:
+            # Cooperative stop (e.g. a sub-process that hit its timeout): checked between steps,
+            # a step that is already running is not interrupted.
+            cancel_event = pipeline_context.get("_cancel_event")
+            if cancel_event is not None and cancel_event.is_set():
+                logs.append(f"⏹️ Execution stopped before node `{node.id}`: {pipeline_context.get('_cancel_reason') or 'cancelled'}")
+                overall_status = "FAILED"
+                break
+
+            # Downstream of a step that ended with a warning (e.g. a failed sub-process whose
+            # 'Halt Pipeline on Sub-Workflow Error' is off): skip, other branches keep running.
+            blocking_parent = next((p for p in parent_map[node.id] if p in blocked_by), None)
+            if blocking_parent is not None:
+                origin = blocked_by[blocking_parent]
+                blocked_by[node.id] = origin
+                skip_msg = f"Skipped because step '{origin}' before it ended with a warning."
+                logs.append(f"⏭️ Node `{node.id}` ➔ Skipped (upstream step `{origin}` ended with a warning)")
+                _add_result(NodeExecutionResult(
+                    node_id=node.id,
+                    recipe_id=node.recipe_id,
+                    status="SKIPPED",
+                    duration_ms=0.0,
+                    output_summary={"status": "SKIPPED", "title": "Skipped", "message": skip_msg,
+                                    "skipped_because_of": origin}
+                ))
+                continue
+
             node_start = time.time()
             parents = parent_map[node.id]
             _emit(on_event, {"type": "node_started", "node_id": node.id, "recipe_id": node.recipe_id})
@@ -738,6 +765,40 @@ class DAGExecutor:
                 node_exec_cfg = decrypt_node_config_secrets(with_tenant_config(node.config))
                 outputs = recipe.execute(inputs=node_inputs, config=node_exec_cfg, context=pipeline_context)
                 node_outputs[node.id] = outputs
+
+                # A recipe can end with a warning instead of a result (Add Workflow whose sub-process
+                # failed while 'Halt Pipeline on Sub-Workflow Error' is off). Nothing it returned is
+                # passed on: no context update, no cached output, not a resume point; the steps
+                # after it are skipped (see blocked_by above).
+                if isinstance(outputs, dict) and outputs.get("_node_status") == "WARNING":
+                    duration_ms = round((time.time() - node_start) * 1000.0, 2)
+                    warning_msg = str(outputs.get("_warning") or "Step ended with a warning.")
+                    blocked_by[node.id] = node.id
+                    logs.append(f"⚠️ Node `{node.id}` [{recipe.name}] ➔ Warning: {warning_msg} Steps after it are skipped.")
+                    warn_summary = {
+                        "output_summary": make_json_safe(outputs.get("output_summary") or {}),
+                        "metrics": make_json_safe(outputs.get("metrics") or {}),
+                    }
+                    step_snapshots[node.id] = {
+                        "node_id": node.id,
+                        "recipe_id": node.recipe_id,
+                        "recipe_name": recipe.name,
+                        "duration_ms": duration_ms,
+                        "status": "WARNING",
+                        "row_count": None,
+                        "columns": [],
+                        "preview_rows": [],
+                        "output_summary": warn_summary["output_summary"],
+                    }
+                    _add_result(NodeExecutionResult(
+                        node_id=node.id,
+                        recipe_id=node.recipe_id,
+                        status="WARNING",
+                        duration_ms=duration_ms,
+                        error_message=warning_msg,
+                        output_summary=warn_summary
+                    ))
+                    continue
 
                 # Propagate standard artifacts to shared context (never overwrite existing valid object with None)
                 cls._propagate_context(outputs, node, pipeline_context)

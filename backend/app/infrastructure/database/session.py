@@ -63,7 +63,7 @@ from sqlalchemy import text
 
 
 async def init_db():
-    import backend.app.workflows.models
+    import backend.app.workflows.models  # also registers workflow_versions
     import backend.app.datasets.models
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -120,6 +120,39 @@ async def init_db():
                 await conn.execute(text(f"CREATE INDEX IF NOT EXISTS ix_{table}_user_id ON {table} (user_id)"))
         except Exception:
             pass
+
+    # workflows.is_sub_workflow (has Start + End Anchors), used by the "Add Workflow" dropdown.
+    try:
+        async with engine.begin() as conn:
+            if _IS_SQLITE:
+                await conn.execute(text("ALTER TABLE workflows ADD COLUMN is_sub_workflow BOOLEAN"))
+            else:
+                await conn.execute(text("ALTER TABLE workflows ADD COLUMN IF NOT EXISTS is_sub_workflow BOOLEAN"))
+    except Exception:
+        pass  # column already exists
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_workflows_is_sub_workflow ON workflows (is_sub_workflow)"))
+    except Exception:
+        pass
+    # One-time back-fill for rows saved before the column existed (NULL). Idempotent.
+    try:
+        import json as _json
+        from backend.app.workflows.sub_workflows import has_both_anchors
+        async with engine.begin() as conn:
+            rows = (await conn.execute(text("SELECT id, nodes FROM workflows WHERE is_sub_workflow IS NULL"))).fetchall()
+            for wf_id, nodes in rows:
+                if isinstance(nodes, str):
+                    try:
+                        nodes = _json.loads(nodes)
+                    except Exception:
+                        nodes = []
+                await conn.execute(
+                    text("UPDATE workflows SET is_sub_workflow = :flag WHERE id = :id"),
+                    {"flag": has_both_anchors(nodes), "id": wf_id},
+                )
+    except Exception:
+        pass
 
     # Legacy SQLite-only column back-fill (databases created before soft-delete support).
     # Not needed on PostgreSQL: create_all builds the full schema on a fresh database.

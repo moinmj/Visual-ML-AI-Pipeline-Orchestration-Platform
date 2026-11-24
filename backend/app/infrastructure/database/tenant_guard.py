@@ -23,10 +23,10 @@ from sqlalchemy import event
 from sqlalchemy.orm import Session, with_loader_criteria
 
 from backend.app.core.tenant_context import get_current_tenant_id, get_current_user_id
-from backend.app.workflows.models import Workflow, WorkflowExecution
+from backend.app.workflows.models import Workflow, WorkflowExecution, WorkflowVersion
 from backend.app.datasets.models import Dataset
 
-TENANT_SCOPED_MODELS = (Workflow, WorkflowExecution, Dataset)
+TENANT_SCOPED_MODELS = (Workflow, WorkflowExecution, WorkflowVersion, Dataset)
 _NO_TENANT = -1  # matches no row: used when there is no tenant in context
 
 

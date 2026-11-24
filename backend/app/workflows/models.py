@@ -29,8 +29,35 @@ class Workflow(Base):
     is_active = Column(Boolean, nullable=False, default=True)
     deleted_at = Column(DateTime(timezone=True), nullable=True)
 
+    # True when the graph has both a Start and an End Anchor, i.e. it can be used through
+    # "Add Workflow". Set on every save (see workflows/sub_workflows.py); NULL = not yet computed.
+    is_sub_workflow = Column(Boolean, nullable=True, index=True)
+
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class WorkflowVersion(Base):
+    """
+    Saved definition of a sub-process workflow. A new version is written whenever a workflow
+    with Start and End Anchors is saved with a changed graph, so an "Add Workflow" node can pin
+    a version and keep running it after the sub-process is edited.
+    """
+    __tablename__ = "workflow_versions"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    workflow_id = Column(String(36), ForeignKey("workflows.id", ondelete="CASCADE"), nullable=False, index=True)
+    tenant_id = Column(Integer, nullable=True, index=True)
+    user_id = Column(String(255), nullable=True, index=True)
+    version_number = Column(Integer, nullable=False)
+    name = Column(String(255), nullable=False)
+    definition_hash = Column(String(64), nullable=False)
+
+    nodes = Column(JSON, nullable=False, default=list)
+    edges = Column(JSON, nullable=False, default=list)
+    node_configs = Column(JSON, nullable=False, default=dict)
+
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
 class WorkflowExecution(Base):

@@ -6,7 +6,11 @@ import asyncio
 import time
 import json as _json
 from typing import Dict, Any, List, Optional, Union, Tuple
-from backend.app.workflows.sub_workflows import preload_sub_workflows
+from backend.app.workflows.sub_workflows import (
+    list_sub_workflow_versions,
+    preload_sub_workflows,
+    record_sub_workflow_version,
+)
 from backend.app.core.crypto import (
     encrypt_node_config_secrets,
     decrypt_node_config_secrets,
@@ -30,7 +34,7 @@ from backend.app.infrastructure.database.session import get_db, AsyncSessionLoca
 from backend.app.engine.dag.graph import WorkflowGraph
 from backend.app.engine.execution.executor import DAGExecutor, WorkflowExecutionResult
 from backend.app.engine.execution.job_manager import job_manager
-from backend.app.workflows.models import Workflow, WorkflowExecution
+from backend.app.workflows.models import Workflow, WorkflowExecution, WorkflowVersion
 from backend.app.workflows.schemas import (
     WorkflowCreate,
     WorkflowUpdate,
@@ -1033,6 +1037,7 @@ async def save_workflow(
 
     await db.commit()
     await db.refresh(wf)
+    await _after_workflow_saved(db, wf)
 
     # Record immutable history version snapshot when workbook is explicitly saved with fresh unrecorded execution results
     if resolved_last_exec and isinstance(resolved_last_exec, dict):
@@ -1235,6 +1240,7 @@ async def _execute_workflow_import(
     db.add(wf)
     await db.commit()
     await db.refresh(wf)
+    await _after_workflow_saved(db, wf)
 
     wf.datasets = await resolve_all_workflow_datasets(
         db=db,
@@ -1359,7 +1365,9 @@ async def list_workflows(
     # last_execution->>'status' on PostgreSQL, JSON_EXTRACT(...) on SQLite (json_extract() alone is SQLite-only)
     last_status = Workflow.last_execution["status"].as_string()
     if sub_workflow_eligible:
-        # Eligible sub-workflows must have a successful execution record
+        # Eligible sub-workflows: Start + End Anchors (flag set on save) and a successful last run.
+        # Filtered and paged in SQL.
+        conditions.append(Workflow.is_sub_workflow.is_(True))
         conditions.append(func.lower(last_status) == 'success')
     else:
         status_raw = filters.value if isinstance(filters, WorkflowStatusFilter) else (filters or status or filter)
@@ -1378,63 +1386,34 @@ async def list_workflows(
                     )
                 )
 
-    if sub_workflow_eligible:
-        # Query candidate workflows meeting base status & search filters
-        cand_query = select(Workflow)
-        for cond in conditions:
-            cand_query = cand_query.where(cond)
-        cand_query = cand_query.order_by(Workflow.updated_at.desc())
-        cand_res = await db.execute(cand_query)
-        all_candidates = cand_res.scalars().all()
+    # Count total records matching filter conditions
+    count_stmt = select(func.count(Workflow.id))
+    for cond in conditions:
+        count_stmt = count_stmt.where(cond)
+    total_res = await db.execute(count_stmt)
+    total_records = total_res.scalar() or 0
 
-        start_aliases = {"workflow_start", "start_anchor", "sub_process_start", "workflow_input"}
-        end_aliases = {"workflow_end", "end_anchor", "sub_process_end", "workflow_output"}
+    current_page = (actual_skip // limit) + 1 if limit > 0 else 1
+    total_pages = math.ceil(total_records / limit) if (limit > 0 and total_records > 0) else (1 if total_records == 0 else 1)
 
-        def has_both_anchors(wf_nodes) -> bool:
-            if not wf_nodes:
-                return False
-            nodes_list = wf_nodes
-            if isinstance(nodes_list, str):
-                try:
-                    nodes_list = _json.loads(nodes_list)
-                except Exception:
-                    return False
-            if not isinstance(nodes_list, list):
-                return False
-            has_s = False
-            has_e = False
-            for n in nodes_list:
-                if isinstance(n, dict):
-                    r_id = str(n.get("recipe_id") or n.get("type") or "").strip().lower()
-                    if r_id in start_aliases:
-                        has_s = True
-                    elif r_id in end_aliases:
-                        has_e = True
-            return has_s and has_e
+    # Retrieve matching records
+    query = select(Workflow)
+    for cond in conditions:
+        query = query.where(cond)
+    query = query.order_by(Workflow.updated_at.desc()).offset(actual_skip).limit(limit)
+    result = await db.execute(query)
+    workflows = result.scalars().all()
 
-        eligible = [wf for wf in all_candidates if has_both_anchors(wf.nodes)]
-        total_records = len(eligible)
-        current_page = (actual_skip // limit) + 1 if limit > 0 else 1
-        total_pages = math.ceil(total_records / limit) if (limit > 0 and total_records > 0) else (1 if total_records == 0 else 1)
-        workflows = eligible[actual_skip : actual_skip + limit]
-    else:
-        # Count total records matching filter conditions
-        count_stmt = select(func.count(Workflow.id))
-        for cond in conditions:
-            count_stmt = count_stmt.where(cond)
-        total_res = await db.execute(count_stmt)
-        total_records = total_res.scalar() or 0
-
-        current_page = (actual_skip // limit) + 1 if limit > 0 else 1
-        total_pages = math.ceil(total_records / limit) if (limit > 0 and total_records > 0) else (1 if total_records == 0 else 1)
-
-        # Retrieve matching records
-        query = select(Workflow)
-        for cond in conditions:
-            query = query.where(cond)
-        query = query.order_by(Workflow.updated_at.desc()).offset(actual_skip).limit(limit)
-        result = await db.execute(query)
-        workflows = result.scalars().all()
+    # Latest saved version of each sub-process on this page (for the Add Workflow version picker)
+    latest_versions: Dict[str, int] = {}
+    sub_ids = [wf.id for wf in workflows if getattr(wf, "is_sub_workflow", None)]
+    if sub_ids:
+        v_res = await db.execute(
+            select(WorkflowVersion.workflow_id, func.max(WorkflowVersion.version_number))
+            .where(WorkflowVersion.workflow_id.in_(sub_ids))
+            .group_by(WorkflowVersion.workflow_id)
+        )
+        latest_versions = {wid: num for wid, num in v_res.all()}
 
     items = []
     all_needed_ds_ids = set()
@@ -1489,6 +1468,8 @@ async def list_workflows(
                 last_execution_id=last_exec.get("execution_id"),
                 nodes_count=len(wf.nodes or []),
                 edges_count=len(wf.edges or []),
+                is_sub_workflow=bool(getattr(wf, "is_sub_workflow", None)),
+                latest_version=latest_versions.get(wf.id),
             )
         )
 
@@ -1589,6 +1570,26 @@ async def get_resume_info(execution_id: str):
             detail=f"Nothing to resume for execution '{execution_id}' (succeeded, expired or not found).",
         )
     return info
+
+
+@router.get("/{workflow_id}/sub-workflow-versions")
+async def list_workflow_sub_versions(workflow_id: str, db: AsyncSession = Depends(get_db)):
+    """
+    Saved versions of a sub-workflow (a workflow with Start and End Anchors), newest first,
+    for the version picker of an 'Add Workflow' node. 'latest' always runs the workflow as saved now.
+    """
+    res = await db.execute(select(Workflow).where(Workflow.id == workflow_id, Workflow.is_active.is_(True)))
+    wf = res.scalar_one_or_none()
+    if wf is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Workflow '{workflow_id}' not found.")
+    versions = await list_sub_workflow_versions(db, wf)
+    return {
+        "workflow_id": wf.id,
+        "name": clean_workbook_name(wf.name) or wf.name,
+        "is_sub_workflow": bool(wf.is_sub_workflow),
+        "latest_version": versions[0]["version"] if versions else None,
+        "versions": jsonable_encoder(versions),
+    }
 
 
 @router.get("/{workflow_id}", response_model=WorkflowResponse)
@@ -1924,6 +1925,7 @@ async def upsert_workflow(
 
     await db.commit()
     await db.refresh(wf)
+    await _after_workflow_saved(db, wf)
 
     # Record immutable history version snapshot when workbook is saved with fresh unrecorded execution results
     if resolved_last_exec and isinstance(resolved_last_exec, dict):
@@ -2122,6 +2124,24 @@ async def restore_workflow(
 # -------------------------------------------------------------
 # DAG VALIDATION & EXECUTION ENDPOINTS
 # -------------------------------------------------------------
+
+async def _after_workflow_saved(db: AsyncSession, wf: Workflow) -> None:
+    """
+    Runs after a workflow's graph was saved: updates its is_sub_workflow flag and, for a
+    sub-process with a changed graph, stores a new version (see workflows/sub_workflows.py).
+    Never makes the save itself fail.
+    """
+    try:
+        await record_sub_workflow_version(db, wf)
+        await db.refresh(wf)
+    except Exception as e:
+        logger.warning(f"Could not record sub-workflow version for workflow {getattr(wf, 'id', '?')}: {e}")
+        await db.rollback()
+        try:
+            await db.refresh(wf)   # rollback expires wf; reload it so the caller can keep using it
+        except Exception:
+            pass
+
 
 def _storable_config(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """
@@ -2414,6 +2434,7 @@ async def _autosave_workflow(
         )
         db.add(wf)
     await db.commit()
+    await _after_workflow_saved(db, wf)
 
     return target_id
 

@@ -612,18 +612,22 @@ class NodeStepExecutor:
                 # datasets and saved credentials, instead of letting the recipe query the DB itself
                 from backend.app.workflows.sub_workflows import (
                     ADD_WORKFLOW_RECIPE_IDS, SUB_WORKFLOW_DEFINITION_KEY, SUB_WORKFLOW_ERROR_KEY,
-                    load_sub_workflow_graph,
+                    SUB_WORKFLOW_VERSION_INFO_KEY, load_sub_workflow_graph,
                 )
                 child_wf_id = str(merged_config.get("workflow_id") or "").strip()
                 if r_id in ADD_WORKFLOW_RECIPE_IDS and child_wf_id:
                     try:
+                        child_version = merged_config.get("workflow_version")
                         if db is not None:
-                            child_graph = await load_sub_workflow_graph(child_wf_id, db, tenant_id)
+                            child_graph, child_info = await load_sub_workflow_graph(
+                                child_wf_id, db, tenant_id, version=child_version)
                         else:
                             from backend.app.infrastructure.database.session import AsyncSessionLocal
                             async with AsyncSessionLocal() as session:
-                                child_graph = await load_sub_workflow_graph(child_wf_id, session, tenant_id)
+                                child_graph, child_info = await load_sub_workflow_graph(
+                                    child_wf_id, session, tenant_id, version=child_version)
                         merged_config[SUB_WORKFLOW_DEFINITION_KEY] = child_graph
+                        merged_config[SUB_WORKFLOW_VERSION_INFO_KEY] = child_info
                     except ValueError as sub_err:
                         merged_config[SUB_WORKFLOW_ERROR_KEY] = str(sub_err)
 
@@ -711,13 +715,17 @@ class NodeStepExecutor:
                     meta["output_summary"]["saved_credential_id"] = saved_cred_id
                     meta["output_summary"]["saved_credential_name"] = saved_cred_name
 
+                # A step that ended with a warning (e.g. a failed sub-process with 'Halt Pipeline on
+                # Sub-Workflow Error' off) is reported as WARNING, not SUCCESS
+                is_warning = isinstance(outputs, dict) and outputs.get("_node_status") == "WARNING"
                 response = NodeTestStepResponse(
                     success=True,
                     session_id=session_id,
                     node_id=nid,
                     recipe_id=r_id,
                     recipe_name=getattr(recipe, "name", r_id),
-                    status="SUCCESS",
+                    status="WARNING" if is_warning else "SUCCESS",
+                    error_message=str(outputs.get("_warning")) if is_warning else None,
                     duration_ms=duration_ms,
                     row_count=meta.get("row_count"),
                     columns=[str(c) for c in meta.get("columns", [])],

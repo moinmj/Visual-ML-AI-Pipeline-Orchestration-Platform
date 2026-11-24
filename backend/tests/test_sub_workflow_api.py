@@ -54,10 +54,34 @@ async def test_sub_process_listed_and_runs_inside_parent():
         })
         assert resp.status_code in (200, 201), resp.text
         child_id = resp.json()["id"]
+        plain = await client.post("/api/v1/workflows/", json={
+            "id": str(uuid.uuid4()), "name": f"{child_name} plain",
+            "nodes": [{"id": "x", "recipe_id": "workflow_start"}], "edges": [], "node_configs": {},
+            "last_execution": {"status": "SUCCESS"},
+        })
+        plain_id = plain.json()["id"]
         try:
             # Dropdown list and status filter work on this database (json_extract was SQLite-only)
             assert child_id in await _list_ids(client, "sub_workflow_eligible=true", child_name)
+            assert plain_id not in await _list_ids(client, "sub_workflow_eligible=true", child_name)
             assert child_id in await _list_ids(client, "status=success", child_name)
+
+            # Batch 4: flag + latest version in the list, versions endpoint, pinned run
+            listed = (await client.get("/api/v1/workflows/", params={
+                "sub_workflow_eligible": "true", "search": child_name})).json()["data"]
+            item = next(w for w in listed if w["id"] == child_id)
+            assert item["is_sub_workflow"] is True and item["latest_version"] == 1
+            versions = (await client.get(f"/api/v1/workflows/{child_id}/sub-workflow-versions")).json()
+            assert versions["latest_version"] == 1 and versions["versions"][0]["is_latest"] is True
+            pinned_run = await client.post("/api/v1/workflows/execute", json={
+                "name": "Parent pinned",
+                "nodes": [{"id": "sub", "recipe_id": "add_workflow",
+                           "config": {"workflow_id": child_id, "workflow_version": "1"}}],
+                "edges": [],
+            })
+            pinned_node = next(n for n in pinned_run.json()["node_results"] if n["node_id"] == "sub")
+            assert pinned_node["status"] == "SUCCESS", pinned_node
+            assert pinned_node["output_summary"]["output_summary"]["sub_workflow_version"] == 1
 
             # Parent: Add Workflow -> runs the child prepared by the router
             run = await client.post("/api/v1/workflows/execute", json={
@@ -71,7 +95,9 @@ async def test_sub_process_listed_and_runs_inside_parent():
             assert node["status"] == "SUCCESS", node
             summary = node["output_summary"]["output_summary"]
             assert summary["sub_workflow_id"] == child_id
-            assert summary["output_records_emitted"] == 3
+            # Nothing upstream of the Add Workflow node: the child gets an empty table,
+            # never the Start Anchor's standalone sample rows
+            assert summary["output_records_emitted"] == 0
 
             # Another tenant can neither list nor run it
             app.dependency_overrides[get_current_user] = _as(2)
@@ -88,3 +114,4 @@ async def test_sub_process_listed_and_runs_inside_parent():
         finally:
             app.dependency_overrides[get_current_user] = _as(1)
             await client.delete(f"/api/v1/workflows/{child_id}")
+            await client.delete(f"/api/v1/workflows/{plain_id}")

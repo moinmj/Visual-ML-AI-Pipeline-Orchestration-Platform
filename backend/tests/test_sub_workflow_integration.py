@@ -84,21 +84,21 @@ def test_workflow_start_injected_from_parent():
 
 
 def test_workflow_end_captures_output():
-    """Verify End Anchor captures final transformed data and sets context flag."""
+    """Verify End Anchor captures final data into the result holder of the Add Workflow call."""
     recipe = WorkflowEndRecipe()
     in_df = pd.DataFrame([
         {"id": 1, "cleaned_score": 95.0},
         {"id": 2, "cleaned_score": 88.5},
     ])
 
-    ctx = {}
+    holder = {}
+    ctx = {"_sub_workflow_result": holder}
     res = recipe.execute(inputs={"dataframe": in_df}, config={}, context=ctx)
 
     assert len(res["dataframe"]) == 2
     assert "cleaned_score" in res["dataframe"].columns
-    assert ctx.get("sub_workflow_completed") is True
-    assert "sub_workflow_final_output" in ctx
-    assert len(ctx["sub_workflow_final_output"]) == 2
+    assert holder.get("end_node_completed") is True
+    pd.testing.assert_frame_equal(holder["dataframe"], in_df)
 
 
 def test_add_workflow_schema():
@@ -166,7 +166,7 @@ def test_add_workflow_missing_anchors():
             config={"workflow_id": "wf_bad_1", "propagate_errors": True},
             context=ctx
         )
-    assert "missing required anchors: End Anchor ('workflow_end')" in str(exc.value)
+    assert "has no End Anchor" in str(exc.value)
 
     # When propagate_errors=False
     res = recipe.execute(

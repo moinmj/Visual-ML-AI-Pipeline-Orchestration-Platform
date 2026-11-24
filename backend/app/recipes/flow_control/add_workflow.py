@@ -8,14 +8,34 @@ runs the internal steps, and emits the child End Anchor's dataset to Point B.
 """
 
 from typing import Dict, Any, List, Optional
-import time
+import concurrent.futures
+import contextvars
 import json
-from datetime import datetime, timezone
+import re
+import threading
+import time
+import uuid
+from collections import deque
 import pandas as pd
 
 from backend.app.recipes.base.recipe import BaseRecipe, RecipePort
 from backend.app.core.exceptions import ExecutionException, ValidationException
 from backend.app.core.logging import logger
+
+
+class _LinkedCancel:
+    """Stop signal for one sub-process run; also counts as set when the caller's own run was stopped,
+    so a timeout of an outer sub-process stops the ones nested inside it."""
+
+    def __init__(self, parent: Optional[Any] = None):
+        self._own = threading.Event()
+        self._parent = parent
+
+    def set(self) -> None:
+        self._own.set()
+
+    def is_set(self) -> bool:
+        return self._own.is_set() or bool(self._parent is not None and self._parent.is_set())
 
 
 class AddWorkflowRecipe(BaseRecipe):
@@ -69,6 +89,29 @@ class AddWorkflowRecipe(BaseRecipe):
                     "endpoint": "/api/v1/workflows?sub_workflow_eligible=true",
                     "description": "Select an eligible workflow (must contain Start & End anchors and have succeeded).",
                 },
+                "workflow_version": {
+                    "type": "string",
+                    "title": "Sub-Workflow Version",
+                    "default": "latest",
+                    "input_type": "select",
+                    "endpoint": "/api/v1/workflows/{workflow_id}/sub-workflow-versions",
+                    "depends_on": "workflow_id",
+                    "description": (
+                        "'latest' always runs the sub-workflow as saved now. Pick a version number to keep "
+                        "running that version when the sub-workflow is edited later."
+                    ),
+                },
+                "parameters": {
+                    "type": "object",
+                    "title": "Parameters",
+                    "default": {},
+                    "input_type": "key_value",
+                    "additionalProperties": True,
+                    "description": (
+                        "Values for the parameters the sub-workflow's Start Anchor declares. "
+                        "Inside the sub-workflow they are used as {{params.<name>}}."
+                    ),
+                },
                 "workflow_name": {
                     "type": "string",
                     "title": "Workflow Title / Display Label",
@@ -80,7 +123,11 @@ class AddWorkflowRecipe(BaseRecipe):
                     "title": "Halt Pipeline on Sub-Workflow Error",
                     "default": True,
                     "input_type": "checkbox",
-                    "description": "Raise an immediate diagnostic error if any step inside the sub-workflow fails.",
+                    "description": (
+                        "On: if the sub-workflow fails, the whole pipeline stops with that error. "
+                        "Off: this node is marked as a warning and the steps after it are skipped; "
+                        "other branches of the pipeline keep running."
+                    ),
                 },
                 "timeout_seconds": {
                     "type": "integer",
@@ -108,7 +155,7 @@ class AddWorkflowRecipe(BaseRecipe):
         return cls._sync_engine
 
     @classmethod
-    def _load_child_workflow_sync(cls, workflow_id: str) -> Optional[Any]:
+    def _load_child_workflow_sync(cls, workflow_id: str, version: Optional[int] = None) -> Optional[Any]:
         """
         Fallback for callers that didn't prepare the child in the API request (normally
         preload_sub_workflows does). Uses an ORM Session, so the tenant guard filters the row
@@ -118,7 +165,7 @@ class AddWorkflowRecipe(BaseRecipe):
         try:
             from sqlalchemy import select
             from sqlalchemy.orm import Session
-            from backend.app.workflows.models import Workflow
+            from backend.app.workflows.models import Workflow, WorkflowVersion
             from backend.app.workflows.router import db_workflow_to_graph
             with Session(cls._get_sync_engine()) as session:
                 wf = session.execute(
@@ -130,7 +177,17 @@ class AddWorkflowRecipe(BaseRecipe):
                 ).scalar_one_or_none()
                 if wf is None:
                     return None
-                graph = db_workflow_to_graph(wf)
+                source = wf
+                if version is not None:
+                    source = session.execute(
+                        select(WorkflowVersion).where(
+                            WorkflowVersion.workflow_id == workflow_id,
+                            WorkflowVersion.version_number == version,
+                        )
+                    ).scalar_one_or_none()
+                    if source is None:
+                        return None
+                graph = db_workflow_to_graph(source)
                 graph.id = graph.workflow_id = str(wf.id)
                 graph.name = wf.name
                 logger.warning(
@@ -165,6 +222,71 @@ class AddWorkflowRecipe(BaseRecipe):
         graph.name = child.get("name")
         return graph
 
+    @staticmethod
+    def _sub_steps(child_graph: Any, child_result: Any) -> List[Dict[str, Any]]:
+        """One entry per step of the child run (in run order), for showing inside the Add Workflow node."""
+        labels = {n.id: (n.label or n.id) for n in (getattr(child_graph, "nodes", None) or [])}
+        snapshots = getattr(child_result, "step_snapshots", None) or {}
+        steps = []
+        for nr in getattr(child_result, "node_results", None) or []:
+            snap = snapshots.get(nr.node_id) or {}
+            steps.append({
+                "node_id": nr.node_id,
+                "label": labels.get(nr.node_id, nr.node_id),
+                "recipe_id": nr.recipe_id,
+                "status": nr.status,
+                "duration_ms": nr.duration_ms,
+                "row_count": snap.get("row_count"),
+                "error_message": nr.error_message,
+            })
+        return steps
+
+    @staticmethod
+    def _soft_failure(status: str, message: str, title: str, in_df: pd.DataFrame,
+                      metrics: Optional[Dict[str, Any]] = None,
+                      summary: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Result when the sub-process didn't produce output and 'Halt Pipeline on Sub-Workflow Error'
+        is off. The executor shows this node as WARNING and skips every step after it (other
+        branches of the parent keep running), so the parent's input is never passed on as if
+        the sub-process had worked.
+        """
+        return {
+            "dataframe": in_df,
+            "_node_status": "WARNING",
+            "_warning": message,
+            "output_summary": {"title": title, "status": status, "error": message, **(summary or {})},
+            "metrics": {"status": status, **(metrics or {})},
+        }
+
+    @staticmethod
+    def _anchor_structure_error(child_graph: Any, start_nodes: List[Any], end_nodes: List[Any]) -> Optional[str]:
+        """Why the child can't be used as a sub-process, or None when its anchors are valid."""
+        if not start_nodes and not end_nodes:
+            return "has no Start Anchor and no End Anchor."
+        if not start_nodes:
+            return "has no Start Anchor."
+        if not end_nodes:
+            return "has no End Anchor."
+        if len(start_nodes) > 1:
+            return f"has {len(start_nodes)} Start Anchors ({', '.join(n.id for n in start_nodes)}); keep one."
+        if len(end_nodes) > 1:
+            return f"has {len(end_nodes)} End Anchors ({', '.join(n.id for n in end_nodes)}); keep one."
+
+        downstream: Dict[str, List[str]] = {}
+        for e in getattr(child_graph, "edges", None) or []:
+            downstream.setdefault(e.source, []).append(e.target)
+        start_id, end_id = start_nodes[0].id, end_nodes[0].id
+        seen, queue = {start_id}, deque([start_id])
+        while queue:
+            for nxt in downstream.get(queue.popleft(), []):
+                if nxt not in seen:
+                    seen.add(nxt)
+                    queue.append(nxt)
+        if end_id not in seen:
+            return f"has its End Anchor ('{end_id}') not connected to its Start Anchor ('{start_id}')."
+        return None
+
     def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
         t0 = time.time()
         workflow_id = str(config.get("workflow_id", "")).strip()
@@ -182,22 +304,14 @@ class AddWorkflowRecipe(BaseRecipe):
         if in_df is None:
             in_df = pd.DataFrame()
 
-        # If node is unconfigured (no workflow selected yet), pass through with warning
+        # No sub-workflow selected yet: warn and skip what follows, never pass the input on as if it ran
         if not workflow_id:
-            return {
-                "dataframe": in_df,
-                "output_summary": {
-                    "title": "Add Workflow (Unconfigured)",
-                    "status": "PENDING_CONFIGURATION",
-                    "records": len(in_df),
-                    "message": "No sub-workflow selected yet. Please configure 'workflow_id' in node settings.",
-                },
-                "metrics": {
-                    "status": "PENDING_CONFIGURATION",
-                    "records": len(in_df),
-                    "duration_ms": 0.0,
-                }
-            }
+            msg = "No sub-workflow selected yet. Choose one in 'Select Sub-Workflow' in this node's settings."
+            return self._soft_failure(
+                "PENDING_CONFIGURATION", msg, "Add Workflow (Unconfigured)", in_df,
+                metrics={"records": len(in_df), "duration_ms": 0.0},
+                summary={"records": len(in_df), "message": msg},
+            )
 
         # 2. Cycle Detection (Prevent recursion A -> B -> A)
         call_stack = []
@@ -212,7 +326,10 @@ class AddWorkflowRecipe(BaseRecipe):
         # 3. Load Child Workflow
         # Normally prepared in the API request by preload_sub_workflows (tenant-checked,
         # credentials and datasets preloaded); see backend/app/workflows/sub_workflows.py.
-        from backend.app.workflows.sub_workflows import SUB_WORKFLOW_DEFINITION_KEY, SUB_WORKFLOW_ERROR_KEY
+        from backend.app.workflows.sub_workflows import (
+            SUB_WORKFLOW_DEFINITION_KEY, SUB_WORKFLOW_ERROR_KEY, SUB_WORKFLOW_VERSION_INFO_KEY,
+            check_input_contract, parse_version, resolve_parameters, substitute_params,
+        )
         child_graph = None
         prepare_error = config.get(SUB_WORKFLOW_ERROR_KEY)
         if not prepare_error:
@@ -224,7 +341,11 @@ class AddWorkflowRecipe(BaseRecipe):
                 elif cached is not None:
                     child_graph = cached
             if child_graph is None:
-                child_graph = self._load_child_workflow_sync(workflow_id)
+                try:
+                    child_graph = self._load_child_workflow_sync(
+                        workflow_id, parse_version(config.get("workflow_version")))
+                except ValueError as ve:
+                    prepare_error = str(ve)
 
         if child_graph is None:
             err_msg = prepare_error or (
@@ -234,15 +355,10 @@ class AddWorkflowRecipe(BaseRecipe):
             logger.error(err_msg)
             if propagate_errors:
                 raise ExecutionException(err_msg)
-            return {
-                "dataframe": in_df,
-                "output_summary": {
-                    "title": f"Sub-Workflow: {workflow_name}",
-                    "status": "NOT_FOUND",
-                    "error": err_msg,
-                },
-                "metrics": {"status": "NOT_FOUND", "duration_ms": round((time.time() - t0) * 1000, 2)}
-            }
+            return self._soft_failure(
+                "NOT_FOUND", err_msg, f"Sub-Workflow: {workflow_name}", in_df,
+                metrics={"duration_ms": round((time.time() - t0) * 1000, 2)},
+            )
 
         actual_name = getattr(child_graph, "name", None) or workflow_name
         child_nodes = list(getattr(child_graph, "nodes", None) or [])
@@ -253,45 +369,116 @@ class AddWorkflowRecipe(BaseRecipe):
         start_nodes = [n for n in child_nodes if str(n.recipe_id).strip().lower() in start_aliases]
         end_nodes = [n for n in child_nodes if str(n.recipe_id).strip().lower() in end_aliases]
 
-        if not start_nodes or not end_nodes:
-            missing_parts = []
-            if not start_nodes:
-                missing_parts.append("Start Anchor ('workflow_start')")
-            if not end_nodes:
-                missing_parts.append("End Anchor ('workflow_end')")
+        anchor_error = self._anchor_structure_error(child_graph, start_nodes, end_nodes)
+        if anchor_error:
             err_msg = (
-                f"Sub-Workflow '{actual_name}' (ID: {workflow_id}) is missing required anchors: "
-                f"{', '.join(missing_parts)}. Workflows integrated via 'Add Workflow' must have both Start and End anchors."
+                f"Sub-Workflow '{actual_name}' (ID: {workflow_id}) {anchor_error} "
+                "Workflows used through 'Add Workflow' need exactly one Start Anchor and one End Anchor, "
+                "with the End Anchor connected (directly or through other steps) to the Start Anchor."
             )
             logger.error(err_msg)
             if propagate_errors:
                 raise ExecutionException(err_msg)
-            return {
-                "dataframe": in_df,
-                "output_summary": {
-                    "title": f"Sub-Workflow: {actual_name}",
-                    "status": "INVALID_ANCHORS",
-                    "error": err_msg,
-                },
-                "metrics": {"status": "INVALID_ANCHORS", "duration_ms": round((time.time() - t0) * 1000, 2)}
-            }
+            return self._soft_failure(
+                "INVALID_ANCHORS", err_msg, f"Sub-Workflow: {actual_name}", in_df,
+                metrics={"duration_ms": round((time.time() - t0) * 1000, 2)},
+            )
 
-        # 5. Build Child Context
+        version_info = dict(config.get(SUB_WORKFLOW_VERSION_INFO_KEY) or {"version": "latest"})
+        start_cfg = dict(start_nodes[0].config or {})
+
+        # 5a. Input contract declared on the Start Anchor ('Expected Input Columns')
+        contract_problems = check_input_contract(in_df, start_cfg.get("input_columns"))
+        if contract_problems:
+            err_msg = (
+                f"Sub-Workflow '{actual_name}' (ID: {workflow_id}) can't use the incoming table: "
+                + "; ".join(contract_problems) + "."
+            )
+            logger.error(err_msg)
+            if propagate_errors:
+                raise ExecutionException(err_msg)
+            return self._soft_failure(
+                "CONTRACT_MISMATCH", err_msg, f"Sub-Workflow: {actual_name}", in_df,
+                metrics={"sub_workflow_id": workflow_id, "duration_ms": round((time.time() - t0) * 1000, 2)},
+                summary={"problems": contract_problems},
+            )
+
+        # 5b. Parameters: declared on the Start Anchor, values from this node, used as {{params.name}}
+        params, param_problems = resolve_parameters(start_cfg.get("parameters"), config.get("parameters"))
+        if param_problems:
+            err_msg = (
+                f"Sub-Workflow '{actual_name}' (ID: {workflow_id}) parameters are not valid: "
+                + "; ".join(param_problems) + "."
+            )
+            logger.error(err_msg)
+            if propagate_errors:
+                raise ExecutionException(err_msg)
+            return self._soft_failure(
+                "INVALID_PARAMETERS", err_msg, f"Sub-Workflow: {actual_name}", in_df,
+                metrics={"sub_workflow_id": workflow_id, "duration_ms": round((time.time() - t0) * 1000, 2)},
+                summary={"problems": param_problems},
+            )
+        if params:
+            child_graph = child_graph.model_copy(update={"nodes": [
+                n.model_copy(update={"config": substitute_params(n.config or {}, params)})
+                for n in child_nodes
+            ]})
+
+        # 5c. Child context: only what the sub-process needs. Nothing else of the parent's run
+        # (its model, target column, scaler, current table, ...) leaks into the child.
+        parent_ctx = context if isinstance(context, dict) else {}
+        parent_exec_id = re.sub(r"[^A-Za-z0-9_-]", "", str(parent_ctx.get("execution_id") or "run"))[:40] or "run"
+        sub_exec_id = f"{parent_exec_id}_sub_{uuid.uuid4().hex[:12]}"   # unique per call, even within one second
+        result_holder: Dict[str, Any] = {}                              # filled by this run's End Anchor only
+        cancel = _LinkedCancel(parent_ctx.get("_cancel_event"))
+
+        child_context: Dict[str, Any] = {
+            k: parent_ctx[k] for k in ("session_id", "auth_session_id", "_cached_sub_workflows") if k in parent_ctx
+        }
+        child_context.update({
+            "sub_workflow_input": in_df.copy(),             # only the Start Anchor reads this
+            "sub_workflow_params": dict(params),
+            "_sub_workflow_stack": call_stack + [workflow_id],
+            "_sub_workflow_result": result_holder,
+            "_cancel_event": cancel,
+            "_cancel_reason": f"sub-process '{actual_name}' timed out after {timeout_seconds}s",
+            "execution_id": sub_exec_id,
+            "workflow_id": workflow_id,
+        })
+
+        # 6. Execute Sub-Workflow DAG in a worker thread so timeout_seconds can be enforced.
+        # The tenant/user context variables are copied into the thread.
         from backend.app.engine.execution.executor import DAGExecutor
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="sub-workflow")
+        try:
+            future = pool.submit(
+                contextvars.copy_context().run,
+                DAGExecutor.execute_workflow,
+                execution_id=sub_exec_id,
+                workflow=child_graph,
+                initial_df=None,            # the parent's table goes to the Start Anchor only
+                context=child_context,
+                include_node_outputs=False,
+            )
+            try:
+                child_result = future.result(timeout=timeout_seconds)
+            except concurrent.futures.TimeoutError:
+                cancel.set()   # the child stops before its next step
+                err_msg = (
+                    f"Sub-Workflow '{actual_name}' (ID: {workflow_id}) timed out after {timeout_seconds} seconds "
+                    "and was stopped. Increase 'Execution Timeout' or make the sub-process faster."
+                )
+                logger.error(err_msg)
+                if propagate_errors:
+                    raise ExecutionException(err_msg)
+                return self._soft_failure(
+                    "TIMEOUT", err_msg, f"Sub-Workflow: {actual_name}", in_df,
+                    metrics={"sub_workflow_id": workflow_id, "duration_ms": round((time.time() - t0) * 1000, 2)},
+                )
+        finally:
+            pool.shutdown(wait=False)
 
-        child_context = dict(context or {})
-        child_context["sub_workflow_input"] = in_df.copy()
-        child_context["_sub_workflow_stack"] = call_stack + [workflow_id]
-
-        # 6. Execute Sub-Workflow DAG
-        sub_exec_id = f"sub_{workflow_id[:8]}_{int(time.time())}"
-        child_result = DAGExecutor.execute_workflow(
-            execution_id=sub_exec_id,
-            workflow=child_graph,
-            initial_df=in_df.copy(),
-            context=child_context,
-            include_node_outputs=True
-        )
+        sub_steps = self._sub_steps(child_graph, child_result)
 
         # 7. Check for Sub-Workflow Failure & Format Structured Warning
         if child_result.status != "SUCCESS":
@@ -309,7 +496,6 @@ class AddWorkflowRecipe(BaseRecipe):
                     break
 
             if failed_node_id == "unknown" and child_result.logs:
-                import re
                 for log_line in child_result.logs:
                     log_str = str(log_line)
                     if any(kw in log_str for kw in ("❌", "DAG Resolution Error", "Configuration Error", "failed")):
@@ -336,58 +522,30 @@ class AddWorkflowRecipe(BaseRecipe):
             if propagate_errors:
                 raise ExecutionException(structured_warning)
 
-            return {
-                "dataframe": in_df,
-                "output_summary": {
-                    "title": f"Sub-Workflow: {actual_name}",
-                    "status": "FAILED",
-                    "failed_step": failed_node_id,
-                    "failed_recipe": failed_recipe,
-                    "error_message": failed_reason,
-                    "warning": structured_warning,
-                },
-                "metrics": {
-                    "status": "FAILED",
-                    "failed_step": failed_node_id,
-                    "sub_workflow_id": workflow_id,
-                    "duration_ms": child_result.total_duration_ms,
-                }
-            }
+            return self._soft_failure(
+                "FAILED", structured_warning, f"Sub-Workflow: {actual_name}", in_df,
+                metrics={"failed_step": failed_node_id, "sub_workflow_id": workflow_id,
+                         "duration_ms": child_result.total_duration_ms},
+                summary={"failed_step": failed_node_id, "failed_recipe": failed_recipe,
+                         "error_message": failed_reason, "warning": structured_warning,
+                         "sub_steps": sub_steps, **version_info},
+            )
 
-        # 8. Extract Final DataFrame from End Anchor
-        out_df = None
-        end_node_id = end_nodes[0].id
-
-        # Priority 1: Check NodeStepExecutor disk cache for uncompressed parquet output
-        try:
-            from backend.app.engine.execution.step_executor import NodeStepExecutor
-            cached_out = NodeStepExecutor.load_node_output(sub_exec_id, end_node_id)
-            if cached_out and isinstance(cached_out.get("dataframe"), pd.DataFrame):
-                out_df = cached_out["dataframe"]
-        except Exception as e:
-            logger.debug(f"Could not load cached parquet for sub-workflow end node {end_node_id}: {e}")
-
-        # Priority 2: Extract from child_result.node_outputs (handles serialized JSON DataFrame dict)
-        if out_df is None and child_result.node_outputs and end_node_id in child_result.node_outputs:
-            end_out = child_result.node_outputs[end_node_id]
-            if isinstance(end_out, dict):
-                df_val = end_out.get("dataframe")
-                if isinstance(df_val, pd.DataFrame):
-                    out_df = df_val
-                elif isinstance(df_val, dict) and "records" in df_val:
-                    out_df = pd.DataFrame(df_val["records"])
-            elif isinstance(end_out, pd.DataFrame):
-                out_df = end_out
-
-        # Priority 3: Registered in child_context by workflow_end recipe
-        if out_df is None and "sub_workflow_final_output" in child_context:
-            val = child_context["sub_workflow_final_output"]
-            if isinstance(val, pd.DataFrame):
-                out_df = val
-
-        # Priority 4: Fallback to empty or input DataFrame if sub-process emitted nothing
-        if out_df is None:
-            out_df = in_df.copy()
+        # 8. Final table, handed over by this run's End Anchor (same DataFrame, dtypes intact)
+        out_df = result_holder.get("dataframe")
+        if not isinstance(out_df, pd.DataFrame):
+            err_msg = (
+                f"Sub-Workflow '{actual_name}' (ID: {workflow_id}) finished but its End Anchor produced no output. "
+                "Check that the End Anchor is connected to the steps before it."
+            )
+            logger.error(err_msg)
+            if propagate_errors:
+                raise ExecutionException(err_msg)
+            return self._soft_failure(
+                "NO_OUTPUT", err_msg, f"Sub-Workflow: {actual_name}", in_df,
+                metrics={"sub_workflow_id": workflow_id, "duration_ms": round((time.time() - t0) * 1000, 2)},
+                summary={"sub_steps": sub_steps, **version_info},
+            )
 
         elapsed_ms = round((time.time() - t0) * 1000, 2)
         total_sub_nodes = len(child_nodes)
@@ -397,9 +555,14 @@ class AddWorkflowRecipe(BaseRecipe):
             "status": "SUCCESS",
             "sub_workflow_id": workflow_id,
             "sub_workflow_name": actual_name,
+            "sub_workflow_version": version_info.get("version", "latest"),
+            "latest_version": version_info.get("latest_version"),
+            "update_available": bool(version_info.get("update_available")),
+            "parameters_used": sorted(params),          # names only: values may be sensitive
             "input_records_received": len(in_df),
             "output_records_emitted": len(out_df),
             "total_sub_steps_executed": total_sub_nodes,
+            "sub_steps": sub_steps,
             "duration_ms": elapsed_ms,
             "message": f"Successfully executed '{actual_name}' ({total_sub_nodes} steps). Handed {len(out_df)} rows to Point B.",
         }
