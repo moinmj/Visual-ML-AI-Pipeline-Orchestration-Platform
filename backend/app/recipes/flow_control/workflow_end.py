@@ -57,14 +57,10 @@ class WorkflowEndRecipe(BaseRecipe):
                     "default": "Sub-process output exit point",
                     "description": "Notes describing returned columns and guarantees to caller.",
                     "input_type": "text"
-                },
-                "pass_through": {
-                    "type": "boolean",
-                    "title": "Enable Pass-Through",
-                    "default": True,
-                    "description": "Pass data directly through to the output port.",
-                    "input_type": "checkbox"
                 }
+                # 'pass_through' was removed: the End Anchor always hands its input to the parent
+                # unchanged, so the checkbox never did anything. Saved configs that still contain
+                # it are ignored.
             }
         }
 

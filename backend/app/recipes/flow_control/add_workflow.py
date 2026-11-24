@@ -100,7 +100,11 @@ class AddWorkflowRecipe(BaseRecipe):
                     "title": "Halt Pipeline on Sub-Workflow Error",
                     "default": True,
                     "input_type": "checkbox",
-                    "description": "Raise an immediate diagnostic error if any step inside the sub-workflow fails.",
+                    "description": (
+                        "On: if the sub-workflow fails, the whole pipeline stops with that error. "
+                        "Off: this node is marked as a warning and the steps after it are skipped; "
+                        "other branches of the pipeline keep running."
+                    ),
                 },
                 "timeout_seconds": {
                     "type": "integer",
@@ -186,6 +190,24 @@ class AddWorkflowRecipe(BaseRecipe):
         return graph
 
     @staticmethod
+    def _soft_failure(status: str, message: str, title: str, in_df: pd.DataFrame,
+                      metrics: Optional[Dict[str, Any]] = None,
+                      summary: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Result when the sub-process didn't produce output and 'Halt Pipeline on Sub-Workflow Error'
+        is off. The executor shows this node as WARNING and skips every step after it (other
+        branches of the parent keep running), so the parent's input is never passed on as if
+        the sub-process had worked.
+        """
+        return {
+            "dataframe": in_df,
+            "_node_status": "WARNING",
+            "_warning": message,
+            "output_summary": {"title": title, "status": status, "error": message, **(summary or {})},
+            "metrics": {"status": status, **(metrics or {})},
+        }
+
+    @staticmethod
     def _anchor_structure_error(child_graph: Any, start_nodes: List[Any], end_nodes: List[Any]) -> Optional[str]:
         """Why the child can't be used as a sub-process, or None when its anchors are valid."""
         if not start_nodes and not end_nodes:
@@ -230,22 +252,14 @@ class AddWorkflowRecipe(BaseRecipe):
         if in_df is None:
             in_df = pd.DataFrame()
 
-        # If node is unconfigured (no workflow selected yet), pass through with warning
+        # No sub-workflow selected yet: warn and skip what follows, never pass the input on as if it ran
         if not workflow_id:
-            return {
-                "dataframe": in_df,
-                "output_summary": {
-                    "title": "Add Workflow (Unconfigured)",
-                    "status": "PENDING_CONFIGURATION",
-                    "records": len(in_df),
-                    "message": "No sub-workflow selected yet. Please configure 'workflow_id' in node settings.",
-                },
-                "metrics": {
-                    "status": "PENDING_CONFIGURATION",
-                    "records": len(in_df),
-                    "duration_ms": 0.0,
-                }
-            }
+            msg = "No sub-workflow selected yet. Choose one in 'Select Sub-Workflow' in this node's settings."
+            return self._soft_failure(
+                "PENDING_CONFIGURATION", msg, "Add Workflow (Unconfigured)", in_df,
+                metrics={"records": len(in_df), "duration_ms": 0.0},
+                summary={"records": len(in_df), "message": msg},
+            )
 
         # 2. Cycle Detection (Prevent recursion A -> B -> A)
         call_stack = []
@@ -282,15 +296,10 @@ class AddWorkflowRecipe(BaseRecipe):
             logger.error(err_msg)
             if propagate_errors:
                 raise ExecutionException(err_msg)
-            return {
-                "dataframe": in_df,
-                "output_summary": {
-                    "title": f"Sub-Workflow: {workflow_name}",
-                    "status": "NOT_FOUND",
-                    "error": err_msg,
-                },
-                "metrics": {"status": "NOT_FOUND", "duration_ms": round((time.time() - t0) * 1000, 2)}
-            }
+            return self._soft_failure(
+                "NOT_FOUND", err_msg, f"Sub-Workflow: {workflow_name}", in_df,
+                metrics={"duration_ms": round((time.time() - t0) * 1000, 2)},
+            )
 
         actual_name = getattr(child_graph, "name", None) or workflow_name
         child_nodes = list(getattr(child_graph, "nodes", None) or [])
@@ -311,15 +320,10 @@ class AddWorkflowRecipe(BaseRecipe):
             logger.error(err_msg)
             if propagate_errors:
                 raise ExecutionException(err_msg)
-            return {
-                "dataframe": in_df,
-                "output_summary": {
-                    "title": f"Sub-Workflow: {actual_name}",
-                    "status": "INVALID_ANCHORS",
-                    "error": err_msg,
-                },
-                "metrics": {"status": "INVALID_ANCHORS", "duration_ms": round((time.time() - t0) * 1000, 2)}
-            }
+            return self._soft_failure(
+                "INVALID_ANCHORS", err_msg, f"Sub-Workflow: {actual_name}", in_df,
+                metrics={"duration_ms": round((time.time() - t0) * 1000, 2)},
+            )
 
         # 5. Build Child Context
         parent_exec_id = re.sub(r"[^A-Za-z0-9_-]", "", str((context or {}).get("execution_id") or "run"))[:40] or "run"
@@ -361,12 +365,10 @@ class AddWorkflowRecipe(BaseRecipe):
                 logger.error(err_msg)
                 if propagate_errors:
                     raise ExecutionException(err_msg)
-                return {
-                    "dataframe": in_df,
-                    "output_summary": {"title": f"Sub-Workflow: {actual_name}", "status": "TIMEOUT", "error": err_msg},
-                    "metrics": {"status": "TIMEOUT", "sub_workflow_id": workflow_id,
-                                "duration_ms": round((time.time() - t0) * 1000, 2)},
-                }
+                return self._soft_failure(
+                    "TIMEOUT", err_msg, f"Sub-Workflow: {actual_name}", in_df,
+                    metrics={"sub_workflow_id": workflow_id, "duration_ms": round((time.time() - t0) * 1000, 2)},
+                )
         finally:
             pool.shutdown(wait=False)
 
@@ -412,23 +414,13 @@ class AddWorkflowRecipe(BaseRecipe):
             if propagate_errors:
                 raise ExecutionException(structured_warning)
 
-            return {
-                "dataframe": in_df,
-                "output_summary": {
-                    "title": f"Sub-Workflow: {actual_name}",
-                    "status": "FAILED",
-                    "failed_step": failed_node_id,
-                    "failed_recipe": failed_recipe,
-                    "error_message": failed_reason,
-                    "warning": structured_warning,
-                },
-                "metrics": {
-                    "status": "FAILED",
-                    "failed_step": failed_node_id,
-                    "sub_workflow_id": workflow_id,
-                    "duration_ms": child_result.total_duration_ms,
-                }
-            }
+            return self._soft_failure(
+                "FAILED", structured_warning, f"Sub-Workflow: {actual_name}", in_df,
+                metrics={"failed_step": failed_node_id, "sub_workflow_id": workflow_id,
+                         "duration_ms": child_result.total_duration_ms},
+                summary={"failed_step": failed_node_id, "failed_recipe": failed_recipe,
+                         "error_message": failed_reason, "warning": structured_warning},
+            )
 
         # 8. Final table, handed over by this run's End Anchor (same DataFrame, dtypes intact)
         out_df = result_holder.get("dataframe")
@@ -440,12 +432,10 @@ class AddWorkflowRecipe(BaseRecipe):
             logger.error(err_msg)
             if propagate_errors:
                 raise ExecutionException(err_msg)
-            return {
-                "dataframe": in_df,
-                "output_summary": {"title": f"Sub-Workflow: {actual_name}", "status": "NO_OUTPUT", "error": err_msg},
-                "metrics": {"status": "NO_OUTPUT", "sub_workflow_id": workflow_id,
-                            "duration_ms": round((time.time() - t0) * 1000, 2)},
-            }
+            return self._soft_failure(
+                "NO_OUTPUT", err_msg, f"Sub-Workflow: {actual_name}", in_df,
+                metrics={"sub_workflow_id": workflow_id, "duration_ms": round((time.time() - t0) * 1000, 2)},
+            )
 
         elapsed_ms = round((time.time() - t0) * 1000, 2)
         total_sub_nodes = len(child_nodes)

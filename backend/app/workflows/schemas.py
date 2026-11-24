@@ -269,7 +269,7 @@ class NodeTestStepResponse(BaseModel):
     node_id: str
     recipe_id: str
     recipe_name: str = "Component"
-    status: str = "SUCCESS"  # SUCCESS, FAILED
+    status: str = "SUCCESS"  # SUCCESS, FAILED, WARNING (ended without a result, see error_message)
     duration_ms: float = 0.0
     row_count: Optional[int] = None
     columns: List[str] = Field(default_factory=list)

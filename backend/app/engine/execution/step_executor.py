@@ -702,13 +702,17 @@ class NodeStepExecutor:
                     meta["output_summary"]["saved_credential_id"] = saved_cred_id
                     meta["output_summary"]["saved_credential_name"] = saved_cred_name
 
+                # A step that ended with a warning (e.g. a failed sub-process with 'Halt Pipeline on
+                # Sub-Workflow Error' off) is reported as WARNING, not SUCCESS
+                is_warning = isinstance(outputs, dict) and outputs.get("_node_status") == "WARNING"
                 response = NodeTestStepResponse(
                     success=True,
                     session_id=session_id,
                     node_id=nid,
                     recipe_id=r_id,
                     recipe_name=getattr(recipe, "name", r_id),
-                    status="SUCCESS",
+                    status="WARNING" if is_warning else "SUCCESS",
+                    error_message=str(outputs.get("_warning")) if is_warning else None,
                     duration_ms=duration_ms,
                     row_count=meta.get("row_count"),
                     columns=[str(c) for c in meta.get("columns", [])],

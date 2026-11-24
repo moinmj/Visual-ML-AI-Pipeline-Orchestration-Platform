@@ -183,7 +183,7 @@ class PipelineJobManager:
             elif etype == "node_finished":
                 status = event.get("status")
                 job["node_status"][event.get("node_id")] = "REUSED" if event.get("reused") else status
-                if status == "SUCCESS":
+                if status in ("SUCCESS", "WARNING", "SKIPPED"):   # finished, so progress reaches 100%
                     job["progress"]["completed"] += 1
                 if job.get("current_node") == event.get("node_id"):
                     job["current_node"] = None
