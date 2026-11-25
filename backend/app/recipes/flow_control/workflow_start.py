@@ -24,7 +24,7 @@ class WorkflowStartRecipe(BaseRecipe):
     subgroup = "Control Flow & Reliability"
     description = (
         "Entry anchor for a sub-process workflow. Captures data passed from the parent "
-        "pipeline (Point A) or generates mock data in standalone test mode."
+        "pipeline (Point A); on its own it provides sample rows shaped like the Expected Input Columns."
     )
     input_types = []
     output_types = ["dataframe"]
@@ -57,7 +57,7 @@ class WorkflowStartRecipe(BaseRecipe):
                     "default": 5,
                     "minimum": 1,
                     "maximum": 500,
-                    "description": "Number of sample rows to generate when testing this sub-process standalone.",
+                    "description": "Number of sample rows used when this sub-process runs on its own (not called by a parent).",
                     "input_type": "number"
                 },
                 "input_columns": {
@@ -67,7 +67,9 @@ class WorkflowStartRecipe(BaseRecipe):
                     "input_type": "table",
                     "description": (
                         "Columns the calling pipeline must provide. Checked before the sub-process runs; "
-                        "a missing required column or a wrong type stops it with a clear message. Leave empty to accept any table."
+                        "a missing required column or a wrong type stops it with a clear message. When the sub-process "
+                        "runs on its own, its sample rows have exactly these columns, so the steps after this anchor "
+                        "can be configured against them. Leave empty to accept any table."
                     ),
                     "items": {
                         "type": "object",
@@ -129,6 +131,9 @@ class WorkflowStartRecipe(BaseRecipe):
                         in_df = val
                         break
 
+        from backend.app.workflows.sub_workflows import contract_sample_frame
+        contract_df = None if in_df is not None else contract_sample_frame(config.get("input_columns"), mock_count)
+
         mode = "INJECTED"
         if in_df is not None:
             out_df = in_df.copy()
@@ -136,8 +141,17 @@ class WorkflowStartRecipe(BaseRecipe):
                 f"Injected {len(out_df)} rows from parent pipeline (Point A)."
                 if len(out_df) else "Parent pipeline passed an empty table (0 rows); passing it on unchanged."
             )
+        elif contract_df is not None:
+            # Running on its own with Expected Input Columns declared: sample rows with exactly
+            # those columns, so the steps after this can be configured against them.
+            mode = "STANDALONE_CONTRACT_SAMPLE"
+            out_df = contract_df
+            status_msg = (
+                f"Running on its own: {len(out_df)} sample rows with the {len(out_df.columns)} "
+                "Expected Input Columns. Called from a parent, the parent's table is used instead."
+            )
         else:
-            # Standalone test fallback
+            # Standalone test fallback (no Expected Input Columns declared)
             mode = "STANDALONE_MOCK"
             out_df = pd.DataFrame([
                 {

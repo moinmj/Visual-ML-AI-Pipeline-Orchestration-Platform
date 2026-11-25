@@ -409,7 +409,19 @@ class WorkflowSchemaInferencer:
         # Check if node is an independent generator or preceded by a trigger
         is_trigger_parent = parent_recipe in ["cron_trigger", "webhook_trigger", None]
         if not parent_cols or is_trigger_parent:
-            if recipe_id == "stock_market_api":
+            from backend.app.workflows.sub_workflows import START_ANCHOR_IDS, contract_columns
+            declared = []
+            if recipe_id in START_ANCHOR_IDS:
+                inner = config.get("config") if isinstance(config.get("config"), dict) else {}
+                declared = contract_columns(config.get("input_columns") or inner.get("input_columns"))
+            if declared:
+                # Sub-process Start Anchor: its output has the declared Expected Input Columns
+                parent_cols = [name for name, _ in declared]
+                parent_details = [
+                    NodeColumnInfo(name=name, type="numeric" if t in ("integer", "number") else "string")
+                    for name, t in declared
+                ]
+            elif recipe_id == "stock_market_api":
                 mode = str(config.get("mode", "historical")).lower().strip()
                 if mode == "quote":
                     parent_cols = ["symbol", "price", "change", "change_percent", "open", "high_24h", "low_24h", "volume_24h", "market_cap_est", "last_updated"]

@@ -284,6 +284,45 @@ def _as_list(value: Any) -> List[Dict[str, Any]]:
     return [v for v in (value or []) if isinstance(v, dict)] if isinstance(value, list) else []
 
 
+def contract_columns(columns: Any) -> List[Tuple[str, str]]:
+    """(name, type) of every column declared in a Start Anchor's input_columns, in order, no duplicates."""
+    out: List[Tuple[str, str]] = []
+    seen = set()
+    for col in _as_list(columns):
+        name = str(col.get("name") or "").strip()
+        if name and name not in seen:
+            seen.add(name)
+            out.append((name, str(col.get("type") or "any").strip().lower() or "any"))
+    return out
+
+
+def contract_sample_frame(columns: Any, rows: int) -> Any:
+    """
+    Sample table shaped like a Start Anchor's input_columns, used when the sub-process runs on
+    its own (no parent). Lets the steps inside be configured and tested against the columns
+    the sub-process will really receive. None when no columns are declared.
+    """
+    import pandas as pd
+
+    cols = contract_columns(columns)
+    if not cols:
+        return None
+    rows = max(1, int(rows))
+    data: Dict[str, Any] = {}
+    for name, col_type in cols:
+        if col_type == "integer":
+            data[name] = [i * 1000 for i in range(1, rows + 1)]
+        elif col_type == "number":
+            data[name] = [round(i * 1000.5, 2) for i in range(1, rows + 1)]
+        elif col_type == "boolean":
+            data[name] = [i % 2 == 1 for i in range(1, rows + 1)]
+        elif col_type == "datetime":
+            data[name] = pd.date_range("2024-01-01", periods=rows, freq="D")
+        else:                                   # string / any
+            data[name] = [f"{name}_{i}" for i in range(1, rows + 1)]
+    return pd.DataFrame(data)
+
+
 def check_input_contract(df: Any, columns: Any) -> List[str]:
     """Problems with the parent's table against the Start Anchor's input_columns ([] = fine)."""
     import pandas as pd
