@@ -330,35 +330,145 @@ def is_encrypted_token(val: Any) -> bool:
         return False
 
 
+_SECRET_KEY_PARTS = ("password", "secret", "token", "api_key", "apikey")
+# Names that contain one of the words above but hold a setting, not a secret.
+_NON_SECRET_KEYS = {"max_tokens", "max_new_tokens", "tokenizer"}
+_NON_SECRET_SUFFIXES = ("_url", "_endpoint", "_header", "_path", "_type")
+# A node linked to a vaulted credential (credential_id) must not keep its own copy of these.
+_VAULTED_KEY_PARTS = (
+    "password", "secret", "api_key", "apikey", "access_token", "refresh_token",
+    "private_key", "auth_token", "bearer_token", "service_account_key",
+)
+MASK_PLACEHOLDER = "••••••••"
+
+
+def is_secret_config_key(key: Any) -> bool:
+    """True when a node config setting with this name holds a credential."""
+    k = str(key).lower().strip()
+    if k in SENSITIVE_FIELD_NAMES:
+        return True
+    if k in _NON_SECRET_KEYS or k.endswith(_NON_SECRET_SUFFIXES):
+        return False
+    return any(p in k for p in _SECRET_KEY_PARTS)
+
+
 def encrypt_node_config_secrets(config: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Encrypts plaintext passwords / tokens / secrets in a node config before saving.
-    Masked placeholders are dropped instead of being stored.
+    Encrypts plaintext passwords / tokens / secrets in a node config before saving, at any
+    depth (nested settings such as {"config": {...}} or {"fallback_values": {...}} and dicts
+    inside lists). Masked placeholders are dropped instead of being stored. Returns a copy.
     """
     if not isinstance(config, dict):
         return config
-    cleaned = dict(config)
-    for k, v in list(cleaned.items()):
-        k_lower = str(k).lower().strip()
-        is_secret = k_lower in SENSITIVE_FIELD_NAMES or any(s in k_lower for s in ("password", "secret", "token", "api_key", "apikey"))
-        if not is_secret or not isinstance(v, str) or not v.strip():
-            continue
-        if is_masked_value(v):
-            del cleaned[k]
-        elif not is_encrypted_token(v):
-            cleaned[k] = encrypt_credential(v)
+    cleaned: Dict[str, Any] = {}
+    for k, v in config.items():
+        if isinstance(v, str) and v.strip() and is_secret_config_key(k):
+            if is_masked_value(v):
+                continue
+            cleaned[k] = v if is_encrypted_token(v) else encrypt_credential(v)
+        elif isinstance(v, dict):
+            cleaned[k] = encrypt_node_config_secrets(v)
+        elif isinstance(v, list):
+            cleaned[k] = [encrypt_node_config_secrets(i) if isinstance(i, dict) else i for i in v]
+        else:
+            cleaned[k] = v
     return cleaned
 
 
+def _map_encrypted(config: Dict[str, Any], fn, top: bool) -> Dict[str, Any]:
+    """
+    Applies fn to every encrypted value of a node config: any top-level value (as before), and
+    nested values whose setting name is a secret (mirrors encrypt_node_config_secrets).
+    """
+    out: Dict[str, Any] = {}
+    for k, v in config.items():
+        if isinstance(v, str):
+            if (top or is_secret_config_key(k)) and is_encrypted_token(v):
+                v = fn(k, v)
+        elif isinstance(v, dict):
+            v = _map_encrypted(v, fn, top=False)
+        elif isinstance(v, list):
+            v = [_map_encrypted(i, fn, top=False) if isinstance(i, dict) else i for i in v]
+        out[k] = v
+    return out
+
+
 def decrypt_node_config_secrets(config: Dict[str, Any]) -> Dict[str, Any]:
-    """Decrypts encrypted fields of a node config in memory so recipes can authenticate at runtime."""
+    """Decrypts encrypted fields of a node config in memory (nested ones too) so recipes can authenticate at runtime."""
     if not isinstance(config, dict):
         return config
-    decrypted = dict(config)
-    for k, v in list(decrypted.items()):
-        if isinstance(v, str) and is_encrypted_token(v):
-            try:
-                decrypted[k] = decrypt_credential(v)
-            except Exception as e:
-                logger.warning(f"Failed to decrypt node config field '{k}': {e}")
-    return decrypted
+
+    def _decrypt(k: Any, v: str) -> str:
+        try:
+            return decrypt_credential(v)
+        except Exception as e:
+            logger.warning(f"Failed to decrypt node config field '{k}': {e}")
+            return v
+
+    return _map_encrypted(config, _decrypt, top=True)
+
+
+def mask_node_config_secrets(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Replaces encrypted fields of a node config (nested ones too) with a placeholder for the frontend."""
+    if not isinstance(config, dict):
+        return config
+    return _map_encrypted(config, lambda k, v: MASK_PLACEHOLDER, top=True)
+
+
+def _protect_node_config(cfg: Any) -> Any:
+    if not isinstance(cfg, dict):
+        return cfg
+    if cfg.get("credential_id"):
+        cfg = {k: v for k, v in cfg.items()
+               if not any(p in str(k).lower() for p in _VAULTED_KEY_PARTS)}
+    inner = cfg.get("config")
+    if isinstance(inner, dict) and inner.get("credential_id"):
+        cfg = {**cfg, "config": _protect_node_config(inner)}
+    return encrypt_node_config_secrets(cfg)
+
+
+def protect_graph_secrets(nodes: Any, node_configs: Any):
+    """
+    Copy of a stored graph (nodes list, node_configs dict) that is safe to write to the database:
+    inline credentials encrypted at any depth, masked placeholders dropped, and secrets removed
+    from nodes that use a vaulted credential (credential_id). Handles node configs at
+    node["data"]["config"] and node["config"], and node_configs values that are flat or
+    wrapped as {"config": {...}}. Anything that isn't a list / dict is returned unchanged.
+    """
+    new_configs = node_configs
+    if isinstance(node_configs, dict):
+        new_configs = {nid: _protect_node_config(c) for nid, c in node_configs.items()}
+    new_nodes = nodes
+    if isinstance(nodes, list):
+        new_nodes = []
+        for n in nodes:
+            if isinstance(n, dict):
+                n = dict(n)
+                if isinstance(n.get("config"), dict):
+                    n["config"] = _protect_node_config(n["config"])
+                data = n.get("data")
+                if isinstance(data, dict) and isinstance(data.get("config"), dict):
+                    n["data"] = {**data, "config": _protect_node_config(data["config"])}
+            new_nodes.append(n)
+    return new_nodes, new_configs
+
+
+# (nodes key, node_configs key) pairs a stored execution dict (workflows.last_execution) may hold
+_EXECUTION_GRAPH_KEYS = (("snapshot_nodes", "snapshot_node_configs"), ("nodes", "node_configs"))
+
+
+def protect_execution_secrets(execution: Any) -> Any:
+    """
+    Copy of a stored execution dict (workflows.last_execution) with protect_graph_secrets applied
+    to the graph snapshot inside it. Run results (metrics, node outputs, logs) are left as they are.
+    """
+    if not isinstance(execution, dict):
+        return execution
+    out = dict(execution)
+    for nodes_key, configs_key in _EXECUTION_GRAPH_KEYS:
+        if nodes_key in out or configs_key in out:
+            out[nodes_key], out[configs_key] = protect_graph_secrets(out.get(nodes_key), out.get(configs_key))
+            for key in (nodes_key, configs_key):     # don't add keys that weren't there
+                if key not in execution:
+                    out.pop(key, None)
+    return out

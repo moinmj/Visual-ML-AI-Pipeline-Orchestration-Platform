@@ -16,6 +16,8 @@ from backend.app.core.crypto import (
     decrypt_node_config_secrets,
     is_encrypted_token,
     is_masked_value,
+    mask_node_config_secrets,
+    merge_masked_secrets,
 )
 import math
 import uuid
@@ -210,13 +212,21 @@ def sanitize_vaulted_node_configs(
         existing_configs = {}
     existing_node_cfgs: Dict[str, Any] = {}
     for en in ((getattr(existing_wf, "nodes", None) or []) if existing_wf else []):
-        if isinstance(en, dict) and isinstance(en.get("data"), dict) and isinstance(en["data"].get("config"), dict):
+        if not isinstance(en, dict):
+            continue
+        if isinstance(en.get("data"), dict) and isinstance(en["data"].get("config"), dict):
             existing_node_cfgs[en.get("id")] = en["data"]["config"]
+        elif isinstance(en.get("config"), dict):
+            existing_node_cfgs[en.get("id")] = en["config"]
 
-    def _restore_masked(nid: Any, cfg: Dict[str, Any]) -> Dict[str, Any]:
+    def _restore_masked(nid: Any, cfg: Dict[str, Any], prefer_node: bool = False) -> Dict[str, Any]:
         """Swap masked placeholders ('********' / '••••••••') for the stored ciphertext."""
-        old_cfg = existing_configs.get(nid) or existing_node_cfgs.get(nid) or {}
-        merged = dict(cfg)
+        if prefer_node:
+            old_cfg = existing_node_cfgs.get(nid) or existing_configs.get(nid) or {}
+        else:
+            old_cfg = existing_configs.get(nid) or existing_node_cfgs.get(nid) or {}
+        # Nested placeholders (the frontend masks nested secrets too) get their stored value back
+        merged = merge_masked_secrets(cfg, old_cfg if isinstance(old_cfg, dict) else {})
         for k, v in list(merged.items()):
             k_lower = str(k).lower().strip()
             if any(s in k_lower for s in VAULTED_SENSITIVE_KEYS) and isinstance(old_cfg, dict) and k in old_cfg:
@@ -265,6 +275,14 @@ def sanitize_vaulted_node_configs(
                             else:
                                 data_copy["config"] = encrypt_node_config_secrets(_restore_masked(nid, cfg))
                         n_copy["data"] = data_copy
+                flat_cfg = n_copy.get("config")      # nodes saved as {"id", "recipe_id", "config"}
+                if isinstance(flat_cfg, dict):
+                    if flat_cfg.get("credential_id"):
+                        n_copy["config"] = {k: v for k, v in flat_cfg.items()
+                                            if not any(s in str(k).lower() for s in VAULTED_SENSITIVE_KEYS)}
+                    else:
+                        n_copy["config"] = encrypt_node_config_secrets(
+                            _restore_masked(nid, flat_cfg, prefer_node=True))
                 sanitized_nodes.append(n_copy)
             else:
                 sanitized_nodes.append(n)
@@ -278,45 +296,27 @@ def mask_workflow_configs_for_frontend(
     node_configs: Optional[Dict[str, Any]]
 ) -> Tuple[Optional[List[Dict[str, Any]]], Optional[Dict[str, Any]]]:
     """
-    Masks MultiFernet-encrypted ciphertext tokens in node configurations before
-    returning to the frontend (e.g. converting 'gAAAAA...' to '••••••••').
+    Replaces encrypted credentials in node configurations with '••••••••' before returning
+    them to the frontend: nested settings too, and node configs at node["data"]["config"]
+    and node["config"]. On save, sanitize_vaulted_node_configs puts the stored values back.
     """
-    masked_configs = dict(node_configs) if isinstance(node_configs, dict) else None
-    masked_nodes = list(nodes) if isinstance(nodes, list) else None
+    masked_configs = None
+    if isinstance(node_configs, dict):
+        masked_configs = {nid: mask_node_config_secrets(cfg) if isinstance(cfg, dict) else cfg
+                          for nid, cfg in node_configs.items()}
 
-    if masked_configs:
-        for nid, cfg in list(masked_configs.items()):
-            if isinstance(cfg, dict):
-                m_cfg = {}
-                for k, v in cfg.items():
-                    if is_encrypted_token(v):
-                        m_cfg[k] = "••••••••"
-                    else:
-                        m_cfg[k] = v
-                masked_configs[nid] = m_cfg
-
-    if masked_nodes:
-        m_nodes = []
-        for n in masked_nodes:
+    masked_nodes = None
+    if isinstance(nodes, list):
+        masked_nodes = []
+        for n in nodes:
             if isinstance(n, dict):
-                n_copy = dict(n)
-                data = n_copy.get("data")
-                if isinstance(data, dict):
-                    data_copy = dict(data)
-                    cfg = data_copy.get("config")
-                    if isinstance(cfg, dict):
-                        m_cfg = {}
-                        for k, v in cfg.items():
-                            if is_encrypted_token(v):
-                                m_cfg[k] = "••••••••"
-                            else:
-                                m_cfg[k] = v
-                        data_copy["config"] = m_cfg
-                        n_copy["data"] = data_copy
-                m_nodes.append(n_copy)
-            else:
-                m_nodes.append(n)
-        masked_nodes = m_nodes
+                n = dict(n)
+                if isinstance(n.get("config"), dict):
+                    n["config"] = mask_node_config_secrets(n["config"])
+                data = n.get("data")
+                if isinstance(data, dict) and isinstance(data.get("config"), dict):
+                    n["data"] = {**data, "config": mask_node_config_secrets(data["config"])}
+            masked_nodes.append(n)
 
     return masked_nodes, masked_configs
 
@@ -1751,6 +1751,8 @@ async def get_workflow(
     )
     wf.workflow_id = wf.id
     wf.name = clean_workbook_name(wf.name) or wf.name
+    if wf in db:
+        db.expunge(wf)   # detach so the masked values below can never be flushed back to the DB
     wf.nodes, wf.node_configs = mask_workflow_configs_for_frontend(wf.nodes, wf.node_configs)
     return wf
 

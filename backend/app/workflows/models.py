@@ -1,5 +1,7 @@
 import uuid
 from datetime import datetime, timezone
+from typing import Any
+from sqlalchemy import event, inspect as sa_inspect
 from sqlalchemy import Column, String, DateTime, JSON, Text, Boolean, Integer, Float, ForeignKey
 from backend.app.infrastructure.database.session import Base
 
@@ -88,3 +90,68 @@ class WorkflowExecution(Base):
     logs = Column(JSON, nullable=True)
 
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+# ── Credentials are never stored in plaintext ─────────────────────────────
+# Every write of a workflow, a sub-process version or an execution snapshot goes through
+# protect_graph_secrets (core/crypto.py): inline passwords / tokens / keys are encrypted at any
+# depth and nodes using a vaulted credential lose their copy of the secret. This catches every
+# path that writes these rows, including ones that build the payload from a graph whose
+# credentials were decrypted in memory for a run (scheduler, /execute, imports, saved reports).
+# Explicit save paths still run sanitize_vaulted_node_configs first (it restores masked values
+# from the stored row); this is the backstop. Core / raw SQL writes are not covered.
+
+def _graph_changed(target: Any, *attrs: str) -> bool:
+    state = sa_inspect(target)
+    return any(state.attrs[a].history.has_changes() for a in attrs)
+
+
+def _protect_graph_columns(target: Any, nodes_attr: str, configs_attr: str, is_insert: bool) -> None:
+    from backend.app.core.crypto import protect_graph_secrets
+    if not is_insert and not _graph_changed(target, nodes_attr, configs_attr):
+        return
+    nodes, configs = getattr(target, nodes_attr), getattr(target, configs_attr)
+    new_nodes, new_configs = protect_graph_secrets(nodes, configs)
+    if new_nodes != nodes:
+        setattr(target, nodes_attr, new_nodes)
+    if new_configs != configs:
+        setattr(target, configs_attr, new_configs)
+
+
+def _protect_workflow(target: "Workflow", is_insert: bool) -> None:
+    from backend.app.core.crypto import protect_execution_secrets
+    _protect_graph_columns(target, "nodes", "node_configs", is_insert)
+    if is_insert or _graph_changed(target, "last_execution"):
+        last = target.last_execution
+        safe = protect_execution_secrets(last)
+        if safe != last:
+            target.last_execution = safe
+
+
+@event.listens_for(Workflow, "before_insert")
+def _workflow_before_insert(mapper, connection, target):
+    _protect_workflow(target, True)
+
+
+@event.listens_for(Workflow, "before_update")
+def _workflow_before_update(mapper, connection, target):
+    _protect_workflow(target, False)
+
+
+@event.listens_for(WorkflowVersion, "before_insert")
+def _version_before_insert(mapper, connection, target):
+    _protect_graph_columns(target, "nodes", "node_configs", True)
+
+
+@event.listens_for(WorkflowVersion, "before_update")
+def _version_before_update(mapper, connection, target):
+    _protect_graph_columns(target, "nodes", "node_configs", False)
+
+
+@event.listens_for(WorkflowExecution, "before_insert")
+def _execution_before_insert(mapper, connection, target):
+    _protect_graph_columns(target, "snapshot_nodes", "snapshot_node_configs", True)
+
+
+@event.listens_for(WorkflowExecution, "before_update")
+def _execution_before_update(mapper, connection, target):
+    _protect_graph_columns(target, "snapshot_nodes", "snapshot_node_configs", False)
