@@ -1,263 +1,283 @@
-# ⚡ Visual AI/ML Pipeline Orchestration Platform
+# Datalect ML — Pipeline Platform (Backend)
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg)](https://www.python.org/downloads/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.109.0-009688.svg?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
-[![Streamlit](https://img.shields.io/badge/Streamlit-1.31.0-FF4B4B.svg?logo=streamlit&logoColor=white)](https://streamlit.io)
-[![Tests](https://img.shields.io/badge/tests-22%20passed%20(100%25)-success.svg)](https://pytest.org)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+Backend of **Datalect ML**, a visual no-code / low-code platform for building data and machine-learning
+pipelines. Users draw a workflow on a canvas (nodes = *recipes*, edges = data flow); this service validates
+it, runs it as a DAG, stores every run, and serves the trained models.
 
-An enterprise-grade, visual no-code/low-code workflow automation and AI orchestration platform modeled on the Symbol-Recipe paradigm (similar to **Boomi** and **n8n**) with rich data science and AutoML abstractions (similar to **Dataiku**).
-
----
-
-## 🌟 Key Platform Capabilities
-
-### 1. 🎨 Interactive Visual Whiteboard (React Flow)
-- **Drag-to-Connect Wiring:** Native 2D canvas with interactive handle-to-handle visual wiring, selectable/draggable nodes, and animated edge flows.
-- **🔗 Smart Auto-Wire:** 1-click spatial sequential left-to-right DAG autowiring.
-- **Interactive Node Config Drawer:** Dynamic form rendering generated directly from JSON Schemas alongside real-time Python `</> Generated Code` inspectability.
-- **Live Whiteboard Renaming:** Real-time editable node labels and collision-free ID management.
-
-### 2. 🧠 Automated Data Profiler & AI Auto-Architect
-- **Statistical Health Profiling:** Computes missingness, duplicate rates, cardinality, and automated dataset quality scores (0–100).
-- **Auto-Task Inference:** Automatically identifies problem types (**Binary/Multi-Class Classification**, **Continuous Regression**, **Time-Series Forecasting**, or **Unsupervised Anomaly Detection**).
-- **1-Click Auto-Architect:** Synthesizes the optimal end-to-end DAG preprocessing chain and model architecture based on dataset characteristics.
-
-### 3. ⚡ Inbound Triggers & Async Worker Pool (n8n / Boomi Parity)
-- **🌐 Webhook Inbound Trigger (`POST /api/v1/workflows/trigger/{path}`):** Ingests real-time HTTP JSON batches and streams them downstream into the pipeline DAG.
-- **⏰ Cron Schedule Trigger (`Recurring`):** Automated recurring pipeline execution via Unix Cron expressions (`0 0 * * *`) and interval presets.
-- **👷 Asynchronous Job Manager:** Dispatches long-running training/inference workloads to a background worker pool (`POST /api/v1/workflows/async-execute`) with instant `job_id` status polling.
-
-### 4. 🔬 Step-by-Step Data Stream Debugger (Node Inspector)
-- **Intermediate Data Snapshots:** Captures exact tabular DataFrame snapshots, column schemas, and row counts as data flows across every edge.
-- **Execution Telemetry:** Inspects per-node execution latencies in milliseconds (`ms`) and feature throughput.
-
-### 5. 📡 Real-Time API Flight Recorder & Inspector
-- **Persistent Sidebar Dock:** Real-time banner on every tab displaying the latest REST API hit, HTTP status code, latency, and expandable request/response JSON payloads.
-- **Interactive API Playground:** Full interactive testing suite for all 8 FastAPI endpoints (`/workflows/execute`, `/workflows/validate`, `/workflows/async-execute`, `/recipes/`, `/datasets/upload`, etc.) with customizable request bodies and live response rendering.
-- **cURL & Python Snippet Generator:** 1-click generation of terminal commands and code snippets for active DAG payloads.
-
-### 6. 🏆 Comprehensive Task-Aware Evaluation
-- **Classification:** Accuracy, Balanced Accuracy, Precision, Recall, F1 Score, ROC-AUC, Interactive Confusion Matrix Heatmap, and Per-Class breakdown tables.
-- **Regression:** $R^2$ Score (Variance Explained), Mean Absolute Error (MAE), Root Mean Squared Error (RMSE), Mean Squared Error (MSE), MAPE, and Actual vs. Predicted sample tables.
-- **Time-Series:** Shaded 95% confidence bands ($yhat_{lower}$ to $yhat_{upper}$), historical vs. future predictions, and trend diagnostics.
-- **Anomaly Detection:** Outlier risk cluster scatter plots, anomaly score histograms (0.0 to 1.0), and 1-click flagged records CSV export.
-
-### 7. 🛡️ Robust High-Cardinality & Out-of-Memory Protection
-- Safe preprocessing pipelines that protect target columns during encoding and apply date decomposition and ordinal encoding to high-cardinality columns ($>50$ categories), preventing $13.2\text{ GiB}$ memory crashes.
+This repository is the **FastAPI backend**. The canvas UI is a separate React Flow / Next.js frontend
+(`FE_POC`). `ui_prototype/app.py` is the original Streamlit prototype and is no longer the product UI.
 
 ---
 
-## 🏛️ System Architecture
+## Contents
+
+- [Architecture](#architecture)
+- [Core concepts](#core-concepts)
+- [What the platform does](#what-the-platform-does)
+- [Recipe catalog](#recipe-catalog)
+- [Getting started](#getting-started)
+- [Configuration](#configuration)
+- [API overview](#api-overview)
+- [Project structure](#project-structure)
+- [Tests](#tests)
+- [Branches and deployment](#branches-and-deployment)
+- [Further documentation](#further-documentation)
+
+---
+
+## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    FastAPI REST API / Streamlit UI Studio                   │
-└──────────────────────────────────────┬──────────────────────────────────────┘
-                                       │
-                        ┌──────────────┴──────────────┐
-                        ▼                             ▼
-        ┌──────────────────────────────┐┌─────────────────────────────┐
-        │   Dataset Profiler Engine    ││    AI Auto-Architect Engine │
-        │  (Nulls, Types, Health Score)││   (Diagnosis & Model Ranking)│
-        └──────────────┬───────────────┘└─────────────┬───────────────┘
-                       │                              │
-                       └──────────────┬───────────────┘
-                                      ▼
-        ┌─────────────────────────────────────────────────────────────┐
-        │                 DAG Workflow Engine (Kahn's Sort)           │
-        ├─────────────────────────────────────────────────────────────┤
-        │  • Triggers (Webhook POST, Cron Schedules)                  │
-        │  • Ingestion (CSV, Excel, Nested JSON)                      │
-        │  • Cleaning & Preprocessing (Imputer, Scaler, Encoder)      │
-        │  • ML Training (XGBoost, LightGBM, CatBoost, Random Forest) │
-        │  • Time-Series (Prophet, ARIMA, Lag Feature Engineer)       │
-        │  • Anomaly Detection (Isolation Forest, Z-Score Guardrail)  │
-        │  • Step Data Inspector (DataFrame Snapshots per Node)       │
-        │  • Model Evaluation & Diagnostic Visualizations             │
-        │  • Model Governance (MLflow Tracking & Model Registry)      │
-        └─────────────────────────────────────────────────────────────┘
+            Frontend canvas (FE_POC, React Flow)
+                          │  REST · WebSocket · cookie session (sid)
+                          ▼
+┌──────────────────────────────────────────────────────────────────┐
+│ FastAPI backend (this repo)              backend/app/main.py     │
+│                                                                  │
+│  Auth (session lookup in UM DB) ── Tenant guard (row isolation)  │
+│                                                                  │
+│  Workflows API ─► DAG engine ─► Recipes (224)                    │
+│      │              │  validation · topological run · test step  │
+│      │              │  sub-processes · resume · live logs        │
+│      │              └► Inference (predict / schema)              │
+│  Datasets API · Credentials vault · Templates · AI recommender   │
+│  Cron scheduler (background task) · Webhook / API-endpoint flows │
+└──────┬───────────────┬───────────────┬───────────────┬───────────┘
+       ▼               ▼               ▼               ▼
+  Platform DB      UM DB           Object storage   MLflow
+  PostgreSQL       user_sessions   Apache Ozone     tracking &
+  (SQLite in dev)  (read-only)     (S3 API)         model registry
 ```
+
+- **Platform DB** (`DATABASE_URL`): workflows, executions, sub-process versions, datasets, credentials.
+  Tables are created and migrated on startup (`init_db`).
+- **UM DB** (`UM_DATABASE_URL`): the User-Management service's database. The backend only reads
+  `user_sessions` to authenticate requests; it never issues tokens itself.
+- **Tenant metadata DB** (`P_DATABASE_URL`, optional): source environments and models for tenant data ingestion.
+- **Ozone** stores uploaded datasets, node outputs and exports. **MLflow** tracks training runs.
+- **LLM providers** (OpenAI, Groq, Gemini) are optional and only used by the AI recommender, the
+  pipeline agent and LLM/agent recipes.
+
+## Core concepts
+
+| Concept | Meaning |
+|---|---|
+| **Recipe** | One processing step (e.g. *Impute Missing Values*, *Train XGBoost*, *Salesforce Connector*). A `BaseRecipe` subclass with a JSON config schema (the frontend renders its form from it), typed input/output ports and a `to_code()` preview. |
+| **Workflow** | A DAG of nodes (recipe instances with their settings) and edges. Stored in `workflows`. |
+| **Execution** | One run of a workflow: per-node status, timings, logs, data snapshots and metrics. Stored in `workflow_executions` as an immutable snapshot of the graph that ran. |
+| **Sub-process** | A workflow with a **Start Anchor** and an **End Anchor** that other workflows call as a single step through the **Add Workflow** recipe. Each saved change creates a version in `workflow_versions`; callers run `latest` or pin a version. |
+| **Tenant** | Every workflow, execution, version and dataset belongs to a tenant. A database-level guard (`infrastructure/database/tenant_guard.py`) adds the tenant filter to every ORM query, so other tenants' rows behave as if they don't exist. |
+| **Credential** | A saved connection secret (API key, OAuth token, password) in the `credentials` vault, referenced by nodes through `credential_id`. |
+
+## What the platform does
+
+**Workflow engine**
+- Validates graphs (cycles, orphan nodes, port compatibility) and runs them in topological order,
+  routing data through named ports (e.g. left/right for joins, matched/unmatched for filters).
+- Runs synchronously (`/execute`), in a background job pool (`/async-execute`, with polling and
+  streamed logs) or over a WebSocket (`/ws/execute`) for live progress on the canvas.
+- **Test Step**: runs a single node against cached upstream data while editing.
+- **Resume**: a failed run can continue from the last successful node.
+- Each node's output can be previewed, downloaded as CSV or saved to Ozone.
+
+**Sub-processes (Add Workflow)**
+- The parent's table is passed to the child's Start Anchor; the End Anchor's table comes back as the
+  node's output.
+- The child's Start Anchor can declare **expected input columns** (checked before the run) and
+  **parameters** (passed by the caller, used in the child as `{{params.name}}`).
+- The child runs in an isolated context with its own timeout; loops (A → B → A) and nesting deeper
+  than 5 levels are refused.
+- *Halt Pipeline on Sub-Workflow Error*: **on** stops the parent; **off** marks the node WARNING
+  and skips the steps after it, while other branches keep running.
+
+**Triggers and automation**
+- Cron schedules (a scheduler runs inside the API process), inbound webhooks
+  (`/workflows/trigger/{path}`), IMAP email triggers, and workflows exposed as API endpoints
+  (`/api/v1/workflows/endpoints/{path}`, public or API-key protected per endpoint node).
+
+**History and versioning**
+- Every run is stored as an immutable snapshot; runs can be listed, compared, opened and pruned.
+- Workflows are soft-deleted and can be restored.
+
+**Models and inference**
+- Trained pipelines are served with `POST /workflows/{execution_id}/predict`; `/schema` describes
+  the expected input. Forecasting runs can generate future datasets.
+- MLflow tracking and model registry, model cards, explainability (SHAP/LIME), fairness and drift monitoring.
+
+**AI assistance**
+- **Recommender** (`/recommend/pipeline`, `/recommend/autowire`): profiles a dataset, infers the task
+  (classification, regression, forecasting, anomaly detection) and proposes a pipeline.
+- **Pipeline agent** (`/agent/pipelines/plan` and `/run`): a LangGraph planner / evaluator loop that
+  builds, runs and refines classification or regression pipelines from a natural-language request.
+  It sends the request, column names, aggregate profile statistics and scalar metrics to the LLM,
+  never dataset rows. Jobs run in a bounded in-process pool, so job state is lost on restart and not
+  shared between replicas.
+
+**Security**
+- Session authentication shared with User-Management (`sid` cookie or `X-Session-Id` header; CSRF
+  check on unsafe methods).
+- Tenant isolation enforced in the database layer (see *Tenant* above).
+- Inline secrets in node settings are **encrypted before they are stored** (AES-256, key derived from
+  `SECRET_KEY`), including nested settings and the graph snapshots in run history, and masked
+  (`••••••••`) in API responses. Nodes that use a vaulted credential don't store their own copy.
+- CSV exports are limited by role and IP (`EXPORT_ALLOWED_ROLES`, `EXPORT_ALLOWED_IPS`).
+
+## Recipe catalog
+
+224 recipes in `backend/app/recipes/`, by category:
+
+| Category | Count | Examples |
+|---|---:|---|
+| `preprocessing` | 44 | Imputer, scaler, encoders, aggregate, combine/join, SMOTE resampler, PII tokenization, address parser |
+| `integrations` | 42 | Salesforce, HubSpot, Airtable, Asana, GitHub, Freshdesk, Discord, Dropbox, Google Ads, Shopify |
+| `ingestion` | 27 | CSV/Excel/JSON loaders, PostgreSQL/MySQL/MongoDB, BigQuery, Azure Data Lake, S3, CDC, SFTP, API endpoint |
+| `agents` | 18 | Document Q&A, chatbot endpoint, guardrails, conversational memory, cost-aware model router, agent hand-off |
+| `training` | 14 | XGBoost, LightGBM, CatBoost, random forest, linear models, AutoML tournament, Optuna tuner, ensemble stacker |
+| `flow_control` | 13 | Add Workflow, Start/End Anchor, IF/condition, loop/batch iterator, merge, delay, dead-letter queue |
+| `canvas` | 10 | Notes, groups, comment threads, charts, parameter sweep, pipeline diff, shareable snapshot |
+| `vision` | 8 | Image classifier, object detection, OCR, image embeddings, speech-to-text, text-to-speech |
+| `evaluation` | 7 | Model evaluator, SHAP/LIME explainability, A/B and Bayesian tests, champion/challenger, fairness audit |
+| `nlp` | 7 | Text preprocessing, vectorizers, sentiment, summarization, translation, document parsing, PII masking |
+| `monitoring` | 6 | Data drift, model drift, cost/latency monitor, serving endpoint, rollback trigger |
+| `unsupervised` | 5 | Clustering (KMeans/DBSCAN), PCA, t-SNE, UMAP, association rules |
+| `reporting` | 4 | Scheduled PDF/Excel reports, BI export, dashboard publish, threshold alerts |
+| `security` | 4 | Audit trail, credential rotation, encryption toggle, row-level access control |
+| `splitting` | 4 | Train/test, stratified, chronological, walk-forward |
+| `forecasting` | 3 | Prophet, ARIMA/SARIMAX, lag & time features |
+| `governance` | 3 | MLflow registry, model card generator, compliance trail export |
+| `triggers` | 3 | Cron schedule, webhook, email (IMAP) |
+| `anomaly` | 2 | Isolation Forest, statistical outlier guardrail (Z-score/IQR) |
+
+`GET /api/v1/recipes/` returns the live catalog with each recipe's schema and ports.
 
 ---
 
-## 🚀 Quickstart Guide
+## Getting started
 
-### 1. Clone Repository & Setup Environment
+**Requirements:** Python 3.11+ (tested on 3.14), PostgreSQL for a shared setup (SQLite works for a
+quick local start), access to the User-Management database for authentication, and optionally
+Apache Ozone / S3 and MLflow.
+
 ```bash
-git clone https://github.com/moinmj/Visual-ML-AI-Pipeline-Orchestration-Platform.git
-cd Visual-ML-AI-Pipeline-Orchestration-Platform
+git clone https://github.com/AIIOTs-Geek/ML_Pipeline_platform-O.git
+cd ML_Pipeline_platform-O
 
-# Checkout active feature branch
-git checkout ml-ai-pipeline
-
-# Create virtual environment
 python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-
-# Install dependencies
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-#### Windows PowerShell
+Create a `.env` file in the repository root (see [Configuration](#configuration)). It is git-ignored.
+**Never commit it.**
 
-```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-Copy-Item .env.example .env
-```
+Start the API from the repository root:
 
-Set `OPENAI_API_KEY` in `.env` to enable the OpenAI agent endpoints. The
-existing non-agent recommender works without an OpenAI key. Never commit or
-share the `.env` file.
-
-### 2. Launch Interactive Whiteboard Studio
-```bash
-streamlit run ui_prototype/app.py
-```
-Open **[http://localhost:8501](http://localhost:8501)** in your browser.
-
-### 3. Launch Backend FastAPI Server (Optional)
 ```bash
 uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
-Interactive OpenAPI Swagger docs available at **[http://localhost:8000/docs](http://localhost:8000/docs)**.
 
-If `P_DATABASE_URL` is configured, that database must contain the tenant metadata
-tables (`tenant_environments`, `tenant_models`, and related tables). For a new
-development database only, set `TENANT_DB_AUTO_CREATE=true` before starting the
-server. Keep it `false` in production and provision the schema through the
-service that owns the tenant database.
+On startup the service creates and migrates its tables, then starts the cron scheduler.
+Interactive API docs are at <http://localhost:8000/docs>.
 
-### 4. Run Automated Test Suite
+API routes require a valid User-Management session (`sid` cookie or `X-Session-Id` header). For local
+work without UM, see `DEV_AUTH_BYPASS` below (development only).
+
+## Configuration
+
+Settings are read from environment variables / `.env` (`backend/app/core/config.py`). The main ones:
+
+| Variable | Purpose |
+|---|---|
+| `DATABASE_URL` | Platform database, e.g. `postgresql+asyncpg://user:pass@host:5432/db`. Defaults to SQLite in `./data`. |
+| `UM_DATABASE_URL` | User-Management database (asyncpg DSN; URL-encode special characters in the password). |
+| `SESSION_SECRET_KEY` | Must equal UM's `SECRET_KEY`; used to check CSRF tokens. |
+| `SECRET_KEY` | Encryption key for stored credentials. **Use the same value in every instance that shares a database**; values encrypted with one key can't be read with another. |
+| `ENVIRONMENT`, `DEBUG` | Runtime mode. |
+| `DEV_AUTH_BYPASS` | With `ENVIRONMENT=development`/`local` (or `DEBUG=true`), accepts the session id `dev` without UM. Local development only, never on a server. |
+| `OZONE_ENDPOINT`, `OZONE_ACCESS_KEY`, `OZONE_SECRET_KEY`, `OZONE_BUCKET`, `OZONE_PREFIX` | Object storage for datasets and outputs. |
+| `MLFLOW_TRACKING_URI` | MLflow server or local store. |
+| `OPENAI_API_KEY` / `OPENAI_MODEL`, `GROQ_API_KEY` / `GROQ_MODEL`, `GEMINI_API_KEY` | LLM providers (optional). The agent uses OpenAI if set, otherwise Groq. |
+| `AGENT_MAX_WORKERS`, `AGENT_MAX_QUEUED`, `AGENT_MAX_GROQ_CONCURRENT` | Pipeline-agent capacity (defaults 2 / 16 / 8). When full, the API answers `429` with `Retry-After`. |
+| `P_DATABASE_URL`, `TENANT_DB_AUTO_CREATE` | Tenant metadata database. Set auto-create to `true` only for a new development database. |
+| `EXPORT_ALLOWED_ROLES`, `EXPORT_ALLOWED_IPS`, `TRUSTED_PROXY_IPS` | Who may export CSVs. |
+| `DISCORD_*`, `TEAMS_*`, `AZURE_*`, `TWILIO_*`, `SALESFORCE_*`, `HUBSPOT_*`, … | Credentials for individual integrations (optional). |
+
+---
+
+## API overview
+
+Routes are under `/api/v1` and need an authenticated session, except flow endpoints
+(`/workflows/endpoints/{path}`), whose access (public or API key) is set on the workflow's endpoint
+node. Full request/response schemas: `/docs`.
+
+| Area | Main routes |
+|---|---|
+| **Workflows** `/workflows` | `GET /` list · `POST /` save · `GET`/`PUT`/`DELETE /{id}` · `POST /{id}/restore` · `GET /{id}/export` · `POST /import`, `/import/file` |
+| **Run** `/workflows` | `POST /validate` · `POST /execute`, `/{id}/execute` · `POST /async-execute` · `GET /jobs/{job_id}`, `/logs`, `/stream` · `WS /ws/execute` · `GET /executions/{id}/resume-info` |
+| **Editing** `/workflows` | `POST /nodes/{node_id}/test-step` · `POST /autowire` · `POST /infer-schema` |
+| **Sub-processes** | `GET /workflows?sub_workflow_eligible=true` · `GET /workflows/{id}/sub-workflow-versions` |
+| **Run outputs** `/workflows/{execution_id}/nodes/{node_id}` | `GET /data` · `GET /artifacts`, `/artifacts/{name}/download` · `GET /export-csv` · `POST /save-to-ozone` |
+| **History** `/workflows/{id}/history` | `GET` list · `GET /{execution_id}` · `GET /compare` · `DELETE` prune |
+| **Inference** `/workflows` | `GET /{execution_id}/schema` · `POST /{execution_id}/predict`, `/predict` · `POST /{execution_id}/generate-future-dataset` |
+| **Triggers** | `POST /workflows/trigger/{path}` · `POST /workflows/{id}/trigger-cron` · `GET /workflows/scheduler/status` · flow endpoints `/workflows/endpoints/{path}` |
+| **Datasets** `/datasets` | `POST /upload` · `GET /`, `/{id}`, `/{id}/preview`, `/{id}/profile` · `DELETE /{id}` · `GET /ozone/browse` · `POST /ozone/register` |
+| **Recipes** `/recipes` | `GET /` · `GET /categories` · `GET /{id}`, `/{id}/schema`, `/{id}/icon` · `POST /{id}/run`, `/{id}/inspect` |
+| **Credentials** | `GET`/`POST /credentials` · `GET`/`PUT`/`DELETE /credentials/{id}` · OAuth: `/oauth/discord/*`, `/oauth/msteams/*` |
+| **AI** | `POST /recommend/pipeline`, `/recommend/autowire` · `POST /agent/pipelines/plan`, `/run` · `GET /agent/pipelines/jobs/{job_id}` |
+| **Other** | `GET /templates/`, `/templates/{id}` · `GET /tenant-data/environments`, `…/models`, `POST …/ingest` · `GET /auth/whoami` |
+
+---
+
+## Project structure
+
+```
+ML_Pipeline_platform-O/
+├── backend/
+│   ├── app/
+│   │   ├── main.py              # FastAPI app, routers, startup (DB init, scheduler)
+│   │   ├── auth/                # /auth/whoami
+│   │   ├── core/                # settings, session auth (security.py), crypto, tenant context, logging
+│   │   ├── credentials/         # credential vault and OAuth flows
+│   │   ├── datasets/            # upload, Ozone browse/register, preview, profiling
+│   │   ├── engine/              # DAG graph & validation, executor, step executor, job manager, inference
+│   │   ├── infrastructure/      # DB sessions, tenant guard, storage (Ozone/S3/local)
+│   │   ├── profiling/           # dataset profiler
+│   │   ├── recipes/             # BaseRecipe, registry, recipe router, 224 recipes by category
+│   │   ├── recommendation/      # heuristic + LLM recommender, LangGraph pipeline agent
+│   │   ├── templates/           # pipeline templates
+│   │   ├── tenant_data/         # tenant environments / models ingestion
+│   │   ├── workflows/           # workflow & execution API, models, scheduler, sub-processes, flow endpoints
+│   │   └── static/
+│   ├── scripts/                 # one-off maintenance scripts (e.g. encrypt stored secrets)
+│   └── tests/                   # pytest suite
+├── docs/                        # architecture, API overview, agent guide, roadmap
+├── ui_prototype/app.py          # legacy Streamlit prototype
+├── azure-pipelines.yml          # CI/CD: deploys the development branch
+├── ecosystem.config.js          # PM2 process definition on the server
+└── requirements.txt
+```
+
+## Tests
+
 ```bash
 pytest backend/tests -v
 ```
-In Windows PowerShell, with the virtual environment activated, use
-`python -m pytest backend\tests -v`.
 
----
+Most tests use in-memory SQLite. A few integration tests need the PostgreSQL / UM databases from
+`.env`, and fail when those aren't reachable.
 
-## 📦 API Reference & REST Contract
+## Branches and deployment
 
-| Method | Endpoint | Description |
-| :--- | :--- | :--- |
-| `POST` | `/api/v1/workflows/execute` | Synchronously executes a DAG end-to-end and returns evaluation metrics, step snapshots, and logs. |
-| `POST` | `/api/v1/workflows/validate` | Pre-flight sanity check for topological cycles, orphan nodes, and semantic recipe compatibility. |
-| `POST` | `/api/v1/workflows/async-execute` | Dispatches long-running DAG jobs to the background worker pool and returns a tracking `job_id`. |
-| `GET` | `/api/v1/workflows/jobs/{job_id}` | Polls the runtime status, duration, and telemetry for an asynchronous workflow job. |
-| `POST` | `/api/v1/workflows/trigger/{path}` | Inbound webhook trigger ingesting live JSON event streams into the DAG entrypoint. |
-| `POST` | `/api/v1/agent/pipelines/plan` | Uses the registered recipe catalog to draft a classification or regression DAG for review. |
-| `POST` | `/api/v1/agent/pipelines/run` | Queues a bounded agent-led classification or regression search and immediately returns a `job_id`. |
-| `GET` | `/api/v1/agent/pipelines/jobs/{job_id}` | Polls the agent job and returns its result when complete. |
-| `POST` | `/api/v1/datasets/upload` | Ingests CSV, XLSX, or JSON files and automatically computes statistical quality profiles. |
-| `GET` | `/api/v1/datasets/{id}/profile` | Retrieves column-by-column missingness, distribution stats, and health scores. |
-| `GET` | `/api/v1/recipes/` | Lists the entire catalog of registered AI/ML and data-processing components. |
-| `GET` | `/api/v1/recipes/{id}/schema` | Retrieves JSON Schema definitions for dynamic frontend parameter form rendering. |
+- **`development` is the deployed branch.** A push to it triggers `azure-pipelines.yml`, which
+  deploys the service to the server, where PM2 runs it (`ecosystem.config.js`, process
+  `ML-Pipeline-Platform`, uvicorn on `127.0.0.1:9369`).
+- Work happens on feature branches and reaches `development` only through reviewed pull requests.
+  Don't push to `development` directly.
 
-### OpenAI recipe agent
+## Further documentation
 
-```json
-POST /api/v1/agent/pipelines/plan
-{
-  "dataset_id": "<uploaded-dataset-id>",
-  "request": "Predict house prices and compare suitable regression models",
-  "target_column": "price",
-  "task_type": "regression"
-}
-```
-
-`task_type` is optional: the planner can infer classification or regression
-from the request and dataset profile, and asks for clarification when it cannot
-choose safely. `/plan` returns clarification questions or a validated workflow
-for review. Recipe tools are generated from the registry; the planner can use
-registered preprocessing, NLP, and training recipes compatible with the
-selected supervised task. The complete recipe catalog is also included as
-planning context, while ingestion, splitting, and evaluation are controlled by
-the server.
-
-For autonomous execution, use `/run`:
-
-```json
-POST /api/v1/agent/pipelines/run
-{
-  "dataset_id": "<uploaded-dataset-id>",
-  "request": "Train and improve a regression model to predict house prices",
-  "target_column": "price",
-  "task_type": "regression",
-  "max_attempts": 5
-}
-```
-
-`/run` returns `202 Accepted` with a job ID; poll the `status_endpoint` in its
-response. The agent judges task-specific validation metrics, selects
-alternative registered recipes/configurations, and retries up to five times.
-Regression candidates use R2 (higher is better), falling back to RMSE (lower
-is better); classification candidates use balanced accuracy/F1. The best
-candidate is registered in MLflow only when accepted.
-
-Agent jobs run outside the API event loop in a bounded per-process worker pool.
-Defaults are two active jobs, sixteen queued jobs, and eight concurrent OpenAI
-requests; configure `AGENT_MAX_WORKERS`, `AGENT_MAX_QUEUED`, and
-`AGENT_MAX_OPENAI_CONCURRENT`. When capacity is full, the API returns
-`429 Too Many Requests` with `Retry-After`, rather than accepting unlimited
-work. Job state and queue are currently in process memory, so a server restart
-loses them and multiple API replicas do not share job state. Production
-horizontal scaling requires a shared durable queue and job store.
-
-The same validation split is used to compare candidates, so its score is not
-an unbiased final test score. Preprocessing recipes that learn values before
-splitting can also inflate that score; a separate final holdout and
-split-aware preprocessing are needed for production-grade evaluation.
-
-OpenAI receives the user's request, column names, aggregate schema/profile
-metadata, and scalar evaluation metrics—not dataset rows, category examples,
-or the dataset ID.
-
-The run endpoint is orchestrated with a LangGraph `StateGraph`: a planner
-agent proposes the first pipeline, the existing workflow executor runs it,
-and an evaluator/reviser agent either accepts the result, asks for
-clarification, or proposes another validated recipe configuration. This is a
-bounded, sequential agent graph—not a hierarchy of autonomous worker agents.
-Forecasting and anomaly-detection recipes are visible in the catalog, but
-their task-specific planning and validation flows are not yet enabled in this
-supervised agent endpoint.
-
----
-
-## 📂 Project Structure
-
-```
-Visual-ML-AI-Pipeline-Orchestration-Platform/
-├── backend/
-│   ├── app/
-│   │   ├── core/                  # Config, Logging, Exceptions
-│   │   ├── datasets/              # Dataset Upload, Schemas, Profiling Router
-│   │   ├── engine/                # DAG Graph, Kahn's Validation, Executor & Job Manager
-│   │   ├── infrastructure/        # DB Session, Storage Manager
-│   │   ├── profiling/             # Automated DataProfiler Engine
-│   │   ├── recommendation/        # AIRecommender Engine
-│   │   ├── recipes/               # 17 Modular Processing & ML Algorithms
-│   │   │   ├── triggers/          # Webhook & Cron Schedule Inbound Triggers
-│   │   │   ├── ingestion/         # CSV, Excel, JSON Loaders
-│   │   │   ├── preprocessing/     # Imputers, Scalers, Categorical Encoders
-│   │   │   ├── splitting/         # Train/Test Partition Splitters
-│   │   │   ├── training/          # XGBoost, LightGBM, CatBoost, RF, Linear Trainers
-│   │   │   ├── anomaly/           # Isolation Forest, Statistical Guardrails
-│   │   │   ├── forecasting/       # Prophet, ARIMA, Lag Feature Engineers
-│   │   │   ├── governance/        # MLflow Tracking & Registry
-│   │   │   └── evaluation/        # Classification & Regression Evaluators
-│   │   └── workflows/             # FastAPI REST Routes & Execution Endpoints
-│   └── tests/                     # 22 Comprehensive Unit & Integration Tests
-├── ui_prototype/
-│   └── app.py                     # Streamlit + React Flow Whiteboard Studio & API Inspector
-├── docs/                          # Architecture Specifications & API Guides
-└── requirements.txt               # Dependencies
-```
-
----
-
-## 📜 License
-MIT License. Built for scalable, visual machine learning pipeline orchestration.
+- [`docs/platform_overview.md`](docs/platform_overview.md) — product and technical overview
+- [`docs/api/api-overview.md`](docs/api/api-overview.md) — API notes
+- [`docs/AGENT_PIPELINE_GUIDE.md`](docs/AGENT_PIPELINE_GUIDE.md) — pipeline agent
+- [`docs/PROJECT_MASTER_CONTEXT.md`](docs/PROJECT_MASTER_CONTEXT.md), [`docs/ROADMAP_AND_TASKS.md`](docs/ROADMAP_AND_TASKS.md)
+- `/docs` on a running server — OpenAPI reference
