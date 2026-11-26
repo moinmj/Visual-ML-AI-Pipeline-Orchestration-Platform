@@ -109,9 +109,9 @@ class RagPipelineRecipe(BaseRecipe):
                 "llm_provider": {
                     "type": "string",
                     "title": "LLM Provider",
-                    "enum": ["groq", "openai", "offline_grounded"],
-                    "default": "groq",
-                    "description": "LLM generation provider. Falls back to offline_grounded if credentials are absent."
+                    "enum": ["auto", "groq", "gemini", "openai", "offline_grounded"],
+                    "default": "auto",
+                    "description": "Primary online LLM provider ('auto' tries Groq -> Gemini -> OpenAI). Automatically falls back to offline_grounded with reason if unavailable or quota exhausted."
                 },
                 "llm_model": {
                     "type": "string",
@@ -157,48 +157,17 @@ class RagPipelineRecipe(BaseRecipe):
         provider: str,
         model: str,
         temperature: float
-    ) -> Optional[str]:
-        """Calls Groq or OpenAI chat completions API if credentials exist."""
-        try:
-            import httpx
-            if provider == "groq" and os.getenv("GROQ_API_KEY"):
-                resp = httpx.post(
-                    "https://api.groq.com/openai/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {os.getenv('GROQ_API_KEY')}", "Content-Type": "application/json"},
-                    json={
-                        "model": model or "llama-3.3-70b-versatile",
-                        "messages": [
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_prompt}
-                        ],
-                        "temperature": temperature,
-                        "max_tokens": 512
-                    },
-                    timeout=15.0
-                )
-                if resp.status_code == 200:
-                    return resp.json()["choices"][0]["message"]["content"]
-
-            elif provider == "openai" and os.getenv("OPENAI_API_KEY"):
-                resp = httpx.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}", "Content-Type": "application/json"},
-                    json={
-                        "model": model or "gpt-4o-mini",
-                        "messages": [
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_prompt}
-                        ],
-                        "temperature": temperature,
-                        "max_tokens": 512
-                    },
-                    timeout=15.0
-                )
-                if resp.status_code == 200:
-                    return resp.json()["choices"][0]["message"]["content"]
-        except Exception:
-            pass
-        return None
+    ) -> Dict[str, Any]:
+        """Calls live online LLM provider with transparent fallback diagnostics."""
+        from backend.app.recipes.agents.llm_client import call_live_llm
+        return call_live_llm(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            provider=provider,
+            model=model if provider not in ("auto", "offline_grounded") else None,
+            temperature=temperature,
+            max_tokens=512,
+        )
 
     def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
         start_time = time.time()
@@ -229,7 +198,7 @@ class RagPipelineRecipe(BaseRecipe):
         top_k = int(config.get("top_k") or 3)
         threshold = float(config.get("similarity_threshold") or 0.05)
         system_prompt = str(config.get("system_prompt") or "You are an accurate enterprise AI assistant. Answer using only the provided context.")
-        llm_provider = str(config.get("llm_provider") or "groq").strip().lower()
+        llm_provider = str(config.get("llm_provider") or "auto").strip().lower()
         llm_model = str(config.get("llm_model") or "llama-3.3-70b-versatile").strip()
         temperature = float(config.get("temperature") or 0.1)
         include_citations = bool(config.get("include_citations", True))
@@ -305,24 +274,24 @@ class RagPipelineRecipe(BaseRecipe):
             formatted_context = "\n\n".join(context_blocks) if context_blocks else "No relevant documents found."
             user_prompt = f"Context Information:\n{formatted_context}\n\nQuestion: {q}\n\nAnswer:"
 
-            # LLM Generation with fallback
-            generated_ans = None
-            provider_used = "offline_grounded"
-            if llm_provider in ["groq", "openai"]:
-                api_ans = self._call_groq_or_openai(
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                    provider=llm_provider,
-                    model=llm_model,
-                    temperature=temperature
-                )
-                if api_ans:
-                    generated_ans = api_ans
-                    provider_used = llm_provider
-
-            if not generated_ans:
+            # LLM Generation with live online primary + transparent offline fallback
+            llm_res = self._call_groq_or_openai(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                provider=llm_provider,
+                model=llm_model,
+                temperature=temperature
+            )
+            if llm_res.get("content"):
+                generated_ans = llm_res["content"]
+                provider_used = llm_res["provider_used"]
+                execution_mode = llm_res["execution_mode"]
+                fallback_reason = llm_res["fallback_reason"]
+            else:
                 generated_ans = _synthesize_offline_grounded_answer(q, retrieved)
                 provider_used = "offline_grounded"
+                execution_mode = "OFFLINE_FALLBACK"
+                fallback_reason = llm_res.get("fallback_reason", "Online LLM unavailable")
 
             top1_score = retrieved[0]["similarity_score"] if retrieved else 0.0
 
@@ -333,7 +302,9 @@ class RagPipelineRecipe(BaseRecipe):
                 "retrieval_score_top1": top1_score,
                 "sources": json.dumps(sources_meta),
                 "retrieved_context": formatted_context,
-                "llm_provider_used": provider_used
+                "execution_mode": execution_mode,
+                "llm_provider_used": provider_used,
+                "fallback_reason": fallback_reason,
             })
 
         out_df = pd.DataFrame(out_rows)
@@ -345,7 +316,9 @@ class RagPipelineRecipe(BaseRecipe):
             "summary": {
                 "queries_processed": len(out_df),
                 "top_k": top_k,
+                "execution_mode": out_rows[0]["execution_mode"] if out_rows else "none",
                 "llm_provider_used": out_rows[0]["llm_provider_used"] if out_rows else "none",
+                "fallback_reason": out_rows[0]["fallback_reason"] if out_rows else "none",
                 "duration_ms": duration_ms
             }
         }

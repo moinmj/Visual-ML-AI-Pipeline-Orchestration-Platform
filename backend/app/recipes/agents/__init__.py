@@ -31,6 +31,7 @@ from backend.app.recipes.agents.document_qa_agent import DocumentQaAgentRecipe
 from backend.app.recipes.agents.multimodal_agent import MultimodalAgentRecipe
 from backend.app.recipes.agents.code_execution_sandbox import CodeExecutionSandboxRecipe
 from backend.app.recipes.agents.chatbot_endpoint import ChatbotEndpointRecipe
+from backend.app.recipes.agents.voice_ai_agent import VoiceAiAgentRecipe
 
 __all__ = [
     # Phase 1
@@ -55,4 +56,5 @@ __all__ = [
     "MultimodalAgentRecipe",
     "CodeExecutionSandboxRecipe",
     "ChatbotEndpointRecipe",
+    "VoiceAiAgentRecipe",
 ]

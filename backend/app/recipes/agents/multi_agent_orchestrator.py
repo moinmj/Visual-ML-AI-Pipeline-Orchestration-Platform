@@ -91,7 +91,30 @@ class MultiAgentOrchestratorRecipe(BaseRecipe):
                     "title": "Synthesized Response Output Column",
                     "default": "synthesized_response",
                     "description": "Column name to store the final synthesized output."
-                }
+                },
+                "query": {
+                    "type": "string",
+                    "title": "Direct Goal / Query (Optional)",
+                    "input_type": "textarea",
+                    "default": "",
+                    "description": "Optional direct goal for the orchestrator. Overrides/supplements the input table column."
+                },
+                "system_prompt": {
+                    "type": "string",
+                    "title": "Supervisor System Prompt",
+                    "input_type": "textarea",
+                    "default": "You are a Multi-Agent Supervisor coordinating specialized agents to solve the user's goal.",
+                    "description": "Behavioral and routing instructions for the supervisor LLM."
+                },
+                "max_iterations": {
+                    "type": "integer",
+                    "title": "Max Loop Iterations",
+                    "default": 5,
+                    "minimum": 1,
+                    "maximum": 25,
+                    "description": "Maximum hub-and-spoke loop iterations when connected in a cycle."
+                },
+                **__import__("backend.app.recipes.agents.llm_client", fromlist=["llm_provider_schema_props"]).llm_provider_schema_props(),
             },
             "required": ["worker_roles"]
         }
@@ -160,37 +183,100 @@ class MultiAgentOrchestratorRecipe(BaseRecipe):
         if task_col not in df.columns:
             df[task_col] = ""
 
+        from backend.app.recipes.agents.llm_client import call_live_llm
+        llm_provider = str(config.get("llm_provider") or "auto").strip().lower()
+        llm_model = config.get("llm_model")
+
         plans: List[str] = []
         contribs: List[str] = []
         syntheses: List[str] = []
+        exec_modes: List[str] = []
+        providers_used: List[str] = []
+        fallback_reasons: List[str] = []
         first_worker_dict = {}
 
+        available_agents = context.get("available_agents", []) if isinstance(context, dict) else []
+        prior_obs = context.get("agent_observations", []) if isinstance(context, dict) else []
+        can_route = len(available_agents) > 1 or (len(available_agents) == 1 and len(prior_obs) > 0)
+        routed_next_node: Optional[str] = None
+
+        direct_query = str(config.get("query") or "").strip()
+        custom_sys = str(config.get("system_prompt") or f"You are a Multi-Agent Supervisor coordinating these worker roles: {', '.join(worker_roles)}. Synthesize a structured plan and final team answer.").strip()
         for val in df[task_col]:
-            plan, worker_dict, final_out = _orchestrate_team(str(val or ""), worker_roles)
+            goal_str = direct_query if direct_query else str(val or "")
+            plan, worker_dict, fallback_out = _orchestrate_team(goal_str, worker_roles)
+            obs_block = f"\nPrior Agent Observations: {json.dumps(prior_obs, default=str)[:1500]}" if prior_obs else ""
+            routing_instr = ""
+            if can_route:
+                agents_desc = ", ".join(
+                    f"{a['node_id']} ({a['recipe_id']}: {a.get('description') or a['label']})"
+                    for a in available_agents
+                )
+                routing_instr = (
+                    f"\nConnected Downstream Agents: [{agents_desc}]\n"
+                    'Reply strictly in JSON: {"next_node_id": "<node_id or FINISH>", "answer": "<instruction or final synthesis>"}.'
+                )
+            llm_res = call_live_llm(
+                system_prompt=f"{custom_sys}{routing_instr}",
+                user_prompt=f"Goal: {goal_str}\n\nWorker Roles: {', '.join(worker_roles)}{obs_block}\nProduce a concise, actionable synthesized response.",
+                provider=llm_provider,
+                model=llm_model,
+                temperature=0.2,
+                max_tokens=512,
+            )
+            final_out = llm_res["content"] if llm_res.get("content") else fallback_out
+            if can_route and llm_res.get("content"):
+                try:
+                    raw_txt = final_out.strip().strip("`")
+                    if raw_txt.startswith("json"):
+                        raw_txt = raw_txt[4:].strip()
+                    parsed = json.loads(raw_txt)
+                    if isinstance(parsed, dict) and "next_node_id" in parsed:
+                        if routed_next_node is None:
+                            routed_next_node = str(parsed["next_node_id"]).strip()
+                        final_out = str(parsed.get("answer") or final_out)
+                except Exception:
+                    if routed_next_node is None:
+                        routed_next_node = "FINISH"
+            elif can_route and routed_next_node is None:
+                routed_next_node = "FINISH"
+
             if not first_worker_dict:
                 first_worker_dict = worker_dict
             plans.append(plan)
             contribs.append(json.dumps(worker_dict))
             syntheses.append(final_out)
+            exec_modes.append(llm_res["execution_mode"])
+            providers_used.append(llm_res["provider_used"])
+            fallback_reasons.append(llm_res["fallback_reason"])
 
         out_df = df.copy().reset_index(drop=True)
         out_df[output_col] = syntheses
         out_df["final_synthesis"] = syntheses
         out_df["supervisor_plan"] = plans
         out_df["worker_contributions"] = contribs
+        out_df["execution_mode"] = exec_modes
+        out_df["provider_used"] = providers_used
+        out_df["fallback_reason"] = fallback_reasons
+        if routed_next_node is not None:
+            out_df["next_node_id"] = routed_next_node
 
         duration_ms = round((time.time() - start_time) * 1000, 2)
         summary = {
             "total_tasks_orchestrated": len(out_df),
             "team_size": len(worker_roles) + 1,  # workers + supervisor
             "worker_roles": worker_roles,
+            "execution_mode": exec_modes[0] if exec_modes else "none",
+            "provider_used": providers_used[0] if providers_used else "none",
+            "fallback_reason": fallback_reasons[0] if fallback_reasons else "none",
+            "next_node_id": routed_next_node,
             "duration_ms": duration_ms
         }
 
         first_plan = plans[0] if plans else ""
         first_syn = syntheses[0] if syntheses else ""
 
-        return {
+        result_payload = {
             "dataframe": out_df,
             "status": "success",
             "supervisor_plan": first_plan,
@@ -198,3 +284,8 @@ class MultiAgentOrchestratorRecipe(BaseRecipe):
             "final_synthesis": first_syn,
             "summary": summary
         }
+        if routed_next_node is not None:
+            result_payload["next_node_id"] = routed_next_node
+            if routed_next_node.upper() not in ("FINISH", "DONE", "NONE", ""):
+                result_payload["hub_instruction"] = first_syn
+        return result_payload

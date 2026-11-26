@@ -1,9 +1,22 @@
 import pandas as pd
-from typing import List, Dict, Any, Optional, Set
+from typing import List, Dict, Any, Optional, Set, Tuple
 from collections import defaultdict, deque
 from pydantic import BaseModel, Field, model_validator
 from backend.app.core.exceptions import ValidationException
 from backend.app.recipes.base.registry import recipe_registry
+
+
+CYCLE_CONTROLLER_RECIPES: Set[str] = {
+    "if_condition",
+    "switch",
+    "loop",
+    "retry_error_handler",
+    "llm_agent",
+    "multi_agent_orchestrator",
+    "agent_handoff_router",
+    "rag_pipeline",
+    "chatbot_endpoint",
+}
 
 
 class WorkflowNode(BaseModel):
@@ -151,7 +164,23 @@ class WorkflowGraph(BaseModel):
                 ordered_nodes.append(n)
 
         if visited_count != len(self.nodes):
-            add_error("❌ Cycle detected in workflow graph. Workflows must be Directed Acyclic Graphs (DAGs) without circular loops.")
+            cycle_sccs = self.get_cycle_components()
+            unguarded = []
+            for scc in cycle_sccs:
+                has_controller = any(
+                    (node_dict[nid].recipe_id in CYCLE_CONTROLLER_RECIPES)
+                    or bool((node_dict[nid].config or {}).get("allow_cycle"))
+                    or bool((node_dict[nid].config or {}).get("max_iterations"))
+                    for nid in scc if nid in node_dict
+                )
+                if not has_controller:
+                    unguarded.append(scc)
+            if unguarded:
+                bad_nodes = sorted(next(iter(unguarded)))
+                add_error(
+                    f"❌ Unguarded cycle detected involving nodes {bad_nodes}. Add a conditional router (IF/Switch), Loop node, or LLM/Agent orchestrator to control loop termination.",
+                    node_id=bad_nodes[0] if bad_nodes else None,
+                )
 
         # 3. Semantic Recipe Contract Compatibility Checks
         parent_map = defaultdict(list)
@@ -338,20 +367,132 @@ class WorkflowGraph(BaseModel):
             "recommendations": recommendations
         }
 
+    def has_cycles(self) -> bool:
+        """Returns True if the graph contains at least one directed cycle."""
+        in_degree = {n.id: 0 for n in self.nodes}
+        adj = defaultdict(list)
+        node_ids = set(in_degree.keys())
+        for edge in self.edges:
+            if edge.source in node_ids and edge.target in node_ids:
+                adj[edge.source].append(edge.target)
+                in_degree[edge.target] += 1
+        queue = deque([nid for nid, deg in in_degree.items() if deg == 0])
+        visited = 0
+        while queue:
+            curr = queue.popleft()
+            visited += 1
+            for nb in adj[curr]:
+                in_degree[nb] -= 1
+                if in_degree[nb] == 0:
+                    queue.append(nb)
+        return visited != len(self.nodes)
+
+    def get_cycle_components(self) -> List[Set[str]]:
+        """Finds strongly connected components that form cycles (size > 1 or self-loop)."""
+        node_ids = [n.id for n in self.nodes]
+        adj = defaultdict(list)
+        self_loops: Set[str] = set()
+        for edge in self.edges:
+            if edge.source in node_ids and edge.target in node_ids:
+                adj[edge.source].append(edge.target)
+                if edge.source == edge.target:
+                    self_loops.add(edge.source)
+
+        index = 0
+        indices: Dict[str, int] = {}
+        lowlink: Dict[str, int] = {}
+        stack: List[str] = []
+        on_stack: Set[str] = set()
+        sccs: List[Set[str]] = []
+
+        def strongconnect(v: str) -> None:
+            nonlocal index
+            indices[v] = index
+            lowlink[v] = index
+            index += 1
+            stack.append(v)
+            on_stack.add(v)
+            for w in adj[v]:
+                if w not in indices:
+                    strongconnect(w)
+                    lowlink[v] = min(lowlink[v], lowlink[w])
+                elif w in on_stack:
+                    lowlink[v] = min(lowlink[v], indices[w])
+            if lowlink[v] == indices[v]:
+                comp: Set[str] = set()
+                while True:
+                    w = stack.pop()
+                    on_stack.remove(w)
+                    comp.add(w)
+                    if w == v:
+                        break
+                if len(comp) > 1 or (len(comp) == 1 and v in self_loops):
+                    sccs.append(comp)
+
+        for nid in node_ids:
+            if nid not in indices:
+                strongconnect(nid)
+        return sccs
+
+    def get_back_edges(self) -> Set[Tuple[str, str]]:
+        """Identifies DFS back-edges `(source, target)` that close cycles."""
+        node_ids = [n.id for n in self.nodes]
+        in_degree = {nid: 0 for nid in node_ids}
+        adj = defaultdict(list)
+        for edge in self.edges:
+            if edge.source in in_degree and edge.target in in_degree:
+                adj[edge.source].append(edge.target)
+                in_degree[edge.target] += 1
+
+        # Start DFS from root nodes first so forward edges are preserved
+        roots = [nid for nid, deg in in_degree.items() if deg == 0]
+        order = roots + [nid for nid in node_ids if nid not in roots]
+        state: Dict[str, int] = {}  # 0=unvisited, 1=visiting, 2=visited
+        back_edges: Set[Tuple[str, str]] = set()
+
+        def dfs(u: str) -> None:
+            state[u] = 1
+            for v in adj[u]:
+                st = state.get(v, 0)
+                if st == 1:
+                    back_edges.add((u, v))
+                elif st == 0:
+                    dfs(v)
+            state[u] = 2
+
+        for nid in order:
+            if state.get(nid, 0) == 0:
+                dfs(nid)
+        return back_edges
+
+    def get_entry_nodes(self) -> List[WorkflowNode]:
+        """Returns root/entry nodes ignoring cycle back-edges."""
+        back_edges = self.get_back_edges()
+        in_degree = {n.id: 0 for n in self.nodes}
+        for edge in self.edges:
+            if (edge.source, edge.target) not in back_edges and edge.target in in_degree:
+                in_degree[edge.target] += 1
+        entries = [n for n in self.nodes if in_degree[n.id] == 0]
+        return entries if entries else (self.nodes[:1] if self.nodes else [])
+
     def get_topological_order(self) -> List[WorkflowNode]:
         """
         Returns nodes in valid execution order using Kahn's topological sort.
+        For guarded cyclic graphs, back-edges are ignored to produce a deterministic base order.
         """
         diag = self.get_diagnostics()
         if not diag["is_valid"]:
             error_details = " | ".join(e["message"] for e in diag["errors"])
             raise ValidationException(f"Invalid workflow DAG structure: {error_details}", errors=diag["errors"])
 
+        back_edges = self.get_back_edges() if self.has_cycles() else set()
         in_degree = {n.id: 0 for n in self.nodes}
         adj = defaultdict(list)
         node_map = {n.id: n for n in self.nodes}
 
         for edge in self.edges:
+            if (edge.source, edge.target) in back_edges:
+                continue
             adj[edge.source].append(edge.target)
             in_degree[edge.target] += 1
 

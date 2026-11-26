@@ -132,7 +132,8 @@ class LlmEvaluationRecipe(BaseRecipe):
                     "minimum": 0.1,
                     "maximum": 1.0,
                     "description": "Overall score required to receive a 'PASS' verdict."
-                }
+                },
+                **__import__("backend.app.recipes.agents.llm_client", fromlist=["llm_provider_schema_props"]).llm_provider_schema_props(),
             },
             "required": ["answer_column"]
         }
@@ -191,6 +192,10 @@ class LlmEvaluationRecipe(BaseRecipe):
         has_context = context_col in df.columns
         has_query = query_col in df.columns
 
+        from backend.app.recipes.agents.llm_client import call_live_llm
+        llm_provider = str(config.get("llm_provider") or "auto").strip().lower()
+        llm_model = config.get("llm_model")
+
         # 4. Evaluate Each Row
         groundedness_scores: List[float] = []
         relevance_scores: List[float] = []
@@ -198,6 +203,9 @@ class LlmEvaluationRecipe(BaseRecipe):
         conciseness_scores: List[float] = []
         overall_scores: List[float] = []
         verdicts: List[str] = []
+        exec_modes: List[str] = []
+        providers_used: List[str] = []
+        fallback_reasons: List[str] = []
 
         pass_count = 0
 
@@ -208,6 +216,29 @@ class LlmEvaluationRecipe(BaseRecipe):
             qry_val = str(row[query_col]) if has_query and pd.notna(row[query_col]) else ""
 
             g, r, h, c, overall = _evaluate_single(query=qry_val, answer=ans_val, context=ctx_val)
+            llm_res = call_live_llm(
+                system_prompt='You are an LLM-as-a-Judge evaluator. Score groundedness, relevance, hallucination_risk, and conciseness between 0.0 and 1.0. Reply strictly in JSON: {"groundedness": 0.9, "relevance": 0.9, "hallucination_risk": 0.1, "conciseness": 0.9}',
+                user_prompt=f"Query: {qry_val}\nContext: {ctx_val[:2000]}\nGenerated Answer: {ans_val[:2000]}",
+                provider=llm_provider,
+                model=llm_model,
+                temperature=0.0,
+                max_tokens=160,
+            )
+            if llm_res.get("content"):
+                try:
+                    raw_txt = llm_res["content"].strip().strip("`")
+                    if raw_txt.startswith("json"):
+                        raw_txt = raw_txt[4:].strip()
+                    parsed = json.loads(raw_txt)
+                    if isinstance(parsed, dict) and "groundedness" in parsed:
+                        g = round(min(1.0, max(0.0, float(parsed["groundedness"]))), 3)
+                        r = round(min(1.0, max(0.0, float(parsed.get("relevance", r)))), 3)
+                        h = round(min(1.0, max(0.0, float(parsed.get("hallucination_risk", h)))), 3)
+                        c = round(min(1.0, max(0.0, float(parsed.get("conciseness", c)))), 3)
+                        overall = round(0.4 * g + 0.35 * r + 0.15 * (1.0 - h) + 0.1 * c, 3)
+                except Exception:
+                    pass
+
             verdict = "PASS" if overall >= threshold else "FAIL"
             if verdict == "PASS":
                 pass_count += 1
@@ -218,6 +249,9 @@ class LlmEvaluationRecipe(BaseRecipe):
             conciseness_scores.append(c)
             overall_scores.append(overall)
             verdicts.append(verdict)
+            exec_modes.append(llm_res["execution_mode"])
+            providers_used.append(llm_res["provider_used"])
+            fallback_reasons.append(llm_res["fallback_reason"])
 
         # 5. Build Output DataFrame
         out_df = df.copy().reset_index(drop=True)
@@ -227,6 +261,9 @@ class LlmEvaluationRecipe(BaseRecipe):
         out_df["conciseness_score"] = conciseness_scores
         out_df["overall_quality_score"] = overall_scores
         out_df["evaluation_verdict"] = verdicts
+        out_df["execution_mode"] = exec_modes
+        out_df["provider_used"] = providers_used
+        out_df["fallback_reason"] = fallback_reasons
 
         duration_ms = round((time.time() - start_time) * 1000, 2)
         summary = {
@@ -237,6 +274,9 @@ class LlmEvaluationRecipe(BaseRecipe):
             "mean_groundedness": round(float(np.mean(groundedness_scores)), 3) if groundedness_scores else 0.0,
             "mean_relevance": round(float(np.mean(relevance_scores)), 3) if relevance_scores else 0.0,
             "mean_overall": round(float(np.mean(overall_scores)), 3) if overall_scores else 0.0,
+            "execution_mode": exec_modes[0] if exec_modes else "none",
+            "provider_used": providers_used[0] if providers_used else "none",
+            "fallback_reason": fallback_reasons[0] if fallback_reasons else "none",
             "duration_ms": duration_ms
         }
 

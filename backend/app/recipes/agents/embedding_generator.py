@@ -160,11 +160,12 @@ class EmbeddingGeneratorRecipe(BaseRecipe):
             errors.append(f"Invalid dimension {dim}. Must be one of: 32, 64, 128, 256, 384, 512, 768, 1536.")
         return errors
 
-    def _call_openai_embeddings(self, texts: List[str], model: str, dim: int) -> Optional[List[List[float]]]:
-        """Calls OpenAI Embeddings API if API key is configured."""
-        api_key = os.getenv("OPENAI_API_KEY")
+    def _call_openai_embeddings(self, texts: List[str], model: str, dim: int) -> Tuple[Optional[List[List[float]]], str]:
+        """Calls OpenAI Embeddings API if API key is configured. Returns (vectors, reason)."""
+        from backend.app.recipes.agents.llm_client import _get_env_or_setting, _classify_http_error, _classify_exception
+        api_key = _get_env_or_setting("OPENAI_API_KEY")
         if not api_key:
-            return None
+            return None, "Missing OPENAI_API_KEY in .env"
         try:
             import httpx
             headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
@@ -174,10 +175,10 @@ class EmbeddingGeneratorRecipe(BaseRecipe):
             resp = httpx.post("https://api.openai.com/v1/embeddings", json=payload, headers=headers, timeout=15.0)
             if resp.status_code == 200:
                 data = resp.json().get("data", [])
-                return [item["embedding"] for item in data]
-        except Exception:
-            pass
-        return None
+                return [item["embedding"] for item in data], "None (Live Online Embeddings)"
+            return None, f"OpenAI Embeddings: {_classify_http_error(resp.status_code, resp.text)}"
+        except Exception as exc:
+            return None, f"OpenAI Embeddings: {_classify_exception(exc)}"
 
     def execute(self, inputs: Dict[str, Any], config: Dict[str, Any], context: Optional[Any] = None) -> Dict[str, Any]:
         start_time = time.time()
@@ -275,19 +276,30 @@ class EmbeddingGeneratorRecipe(BaseRecipe):
         # 6. Compute Embeddings
         embeddings: List[List[float]] = []
         provider_used = provider
+        execution_mode = "OFFLINE_FALLBACK"
+        fallback_reason = "Offline local_fast selected"
 
         # Attempt cloud provider if configured
         if provider == "openai":
-            cloud_res = self._call_openai_embeddings(cleaned_texts, model=model_name, dim=dim)
+            cloud_res, reason = self._call_openai_embeddings(cleaned_texts, model=model_name, dim=dim)
             if cloud_res and len(cloud_res) == len(cleaned_texts):
                 embeddings = cloud_res
                 provider_used = "openai"
+                execution_mode = "ONLINE_LIVE"
+                fallback_reason = reason
             else:
                 provider_used = "local_fast (openai fallback)"
+                fallback_reason = reason
+        elif provider in ("groq", "cohere"):
+            fallback_reason = f"Provider '{provider}' embeddings endpoint not configured; using local_fast fallback"
 
         # Local fast deterministic fallback
         if not embeddings:
-            provider_used = "local_fast" if provider == "local_fast" else f"local_fast ({provider} fallback)"
+            if provider == "local_fast":
+                provider_used = "local_fast"
+                fallback_reason = "Offline local_fast selected"
+            else:
+                provider_used = f"local_fast ({provider} fallback)"
             for text, is_empty in zip(cleaned_texts, row_is_empty):
                 if is_empty:
                     if handle_missing == "empty_list":
@@ -317,7 +329,9 @@ class EmbeddingGeneratorRecipe(BaseRecipe):
             "embedded_count": sum(1 for e in row_is_empty if not e),
             "text_column": text_col,
             "output_column": output_col,
+            "execution_mode": execution_mode,
             "provider_used": provider_used,
+            "fallback_reason": fallback_reason,
             "vector_dim": dim,
             "normalized": normalize,
             "output_format": output_format,

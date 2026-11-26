@@ -132,9 +132,17 @@ class LlmAgentRecipe(BaseRecipe):
     output_types = ["dataframe"]
 
     def get_schema(self) -> Dict[str, Any]:
+        from backend.app.recipes.agents.llm_client import llm_provider_schema_props
         return {
             "type": "object",
             "properties": {
+                "query": {
+                    "type": "string",
+                    "title": "Direct Prompt / Query (Optional)",
+                    "input_type": "textarea",
+                    "default": "",
+                    "description": "Optional direct instruction or question for the agent. Overrides/supplements the input table column."
+                },
                 "task_column": {
                     "type": "string",
                     "title": "Task / Goal Column",
@@ -143,6 +151,7 @@ class LlmAgentRecipe(BaseRecipe):
                 "system_prompt": {
                     "type": "string",
                     "title": "Agent System Prompt",
+                    "input_type": "textarea",
                     "default": "You are an autonomous ReAct AI agent. Think step by step, choose tools when needed, and produce a clear final answer.",
                     "description": "Core personality and behavioral directives for the agent."
                 },
@@ -155,18 +164,19 @@ class LlmAgentRecipe(BaseRecipe):
                 },
                 "max_iterations": {
                     "type": "integer",
-                    "title": "Max Thought Iterations",
+                    "title": "Max Thought / Loop Iterations",
                     "default": 5,
                     "minimum": 1,
-                    "maximum": 15,
-                    "description": "Maximum number of reasoning/action steps before returning an answer."
+                    "maximum": 25,
+                    "description": "Maximum reasoning/loop steps before returning an answer."
                 },
                 "output_column": {
                     "type": "string",
                     "title": "Final Answer Output Column",
                     "default": "agent_answer",
                     "description": "Column name to store the final agent answer."
-                }
+                },
+                **llm_provider_schema_props(),
             },
             "required": ["max_iterations"]
         }
@@ -210,14 +220,19 @@ class LlmAgentRecipe(BaseRecipe):
         else:
             df = pd.DataFrame([{"task": str(raw_input or "")}])
 
+        from backend.app.recipes.agents.llm_client import call_live_llm
+
         task_col = config.get("task_column")
+        system_prompt = str(config.get("system_prompt") or "You are an autonomous ReAct AI agent. Think step by step, choose tools when needed, and produce a clear final answer.")
+        llm_provider = str(config.get("llm_provider") or "auto").strip().lower()
+        llm_model = config.get("llm_model")
         tools = config.get("tools") or ["calculator", "data_lookup"]
         max_iters = int(config.get("max_iterations") or 5)
         output_col = str(config.get("output_column") or "agent_answer").strip()
 
         # Edge case: Empty DataFrame
         if df.empty:
-            out_df = pd.DataFrame(columns=[output_col, "thought_process", "tools_called_count", "iterations_used", "status"])
+            out_df = pd.DataFrame(columns=[output_col, "thought_process", "tools_called_count", "iterations_used", "status", "execution_mode", "provider_used", "fallback_reason"])
             return {
                 "dataframe": out_df,
                 "status": "success",
@@ -242,24 +257,89 @@ class LlmAgentRecipe(BaseRecipe):
         tool_counts: List[int] = []
         iterations_list: List[int] = []
         statuses: List[str] = []
+        exec_modes: List[str] = []
+        providers_used: List[str] = []
+        fallback_reasons: List[str] = []
 
+        available_agents = context.get("available_agents", []) if isinstance(context, dict) else []
+        prior_obs = context.get("agent_observations", []) if isinstance(context, dict) else []
+        can_route = len(available_agents) > 1 or (len(available_agents) == 1 and len(prior_obs) > 0)
+        routed_next_node: Optional[str] = None
+
+        direct_query = str(config.get("query") or "").strip()
         for i in range(len(df)):
             row = df.iloc[i]
-            task_val = str(row[task_col]) if pd.notna(row[task_col]) else ""
+            row_task = str(row[task_col]) if pd.notna(row[task_col]) else ""
+            task_val = direct_query if direct_query else row_task
             row_dict = row.to_dict()
 
-            ans, trajectory, n_tools, iters = _simulate_react_cycle(
+            # Run local tools first as context, then call live online LLM as primary
+            sim_ans, sim_trajectory, n_tools, iters = _simulate_react_cycle(
                 task=task_val,
                 tools=tools,
                 row_data=row_dict,
                 max_iterations=max_iters
             )
 
+            obs_block = f"\nPrior Agent Observations: {json.dumps(prior_obs, default=str)[:1500]}" if prior_obs else ""
+            routing_instr = ""
+            if can_route:
+                agents_desc = ", ".join(
+                    f"{a['node_id']} ({a['recipe_id']}: {a.get('description') or a['label']})"
+                    for a in available_agents
+                )
+                routing_instr = (
+                    f"\nConnected Downstream Agents: [{agents_desc}]\n"
+                    'If you need a connected agent to perform a sub-task, respond strictly in JSON: {"next_node_id": "<node_id>", "answer": "<instruction/reason>"}.\n'
+                    'If you have enough information to produce the final answer, respond strictly in JSON: {"next_node_id": "FINISH", "answer": "<final answer>"}.'
+                )
+
+            user_prompt = (
+                f"Task: {task_val}\n"
+                f"Permitted Tools: {', '.join(tools)}\n"
+                f"Row Context: {json.dumps({k: str(v) for k, v in row_dict.items()}, default=str)[:1000]}\n"
+                f"Tool Observations:\n{sim_trajectory}{obs_block}{routing_instr}\n\n"
+                "Provide a concise Thought -> Final Answer response."
+            )
+            llm_res = call_live_llm(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                provider=llm_provider,
+                model=llm_model,
+                temperature=0.2,
+                max_tokens=512,
+            )
+
+            if llm_res.get("content"):
+                ans = llm_res["content"]
+                if can_route:
+                    try:
+                        raw_txt = ans.strip().strip("`")
+                        if raw_txt.startswith("json"):
+                            raw_txt = raw_txt[4:].strip()
+                        parsed = json.loads(raw_txt)
+                        if isinstance(parsed, dict) and "next_node_id" in parsed:
+                            if routed_next_node is None:
+                                routed_next_node = str(parsed["next_node_id"]).strip()
+                            ans = str(parsed.get("answer") or ans)
+                    except Exception:
+                        if routed_next_node is None:
+                            routed_next_node = "FINISH"
+                trajectory = f"{sim_trajectory}\n[Live LLM ({llm_res['provider_used']}/{llm_res['model_used']})]: {ans}"
+            else:
+                ans = sim_ans
+                trajectory = sim_trajectory
+                if can_route and routed_next_node is None:
+                    routed_next_node = "FINISH"
+
             final_answers.append(ans)
             thoughts.append(trajectory)
             tool_counts.append(n_tools)
             iterations_list.append(iters)
             statuses.append("COMPLETED")
+            exec_modes.append(llm_res["execution_mode"])
+            providers_used.append(llm_res["provider_used"])
+            fallback_reasons.append(llm_res["fallback_reason"])
 
         out_df = df.copy().reset_index(drop=True)
         out_df[output_col] = final_answers
@@ -268,22 +348,36 @@ class LlmAgentRecipe(BaseRecipe):
         out_df["tools_called_count"] = tool_counts
         out_df["iterations_used"] = iterations_list
         out_df["status"] = statuses
+        out_df["execution_mode"] = exec_modes
+        out_df["provider_used"] = providers_used
+        out_df["fallback_reason"] = fallback_reasons
+        if routed_next_node is not None:
+            out_df["next_node_id"] = routed_next_node
 
         duration_ms = round((time.time() - start_time) * 1000, 2)
         summary = {
             "total_tasks_processed": len(out_df),
             "total_tools_called": sum(tool_counts),
             "avg_iterations": round(float(sum(iterations_list) / len(iterations_list)), 2) if iterations_list else 0.0,
+            "execution_mode": exec_modes[0] if exec_modes else "none",
+            "provider_used": providers_used[0] if providers_used else "none",
+            "fallback_reason": fallback_reasons[0] if fallback_reasons else "none",
+            "next_node_id": routed_next_node,
             "duration_ms": duration_ms
         }
 
         first_ans = final_answers[0] if final_answers else ""
         first_tools = tool_counts[0] if tool_counts else 0
 
-        return {
+        result_payload = {
             "dataframe": out_df,
             "status": "success",
             "final_answer": first_ans,
             "tools_called": first_tools,
             "summary": summary
         }
+        if routed_next_node is not None:
+            result_payload["next_node_id"] = routed_next_node
+            if routed_next_node.upper() not in ("FINISH", "DONE", "NONE", ""):
+                result_payload["hub_instruction"] = first_ans
+        return result_payload

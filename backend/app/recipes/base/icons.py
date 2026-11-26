@@ -200,6 +200,12 @@ OFFICIAL_RECIPE_ICONS: Dict[str, Dict[str, Any]] = {
         "color": "#6366F1",
         "label": "Chatbot Endpoint",
     },
+    "voice_ai_agent": {
+        "icon": "voice-ai",
+        "svg": "speech-to-text.svg",
+        "color": "#6366F1",
+        "label": "Voice AI Agent",
+    },
     "class_imbalance_resampler": {
         "icon": "resampler",
         "svg": "feature-scaler.svg",

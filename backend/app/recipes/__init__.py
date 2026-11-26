@@ -249,6 +249,7 @@ from backend.app.recipes.agents.document_qa_agent import DocumentQaAgentRecipe
 from backend.app.recipes.agents.multimodal_agent import MultimodalAgentRecipe
 from backend.app.recipes.agents.code_execution_sandbox import CodeExecutionSandboxRecipe
 from backend.app.recipes.agents.chatbot_endpoint import ChatbotEndpointRecipe
+from backend.app.recipes.agents.voice_ai_agent import VoiceAiAgentRecipe
 from backend.app.recipes.governance.audit_log_exporter import AuditLogExporterRecipe
 from backend.app.recipes.governance.model_card_generator import ModelCardGeneratorRecipe
 
@@ -496,6 +497,7 @@ def register_all_recipes():
     recipe_registry.register(MultimodalAgentRecipe())
     recipe_registry.register(CodeExecutionSandboxRecipe())
     recipe_registry.register(ChatbotEndpointRecipe())
+    recipe_registry.register(VoiceAiAgentRecipe())
 
     # Canvas Tools
     recipe_registry.register(CanvasNoteRecipe())

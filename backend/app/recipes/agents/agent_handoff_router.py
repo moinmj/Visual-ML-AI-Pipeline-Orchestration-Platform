@@ -115,7 +115,8 @@ class AgentHandoffRouterRecipe(BaseRecipe):
                     "title": "Output Agent Column",
                     "default": "assigned_agent_id",
                     "description": "Target column name storing the routed agent ID."
-                }
+                },
+                **__import__("backend.app.recipes.agents.llm_client", fromlist=["llm_provider_schema_props"]).llm_provider_schema_props(),
             },
             "required": ["fallback_agent_id"]
         }
@@ -179,23 +180,56 @@ class AgentHandoffRouterRecipe(BaseRecipe):
         if msg_col not in df.columns:
             df[msg_col] = ""
 
+        from backend.app.recipes.agents.llm_client import call_live_llm
+        llm_provider = str(config.get("llm_provider") or "auto").strip().lower()
+        llm_model = config.get("llm_model")
+
         agent_ids: List[str] = []
         agent_names: List[str] = []
         reasons: List[str] = []
         confidences: List[float] = []
         payloads: List[str] = []
+        exec_modes: List[str] = []
+        providers_used: List[str] = []
+        fallback_reasons: List[str] = []
 
         agent_counts: Dict[str, int] = {}
+        available_domains = ", ".join(f"{d.get('id')} ({d.get('name', d.get('id'))})" for d in _DEFAULT_AGENT_DOMAINS)
 
         for i in range(len(df)):
             row = df.iloc[i]
             msg_val = str(row[msg_col]) if pd.notna(row[msg_col]) else ""
             a_id, a_name, reason, conf = _route_message(msg_val, _DEFAULT_AGENT_DOMAINS, fallback_id)
 
+            llm_res = call_live_llm(
+                system_prompt=f"You are an enterprise agent router. Pick the best destination agent from [{available_domains}] or '{fallback_id}'. Reply strictly in JSON: {{\"agent_id\": \"...\", \"agent_name\": \"...\", \"reason\": \"...\", \"confidence\": 0.9}}",
+                user_prompt=f"Message: {msg_val}",
+                provider=llm_provider,
+                model=llm_model,
+                temperature=0.0,
+                max_tokens=180,
+            )
+            if llm_res.get("content"):
+                try:
+                    raw_txt = llm_res["content"].strip().strip("`")
+                    if raw_txt.startswith("json"):
+                        raw_txt = raw_txt[4:].strip()
+                    parsed = json.loads(raw_txt)
+                    if isinstance(parsed, dict) and parsed.get("agent_id"):
+                        a_id = str(parsed["agent_id"]).strip()
+                        a_name = str(parsed.get("agent_name") or a_id)
+                        reason = str(parsed.get("reason") or "Routed by Live LLM")
+                        conf = float(parsed.get("confidence", 0.85))
+                except Exception:
+                    pass
+
             agent_ids.append(a_id)
             agent_names.append(a_name)
             reasons.append(reason)
             confidences.append(conf)
+            exec_modes.append(llm_res["execution_mode"])
+            providers_used.append(llm_res["provider_used"])
+            fallback_reasons.append(llm_res["fallback_reason"])
 
             payload = {
                 "destination_agent": a_id,
@@ -214,11 +248,17 @@ class AgentHandoffRouterRecipe(BaseRecipe):
         out_df["handoff_reason"] = reasons
         out_df["confidence_score"] = confidences
         out_df["handoff_payload"] = payloads
+        out_df["execution_mode"] = exec_modes
+        out_df["provider_used"] = providers_used
+        out_df["fallback_reason"] = fallback_reasons
 
         duration_ms = round((time.time() - start_time) * 1000, 2)
         summary = {
             "total_routed": len(out_df),
             "distribution": agent_counts,
+            "execution_mode": exec_modes[0] if exec_modes else "none",
+            "provider_used": providers_used[0] if providers_used else "none",
+            "fallback_reason": fallback_reasons[0] if fallback_reasons else "none",
             "duration_ms": duration_ms
         }
 

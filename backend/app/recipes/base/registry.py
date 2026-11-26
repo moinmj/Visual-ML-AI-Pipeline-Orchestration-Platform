@@ -224,6 +224,7 @@ _RECIPE_GROUPS: Dict[str, Tuple[str, str]] = {
     "multimodal_agent": ("Agents & LLM Orchestration", "Core Agents"),
     "code_execution_sandbox": ("Agents & LLM Orchestration", "Core Agents"),
     "chatbot_endpoint": ("Agents & LLM Orchestration", "Core Agents"),
+    "voice_ai_agent": ("Agents & LLM Orchestration", "Core Agents"),
 
     # Canvas Tools
     "canvas_note": ("Canvas Tools", "Documentation & Layout"),

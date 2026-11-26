@@ -1,6 +1,7 @@
 import time
 import re
 import traceback
+from collections import defaultdict, deque
 from typing import Dict, Any, List, Optional, Callable
 from datetime import datetime, timezone, date, time as dt_time, timedelta
 from decimal import Decimal
@@ -526,12 +527,103 @@ class DAGExecutor:
             "resumed_from": resume_from if prev_nodes else None,
         })
 
-        # 3. Step-by-Step Node Execution
+        # 3. Step-by-Step Node Execution (Acyclic Fast-Path OR Bounded Cyclic Queue)
         connected_node_ids = {e.source for e in workflow.edges} | {e.target for e in workflow.edges}
         has_pipeline = len(connected_node_ids) > 0
         blocked_by: Dict[str, str] = {}   # node id -> the WARNING step that caused it to be skipped
 
-        for node in ordered_nodes:
+        is_cyclic = workflow.has_cycles()
+        node_map: Dict[str, Any] = {n.id: n for n in workflow.nodes}
+        out_edges_map: Dict[str, List[Any]] = defaultdict(list)
+        for edge in workflow.edges:
+            out_edges_map[edge.source].append(edge)
+
+        available_agents_map: Dict[str, List[Dict[str, Any]]] = {}
+        for nid_k, edges_list in out_edges_map.items():
+            avail = []
+            for e in edges_list:
+                tgt = node_map.get(e.target)
+                if tgt:
+                    avail.append({
+                        "node_id": tgt.id,
+                        "recipe_id": tgt.recipe_id,
+                        "label": tgt.label or tgt.recipe_id,
+                        "description": (tgt.config or {}).get("agent_description") or tgt.label or tgt.recipe_id,
+                        "source_handle": getattr(e, "source_handle", None),
+                    })
+            available_agents_map[nid_k] = avail
+
+        if is_cyclic:
+            logs.append("🔄 Cyclic agentic workflow detected: enabling bounded queue execution with max_iterations guard.")
+            pipeline_context.setdefault("agent_observations", [])
+            exec_queue: deque = deque([n.id for n in workflow.get_entry_nodes()])
+            visit_counts: Dict[str, int] = defaultdict(int)
+            total_steps = 0
+            max_total_steps = 100
+        else:
+            exec_queue = deque([n.id for n in ordered_nodes])
+            visit_counts = defaultdict(int)
+            total_steps = 0
+            max_total_steps = len(ordered_nodes) + 1
+
+        def _select_next_edges(src_node: Any, outputs: Dict[str, Any]) -> List[Any]:
+            edges_out = out_edges_map.get(src_node.id, [])
+            if not edges_out:
+                return []
+
+            # 1. LLM / Orchestrator dynamic target selection
+            next_id = outputs.get("next_node_id") if isinstance(outputs, dict) else None
+            selected_targets = outputs.get("selected_targets") if isinstance(outputs, dict) else None
+            if selected_targets and isinstance(selected_targets, (list, tuple, set)):
+                wanted = {str(x) for x in selected_targets}
+                return [e for e in edges_out if e.target in wanted]
+            if next_id is not None:
+                next_str = str(next_id).strip()
+                if next_str.upper() in ("FINISH", "DONE", "NONE", ""):
+                    # Only follow edges to non-cycle / terminal nodes (not back into already-visited cycle)
+                    return [e for e in edges_out if visit_counts.get(e.target, 0) == 0 and e.target not in {a["node_id"] for a in available_agents_map.get(src_node.id, []) if a["recipe_id"] in ("llm_agent", "multi_agent_orchestrator", "web_browsing_agent", "document_qa_agent", "multimodal_agent", "code_execution_sandbox", "rag_pipeline")}]
+                matched = [e for e in edges_out if e.target == next_str]
+                if matched:
+                    return matched
+
+            # 2. Branch-aware routing for IF / Switch (skip empty branches)
+            if src_node.recipe_id in ("if_condition", "switch"):
+                active_edges = []
+                for e in edges_out:
+                    sh = (getattr(e, "source_handle", None) or "").lower().strip()
+                    branch_df = None
+                    if sh in ("true", "tr", "yes", "pass"):
+                        branch_df = outputs.get("true_dataframe")
+                    elif sh in ("false", "fa", "no", "fail"):
+                        branch_df = outputs.get("false_dataframe")
+                    elif sh and sh in outputs and isinstance(outputs[sh], pd.DataFrame):
+                        branch_df = outputs[sh]
+                    if isinstance(branch_df, pd.DataFrame):
+                        if len(branch_df) > 0:
+                            active_edges.append(e)
+                    else:
+                        active_edges.append(e)
+                return active_edges
+
+            return edges_out
+
+        while exec_queue:
+            curr_nid = exec_queue.popleft()
+            node = node_map.get(curr_nid)
+            if node is None:
+                continue
+
+            if is_cyclic:
+                max_iter = min(25, max(1, int((node.config or {}).get("max_iterations", 5))))
+                if visit_counts[node.id] >= max_iter:
+                    logs.append(f"⚠️ Loop cap reached ({visit_counts[node.id]}/{max_iter}) on node `{node.id}`; stopping branch.")
+                    continue
+                if total_steps >= max_total_steps:
+                    logs.append(f"⚠️ Global step limit reached ({max_total_steps}); stopping cyclic execution.")
+                    break
+                visit_counts[node.id] += 1
+                total_steps += 1
+
             # Cooperative stop (e.g. a sub-process that hit its timeout): checked between steps,
             # a step that is already running is not interrupted.
             cancel_event = pipeline_context.get("_cancel_event")
@@ -597,7 +689,7 @@ class DAGExecutor:
                     continue
 
             # Resume: reuse this node's saved result if it succeeded before and nothing changed
-            prev = prev_nodes.get(node.id)
+            prev = prev_nodes.get(node.id) if not is_cyclic else None
             if (
                 prev and prev.get("status") == "SUCCESS" and prev.get("saved")
                 and prev.get("fingerprint") == fingerprints.get(node.id)
@@ -763,6 +855,9 @@ class DAGExecutor:
                 from backend.app.core.tenant_context import with_tenant_config
                 from backend.app.core.crypto import decrypt_node_config_secrets
                 node_exec_cfg = decrypt_node_config_secrets(with_tenant_config(node.config))
+                pipeline_context["available_agents"] = available_agents_map.get(node.id, [])
+                pipeline_context["current_node_id"] = node.id
+                pipeline_context["iteration"] = visit_counts.get(node.id, 1)
                 outputs = recipe.execute(inputs=node_inputs, config=node_exec_cfg, context=pipeline_context)
                 node_outputs[node.id] = outputs
 
@@ -883,6 +978,32 @@ class DAGExecutor:
                     duration_ms=duration_ms,
                     output_summary=summary
                 ))
+
+                if is_cyclic:
+                    if isinstance(outputs, dict):
+                        if outputs.get("hub_instruction") and str(outputs.get("next_node_id", "")).upper() not in ("FINISH", "DONE", "NONE", ""):
+                            pipeline_context["hub_instruction"] = str(outputs["hub_instruction"])
+                        else:
+                            pipeline_context.pop("hub_instruction", None)
+                        obs_text = (
+                            outputs.get("final_answer")
+                            or outputs.get("final_synthesis")
+                            or outputs.get("answer")
+                            or outputs.get("extracted_content")
+                            or outputs.get("reply")
+                            or ""
+                        )
+                        if not obs_text and isinstance(outputs.get("dataframe"), pd.DataFrame) and not outputs["dataframe"].empty:
+                            obs_text = str(outputs["dataframe"].head(3).to_dict(orient="records"))[:500]
+                        pipeline_context["agent_observations"].append({
+                            "node_id": node.id,
+                            "recipe_id": node.recipe_id,
+                            "iteration": visit_counts.get(node.id, 1),
+                            "observation": str(obs_text)[:600],
+                        })
+                    next_edges = _select_next_edges(node, outputs)
+                    for ne in next_edges:
+                        exec_queue.append(ne.target)
 
             except Exception as e:
                 duration_ms = round((time.time() - node_start) * 1000.0, 2)

@@ -370,20 +370,50 @@ class NodeStepExecutor:
                     if sub_in_degree[tgt] == 0:
                         sub_queue.append(tgt)
 
-        # Check for cycles in ancestor graph
+        # Check for cycles in ancestor graph; allow guarded cycles by breaking back-edges
         if len(topo_order) < len(subgraph_nodes):
-            cyclic_nodes = [nid for nid in subgraph_nodes if nid not in topo_order]
-            return NodeTestStepResponse(
-                success=False,
-                session_id=session_id,
-                node_id=target_node_id,
-                recipe_id=target_recipe_id,
-                recipe_name=target_recipe_name,
-                status="FAILED",
-                error_message=f"Cycle detected in workflow graph ancestors: {cyclic_nodes}. Workflows must be Directed Acyclic Graphs (DAGs).",
-                error_title="Circular Dependency Error",
-                error_suggestion="Remove or reverse the cyclic connection among the upstream nodes leading to this step."
-            )
+            from backend.app.engine.dag.graph import WorkflowGraph, CYCLE_CONTROLLER_RECIPES
+            sub_nodes_list = [node_map[nid] for nid in subgraph_nodes if nid in node_map]
+            sub_edges_list = [e for e in edges if str(e.get("source", "")) in subgraph_nodes and str(e.get("target", "")) in subgraph_nodes]
+            try:
+                wg = WorkflowGraph(nodes=sub_nodes_list, edges=sub_edges_list)
+                diag = wg.get_diagnostics()
+            except Exception:
+                diag = {"is_valid": False}
+
+            if diag.get("is_valid"):
+                # Break back-edges cleanly so upstream ancestors run once before target_node_id
+                back_edges = wg.get_back_edges()
+                sub_in_degree = {nid: 0 for nid in subgraph_nodes}
+                for src in subgraph_nodes:
+                    for edge in adj_list[src]:
+                        tgt = str(edge.get("target", ""))
+                        if tgt in subgraph_nodes and (src, tgt) not in back_edges:
+                            sub_in_degree[tgt] += 1
+                sub_queue = deque([nid for nid in subgraph_nodes if sub_in_degree[nid] == 0])
+                topo_order = []
+                while sub_queue:
+                    curr = sub_queue.popleft()
+                    topo_order.append(curr)
+                    for edge in adj_list[curr]:
+                        tgt = str(edge.get("target", ""))
+                        if tgt in subgraph_nodes and (curr, tgt) not in back_edges:
+                            sub_in_degree[tgt] -= 1
+                            if sub_in_degree[tgt] == 0:
+                                sub_queue.append(tgt)
+            else:
+                cyclic_nodes = [nid for nid in subgraph_nodes if nid not in topo_order]
+                return NodeTestStepResponse(
+                    success=False,
+                    session_id=session_id,
+                    node_id=target_node_id,
+                    recipe_id=target_recipe_id,
+                    recipe_name=target_recipe_name,
+                    status="FAILED",
+                    error_message=f"Cycle detected in workflow graph ancestors: {cyclic_nodes}. Workflows must be Directed Acyclic Graphs (DAGs).",
+                    error_title="Circular Dependency Error",
+                    error_suggestion="Remove or reverse the cyclic connection among the upstream nodes leading to this step."
+                )
 
         # 4. Check Ancestors Execution & Auto-Run Unexecuted Ancestors
         ancestors_to_run: List[str] = []

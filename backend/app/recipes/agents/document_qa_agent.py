@@ -120,7 +120,9 @@ class DocumentQaAgentRecipe(BaseRecipe):
                     "title": "Answer Output Column",
                     "default": "document_answer",
                     "description": "Target column name storing the synthesized document answer."
-                }
+                },
+                **__import__("backend.app.recipes.agents.llm_client", fromlist=["worker_description_prop"]).worker_description_prop("Answers questions grounded in document text."),
+                **__import__("backend.app.recipes.agents.llm_client", fromlist=["llm_provider_schema_props"]).llm_provider_schema_props(),
             },
             "required": ["output_column"]
         }
@@ -194,21 +196,42 @@ class DocumentQaAgentRecipe(BaseRecipe):
         if query_col not in df.columns:
             df[query_col] = "Summarize document"
 
+        from backend.app.recipes.agents.llm_client import call_live_llm
+        llm_provider = str(config.get("llm_provider") or "auto").strip().lower()
+        llm_model = config.get("llm_model")
+
         answers: List[str] = []
         references_list: List[str] = []
         confidences: List[float] = []
         total_chunks_list: List[int] = []
+        exec_modes: List[str] = []
+        providers_used: List[str] = []
+        fallback_reasons: List[str] = []
 
+        hub_instr = str(context.get("hub_instruction") or "").strip() if isinstance(context, dict) else ""
         for i in range(len(df)):
             row = df.iloc[i]
             d_val = str(row[doc_col]) if pd.notna(row[doc_col]) else ""
-            q_val = str(row[query_col]) if pd.notna(row[query_col]) else ""
+            q_val = hub_instr if hub_instr else (str(row[query_col]) if pd.notna(row[query_col]) else "")
 
-            ans, refs, conf, n_chunks = _answer_over_document(d_val, q_val, top_k=2)
+            fb_ans, refs, conf, n_chunks = _answer_over_document(d_val, q_val, top_k=2)
+            llm_res = call_live_llm(
+                system_prompt="You are a Document Q&A assistant. Answer the question accurately using only the provided document excerpt.",
+                user_prompt=f"Document:\n{d_val[:4000]}\n\nQuestion: {q_val}",
+                provider=llm_provider,
+                model=llm_model,
+                temperature=0.1,
+                max_tokens=400,
+            )
+            ans = llm_res["content"] if llm_res.get("content") else fb_ans
+
             answers.append(ans)
             references_list.append(json.dumps(refs))
             confidences.append(conf)
             total_chunks_list.append(n_chunks)
+            exec_modes.append(llm_res["execution_mode"])
+            providers_used.append(llm_res["provider_used"])
+            fallback_reasons.append(llm_res["fallback_reason"])
 
         out_df = df.copy().reset_index(drop=True)
         out_df[output_col] = answers
@@ -217,12 +240,18 @@ class DocumentQaAgentRecipe(BaseRecipe):
         out_df["page_section_references"] = references_list
         out_df["confidence_score"] = confidences
         out_df["total_document_chunks"] = total_chunks_list
+        out_df["execution_mode"] = exec_modes
+        out_df["provider_used"] = providers_used
+        out_df["fallback_reason"] = fallback_reasons
 
         duration_ms = round((time.time() - start_time) * 1000, 2)
         summary = {
             "total_qa_pairs": len(out_df),
             "total_chunks_evaluated": sum(total_chunks_list),
             "avg_confidence": round(float(sum(confidences) / len(confidences)), 2) if confidences else 0.0,
+            "execution_mode": exec_modes[0] if exec_modes else "none",
+            "provider_used": providers_used[0] if providers_used else "none",
+            "fallback_reason": fallback_reasons[0] if fallback_reasons else "none",
             "duration_ms": duration_ms
         }
 

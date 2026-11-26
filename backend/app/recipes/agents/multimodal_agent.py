@@ -88,7 +88,9 @@ class MultimodalAgentRecipe(BaseRecipe):
                     "title": "Visual Analysis Output Column",
                     "default": "visual_analysis",
                     "description": "Target column name storing the synthesized multimodal analysis."
-                }
+                },
+                **__import__("backend.app.recipes.agents.llm_client", fromlist=["worker_description_prop"]).worker_description_prop("Analyzes images and visual media alongside text instructions."),
+                **__import__("backend.app.recipes.agents.llm_client", fromlist=["llm_provider_schema_props"]).llm_provider_schema_props(),
             },
             "required": ["output_column"]
         }
@@ -169,30 +171,57 @@ class MultimodalAgentRecipe(BaseRecipe):
         if prompt_col not in df.columns:
             df[prompt_col] = "Analyze visual elements"
 
+        from backend.app.recipes.agents.llm_client import call_live_llm
+        llm_provider = str(config.get("llm_provider") or "auto").strip().lower()
+        llm_model = config.get("llm_model")
+
         analyses: List[str] = []
         formats: List[str] = []
         metas: List[str] = []
+        exec_modes: List[str] = []
+        providers_used: List[str] = []
+        fallback_reasons: List[str] = []
 
+        hub_instr = str(context.get("hub_instruction") or "").strip() if isinstance(context, dict) else ""
         for i in range(len(df)):
             row = df.iloc[i]
             img_val = str(row[img_col]) if pd.notna(row[img_col]) else ""
-            p_val = str(row[prompt_col]) if pd.notna(row[prompt_col]) else ""
+            p_val = hub_instr if hub_instr else (str(row[prompt_col]) if pd.notna(row[prompt_col]) else "")
 
-            analysis, fmt, meta = _analyze_image_input(img_val, p_val)
+            fb_analysis, fmt, meta = _analyze_image_input(img_val, p_val)
+            llm_res = call_live_llm(
+                system_prompt="You are a Multi-Modal Vision & Text AI agent. Analyze the image/input and answer the user's prompt concisely.",
+                user_prompt=f"Image Reference: {img_val}\nDetected Metadata: {json.dumps(meta)}\nPrompt: {p_val}",
+                provider=llm_provider,
+                model=llm_model,
+                temperature=0.2,
+                max_tokens=400,
+                image_path=img_val,
+            )
+            analysis = llm_res["content"] if llm_res.get("content") else fb_analysis
             analyses.append(analysis)
             formats.append(fmt)
             metas.append(json.dumps(meta))
+            exec_modes.append(llm_res["execution_mode"])
+            providers_used.append(llm_res["provider_used"])
+            fallback_reasons.append(llm_res["fallback_reason"])
 
         out_df = df.copy().reset_index(drop=True)
         out_df[output_col] = analyses
         out_df["multimodal_summary"] = analyses
         out_df["detected_format"] = formats
         out_df["image_metadata"] = metas
+        out_df["execution_mode"] = exec_modes
+        out_df["provider_used"] = providers_used
+        out_df["fallback_reason"] = fallback_reasons
 
         duration_ms = round((time.time() - start_time) * 1000, 2)
         summary = {
             "total_analyzed": len(out_df),
             "formats_detected": list(set(formats)),
+            "execution_mode": exec_modes[0] if exec_modes else "none",
+            "provider_used": providers_used[0] if providers_used else "none",
+            "fallback_reason": fallback_reasons[0] if fallback_reasons else "none",
             "duration_ms": duration_ms
         }
 

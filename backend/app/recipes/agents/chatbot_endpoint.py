@@ -110,7 +110,9 @@ class ChatbotEndpointRecipe(BaseRecipe):
                     "title": "Include Quick Replies",
                     "default": True,
                     "description": "Generate dynamic action suggestion chips."
-                }
+                },
+                **__import__("backend.app.recipes.agents.llm_client", fromlist=["worker_description_prop"]).worker_description_prop("Conversational assistant endpoint for user-facing replies."),
+                **__import__("backend.app.recipes.agents.llm_client", fromlist=["llm_provider_schema_props"]).llm_provider_schema_props(),
             }
         }
 
@@ -147,17 +149,30 @@ class ChatbotEndpointRecipe(BaseRecipe):
                 msg_direct = inputs[k]
                 break
 
+        from backend.app.recipes.agents.llm_client import call_live_llm
+        llm_provider = str(config.get("llm_provider") or "auto").strip().lower()
+        llm_model = config.get("llm_model")
         bot_name = str(config.get("bot_name", "Datalect Assistant"))
         system_persona = str(config.get("system_persona", "Enterprise ML Orchestration Specialist"))
         msg_col = config.get("message_column", "message")
         include_replies = bool(config.get("include_quick_replies", True))
         session_id = str(inputs.get("session_id") or config.get("session_id") or str(uuid.uuid4())[:8])
 
+        def _reply_with_live_fallback(msg_str: str) -> Tuple[str, List[str], Dict[str, Any]]:
+            fb_reply, q_rep = _generate_assistant_reply(msg_str, bot_name=bot_name, system_persona=system_persona)
+            llm_res = call_live_llm(
+                system_prompt=f"You are {bot_name}. Persona: {system_persona}. Reply concisely and helpfully.",
+                user_prompt=msg_str or "Hello, introduce yourself briefly.",
+                provider=llm_provider,
+                model=llm_model,
+                temperature=0.3,
+                max_tokens=300,
+            )
+            return (llm_res["content"] if llm_res.get("content") else fb_reply), q_rep, llm_res
+
         # Case A: Direct message input (string)
         if msg_direct is not None and not isinstance(msg_direct, pd.DataFrame):
-            reply_text, q_replies = _generate_assistant_reply(
-                str(msg_direct), bot_name=bot_name, system_persona=system_persona
-            )
+            reply_text, q_replies, llm_res = _reply_with_live_fallback(str(msg_direct))
 
             timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
             chat_payload = {
@@ -167,6 +182,9 @@ class ChatbotEndpointRecipe(BaseRecipe):
                 "user_message": str(msg_direct),
                 "reply": reply_text,
                 "quick_replies": q_replies if include_replies else [],
+                "execution_mode": llm_res["execution_mode"],
+                "provider_used": llm_res["provider_used"],
+                "fallback_reason": llm_res["fallback_reason"],
                 "timestamp": timestamp,
                 "formatted_transcript": [
                     {"role": "user", "content": str(msg_direct), "timestamp": timestamp},
@@ -179,6 +197,9 @@ class ChatbotEndpointRecipe(BaseRecipe):
                 "user_message": str(msg_direct),
                 "assistant_reply": reply_text,
                 "quick_replies": json.dumps(q_replies) if include_replies else "[]",
+                "execution_mode": llm_res["execution_mode"],
+                "provider_used": llm_res["provider_used"],
+                "fallback_reason": llm_res["fallback_reason"],
                 "timestamp": timestamp
             }])
 
@@ -191,7 +212,10 @@ class ChatbotEndpointRecipe(BaseRecipe):
                 "metrics": {
                     "total_turns": 1,
                     "session_id": session_id,
-                    "intent": _detect_intent_category(str(msg_direct))
+                    "intent": _detect_intent_category(str(msg_direct)),
+                    "execution_mode": llm_res["execution_mode"],
+                    "provider_used": llm_res["provider_used"],
+                    "fallback_reason": llm_res["fallback_reason"],
                 }
             }
 
@@ -212,19 +236,29 @@ class ChatbotEndpointRecipe(BaseRecipe):
             replies = []
             replies_list = []
             intents = []
+            exec_modes = []
+            providers_used = []
+            fallback_reasons = []
             now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
+            hub_instr = str(context.get("hub_instruction") or "").strip() if isinstance(context, dict) else ""
             for _, row in df.iterrows():
-                u_msg = str(row.get(msg_col, ""))
-                rep, q_rep = _generate_assistant_reply(u_msg, bot_name=bot_name, system_persona=system_persona)
+                u_msg = hub_instr if hub_instr else str(row.get(msg_col, ""))
+                rep, q_rep, llm_res = _reply_with_live_fallback(u_msg)
                 replies.append(rep)
                 replies_list.append(json.dumps(q_rep if include_replies else []))
                 intents.append(_detect_intent_category(u_msg))
+                exec_modes.append(llm_res["execution_mode"])
+                providers_used.append(llm_res["provider_used"])
+                fallback_reasons.append(llm_res["fallback_reason"])
 
             df["assistant_reply"] = replies
             df["quick_replies"] = replies_list
             df["intent"] = intents
             df["session_id"] = session_id
+            df["execution_mode"] = exec_modes
+            df["provider_used"] = providers_used
+            df["fallback_reason"] = fallback_reasons
             df["timestamp"] = now_iso
 
             return {
@@ -237,15 +271,16 @@ class ChatbotEndpointRecipe(BaseRecipe):
                 "metrics": {
                     "total_turns": len(df),
                     "session_id": session_id,
-                    "unique_intents": len(set(intents))
+                    "unique_intents": len(set(intents)),
+                    "execution_mode": exec_modes[0] if exec_modes else "none",
+                    "provider_used": providers_used[0] if providers_used else "none",
+                    "fallback_reason": fallback_reasons[0] if fallback_reasons else "none",
                 }
             }
 
         # Case C: Fallback empty or default string
         u_msg = str(raw_input or "")
-        reply_text, q_replies = _generate_assistant_reply(
-            u_msg, bot_name=bot_name, system_persona=system_persona
-        )
+        reply_text, q_replies, llm_res = _reply_with_live_fallback(u_msg)
         timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
         df_out = pd.DataFrame([{
@@ -253,6 +288,9 @@ class ChatbotEndpointRecipe(BaseRecipe):
             "user_message": u_msg,
             "assistant_reply": reply_text,
             "quick_replies": json.dumps(q_replies) if include_replies else "[]",
+            "execution_mode": llm_res["execution_mode"],
+            "provider_used": llm_res["provider_used"],
+            "fallback_reason": llm_res["fallback_reason"],
             "timestamp": timestamp
         }])
 
@@ -269,6 +307,9 @@ class ChatbotEndpointRecipe(BaseRecipe):
             "metrics": {
                 "total_turns": 1,
                 "session_id": session_id,
-                "intent": _detect_intent_category(u_msg)
+                "intent": _detect_intent_category(u_msg),
+                "execution_mode": llm_res["execution_mode"],
+                "provider_used": llm_res["provider_used"],
+                "fallback_reason": llm_res["fallback_reason"],
             }
         }
