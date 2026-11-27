@@ -90,7 +90,10 @@ class PipelineJobManager:
                 # Live progress, filled while the job runs (GET /workflows/jobs/{id}/logs)
                 "logs": [],
                 "node_status": {n.id: "PENDING" for n in workflow.nodes},
+                "node_iterations": {},
                 "current_node": None,
+                "current_edge": None,
+                "traversed_edges": [],
                 "progress": {"completed": 0, "total": len(workflow.nodes)},
                 "result": None,
                 "error": None
@@ -151,7 +154,10 @@ class PipelineJobManager:
                 "persisted": None,
                 "logs": [],
                 "node_status": {},
+                "node_iterations": {},
                 "current_node": None,
+                "current_edge": None,
+                "traversed_edges": [],
                 "progress": {"completed": 0, "total": 0},
                 "result": None,
                 "error": None,
@@ -180,13 +186,29 @@ class PipelineJobManager:
             elif etype == "node_started":
                 job["current_node"] = event.get("node_id")
                 job["node_status"][event.get("node_id")] = "RUNNING"
+                if event.get("iteration"):
+                    job.setdefault("node_iterations", {})[event.get("node_id")] = event.get("iteration")
             elif etype == "node_finished":
                 status = event.get("status")
                 job["node_status"][event.get("node_id")] = "REUSED" if event.get("reused") else status
+                if event.get("iteration"):
+                    job.setdefault("node_iterations", {})[event.get("node_id")] = event.get("iteration")
                 if status in ("SUCCESS", "WARNING", "SKIPPED"):   # finished, so progress reaches 100%
                     job["progress"]["completed"] += 1
                 if job.get("current_node") == event.get("node_id"):
                     job["current_node"] = None
+            elif etype == "edge_traversed":
+                edge_ev = {
+                    "step_index": event.get("step_index"),
+                    "source": event.get("source"),
+                    "target": event.get("target"),
+                    "source_handle": event.get("source_handle"),
+                    "is_back_edge": bool(event.get("is_back_edge")),
+                    "iteration": event.get("iteration", 1),
+                    "reason": event.get("reason", ""),
+                }
+                job["current_edge"] = edge_ev
+                job.setdefault("traversed_edges", []).append(edge_ev)
 
     def mark_persisted(self, job_id: str, saved: bool) -> None:
         """Called once a finished async run of a saved workflow was written to the DB."""
@@ -218,7 +240,10 @@ class PipelineJobManager:
                 "duration_ms": job.get("duration_ms"),
                 "resumed_from": job.get("resumed_from"),
                 "current_node": job.get("current_node"),
+                "current_edge": job.get("current_edge"),
                 "node_status": dict(job.get("node_status") or {}),
+                "node_iterations": dict(job.get("node_iterations") or {}),
+                "traversed_edges": list(job.get("traversed_edges") or []),
                 "progress": dict(job.get("progress") or {}),
                 "logs": list(logs[since:]),
                 "next_since": len(logs),
