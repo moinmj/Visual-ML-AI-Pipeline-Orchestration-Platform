@@ -217,6 +217,7 @@ class WorkflowExecutionResult(BaseModel):
     logs: List[str] = Field(default_factory=list)
     node_outputs: Dict[str, Any] = Field(default_factory=dict)
     step_snapshots: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    execution_trace: List[Dict[str, Any]] = Field(default_factory=list)
     inference_schema: Optional[Dict[str, Any]] = None
 
     model_config = {"arbitrary_types_allowed": True}
@@ -431,9 +432,14 @@ class DAGExecutor:
                 "duration_ms": res.duration_ms,
                 "error_message": res.error_message,
                 "reused": bool((res.output_summary or {}).get("reused_from")),
+                "iteration": current_iter,
+                "step_index": current_step_idx,
             })
         node_outputs: Dict[str, Dict[str, Any]] = {}
         step_snapshots: Dict[str, Dict[str, Any]] = {}
+        execution_trace: List[Dict[str, Any]] = []
+        current_step_idx = 0
+        current_iter = 1
         
         final_metrics = None
         anomaly_summary = None
@@ -533,6 +539,7 @@ class DAGExecutor:
         blocked_by: Dict[str, str] = {}   # node id -> the WARNING step that caused it to be skipped
 
         is_cyclic = workflow.has_cycles()
+        back_edges = workflow.get_back_edges() if is_cyclic else set()
         node_map: Dict[str, Any] = {n.id: n for n in workflow.nodes}
         out_edges_map: Dict[str, List[Any]] = defaultdict(list)
         for edge in workflow.edges:
@@ -651,8 +658,16 @@ class DAGExecutor:
                 continue
 
             node_start = time.time()
+            current_step_idx += 1
+            current_iter = visit_counts.get(node.id, 1) if is_cyclic else 1
             parents = parent_map[node.id]
-            _emit(on_event, {"type": "node_started", "node_id": node.id, "recipe_id": node.recipe_id})
+            _emit(on_event, {
+                "type": "node_started",
+                "node_id": node.id,
+                "recipe_id": node.recipe_id,
+                "iteration": current_iter,
+                "step_index": current_step_idx,
+            })
 
             try:
                 recipe = recipe_registry.get(node.recipe_id)
@@ -979,6 +994,31 @@ class DAGExecutor:
                     output_summary=summary
                 ))
 
+                routed_to = outputs.get("next_node_id") if isinstance(outputs, dict) else None
+                execution_trace.append({
+                    "step_index": current_step_idx,
+                    "node_id": node.id,
+                    "recipe_id": node.recipe_id,
+                    "iteration": current_iter,
+                    "status": "SUCCESS",
+                    "duration_ms": duration_ms,
+                    "routed_to": routed_to,
+                })
+
+                next_edges = _select_next_edges(node, outputs) if is_cyclic else out_edges_map.get(node.id, [])
+                for ne in next_edges:
+                    is_back = (ne.source, ne.target) in back_edges
+                    _emit(on_event, {
+                        "type": "edge_traversed",
+                        "step_index": current_step_idx,
+                        "source": ne.source,
+                        "target": ne.target,
+                        "source_handle": getattr(ne, "source_handle", None),
+                        "is_back_edge": is_back,
+                        "iteration": current_iter,
+                        "reason": f"Routed to {ne.target}" if routed_to else ("Looped back" if is_back else "Forward flow"),
+                    })
+
                 if is_cyclic:
                     if isinstance(outputs, dict):
                         if outputs.get("hub_instruction") and str(outputs.get("next_node_id", "")).upper() not in ("FINISH", "DONE", "NONE", ""):
@@ -1001,7 +1041,6 @@ class DAGExecutor:
                             "iteration": visit_counts.get(node.id, 1),
                             "observation": str(obs_text)[:600],
                         })
-                    next_edges = _select_next_edges(node, outputs)
                     for ne in next_edges:
                         exec_queue.append(ne.target)
 
@@ -1411,5 +1450,6 @@ class DAGExecutor:
             logs=logs,
             node_outputs=safe_node_outputs,
             step_snapshots=safe_step_snapshots,
+            execution_trace=execution_trace,
             inference_schema=safe_inference_schema
         )

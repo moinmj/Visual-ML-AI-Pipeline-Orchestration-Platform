@@ -93,16 +93,30 @@ def test_cyclic_hub_and_spoke_llm_routing_and_return():
         }
 
     with patch("backend.app.recipes.agents.llm_client.call_live_llm", side_effect=fake_live_llm):
+        events = []
         res = DAGExecutor.execute_workflow(
             execution_id="test_cyclic_hub_001",
             workflow=wg,
             include_node_outputs=True,
+            on_event=events.append,
         )
 
     assert res.status == "SUCCESS"
     executed_ids = [r.node_id for r in res.node_results if r.status == "SUCCESS"]
     assert executed_ids == ["ingest", "hub", "agent_web", "hub", "agent_doc", "hub"]
     assert res.node_outputs["hub"]["final_answer"] == "Final synthesized answer from web + docs."
+
+    # Verify flow visibility events & execution_trace
+    assert [t["node_id"] for t in res.execution_trace] == ["ingest", "hub", "agent_web", "hub", "agent_doc", "hub"]
+    assert [t["iteration"] for t in res.execution_trace] == [1, 1, 1, 2, 1, 3]
+    edge_events = [e for e in events if e.get("type") == "edge_traversed"]
+    assert [(e["source"], e["target"], e["is_back_edge"]) for e in edge_events] == [
+        ("ingest", "hub", False),
+        ("hub", "agent_web", False),
+        ("agent_web", "hub", True),
+        ("hub", "agent_doc", False),
+        ("agent_doc", "hub", True),
+    ]
 
 
 def test_cyclic_max_iterations_safety_cap_prevents_infinite_loop():
